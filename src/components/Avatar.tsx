@@ -8,7 +8,7 @@ import { useBlink } from '../hooks/useBlink';
 import type { AnimationType } from '../animation-catalog';
 
 interface AvatarProps {
-  animation: AnimationType;
+  animation: AnimationType | string;
   animationRequest: number;
   audioLevel: number;
   onAnimationComplete: () => void;

@@ -37,6 +37,7 @@ function createPersonaMcpServer({
   getStatus,
   listCharacters = null,
   onCharacter = null,
+  listAnimations = null,
 }) {
   const server = new McpServer(
     {
@@ -48,6 +49,14 @@ function createPersonaMcpServer({
     },
   );
 
+  // Support both built-in animation names and FILE:<filename.vrma> format
+  const animationSchema = z
+    .union([
+      z.enum(ANIMATION_NAMES),
+      z.string().regex(/^FILE:[\w.-]+\.vrma$/),
+    ])
+    .describe("Built-in animation name or FILE:<filename.vrma> for custom animations.");
+
   server.registerTool(
     "play_animation",
     {
@@ -55,9 +64,7 @@ function createPersonaMcpServer({
       description:
         "Play one installed character animation once in the desktop window. This shows Persona and temporarily takes priority over voice-driven body motion.",
       inputSchema: {
-        animation: z
-          .enum(ANIMATION_NAMES)
-          .describe("The character animation to play."),
+        animation: animationSchema,
       },
       annotations: {
         readOnlyHint: false,
@@ -67,8 +74,12 @@ function createPersonaMcpServer({
       },
     },
     async ({ animation }) => {
+      let displayName = animation;
+      if (animation.startsWith("FILE:")) {
+        displayName = animation.slice(5);
+      }
       await onAnimation(animation);
-      return textResult(`Persona is playing the ${animation} animation.`);
+      return textResult(`Persona is playing the ${displayName} animation.`);
     },
   );
 

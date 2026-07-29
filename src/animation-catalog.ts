@@ -30,6 +30,15 @@ export const ANIMATION_MAP: Record<AnimationType, readonly string[]> = {
   DANCE: [ANIMATION_CATALOG.dance],
 };
 
+export function isFileAnimation(animation: string): boolean {
+  return animation.startsWith('FILE:') && /^FILE:[\w.-]+\.vrma$/.test(animation);
+}
+
+export function parseFileAnimation(animation: string): string | null {
+  if (!isFileAnimation(animation)) return null;
+  return animation.slice(5);
+}
+
 export function randomAnimation(type: AnimationType): string {
   const choices = ANIMATION_MAP[type];
   return choices[Math.floor(Math.random() * choices.length)]!;

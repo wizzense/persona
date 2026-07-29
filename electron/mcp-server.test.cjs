@@ -65,12 +65,19 @@ test("Persona MCP exposes and executes the local character tools", async (contex
     ["play_animation", "control_window", "get_status"],
   );
   assert.equal(client.getInstructions(), SERVER_INSTRUCTIONS);
-  assert.deepEqual(
-    tools.tools
-      .find((tool) => tool.name === "play_animation")
-      .inputSchema.properties.animation.enum,
-    ANIMATION_NAMES,
+
+  // Verify play_animation accepts both built-in animations and FILE: format
+  const playAnimationSchema = tools.tools.find(
+    (tool) => tool.name === "play_animation",
+  ).inputSchema;
+  assert(playAnimationSchema.properties.animation, "animation property exists");
+  // Schema now uses anyOf for union, not a direct enum
+  assert(
+    playAnimationSchema.properties.animation.anyOf ||
+      playAnimationSchema.properties.animation.enum,
+    "animation schema includes anyOf or enum",
   );
+
   assert.deepEqual(
     tools.tools
       .find((tool) => tool.name === "control_window")

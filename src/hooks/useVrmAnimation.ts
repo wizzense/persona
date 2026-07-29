@@ -7,7 +7,12 @@ import {
 } from '@pixiv/three-vrm-animation';
 import type { VRM } from '@pixiv/three-vrm';
 import * as THREE from 'three';
-import { nextAnimation, type AnimationType } from '../animation-catalog';
+import {
+  nextAnimation,
+  type AnimationType,
+  isFileAnimation,
+  parseFileAnimation,
+} from '../animation-catalog';
 import {
   configureAnimationAction,
   crossFadeAnimationActions,
@@ -82,7 +87,7 @@ export function useVrmAnimation(vrm: VRM | null) {
 
   const play = useCallback(
     async (
-      type: AnimationType,
+      typeOrFile: AnimationType | string,
       { onComplete, playback = 'loop' }: PlayOptions = {},
     ) => {
       if (!vrm || !mixer.current) {
@@ -92,15 +97,30 @@ export function useVrmAnimation(vrm: VRM | null) {
       const generation = ++requestGeneration.current;
       pendingCompletion.current = null;
       try {
-        const path = nextAnimation(
-          type,
-          previousAnimation.current.get(type) ?? null,
-        );
-        previousAnimation.current.set(type, path);
+        let path: string;
+        let type: AnimationType | null = null;
+
+        if (isFileAnimation(typeOrFile)) {
+          const filename = parseFileAnimation(typeOrFile);
+          if (!filename) {
+            if (playback === 'once') onComplete?.();
+            return;
+          }
+          path = filename;
+        } else {
+          type = typeOrFile as AnimationType;
+          path = nextAnimation(
+            type,
+            previousAnimation.current.get(type) ?? null,
+          );
+          previousAnimation.current.set(type, path);
+        }
+
         const animation = await load(path);
         if (generation !== requestGeneration.current || !mixer.current) return;
         const action = mixer.current.clipAction(createVRMAnimationClip(animation, vrm));
-        const fadeSeconds = transitionSeconds(currentType.current, type);
+        const fadeSeconds =
+          type !== null ? transitionSeconds(currentType.current, type) : 0.3;
         action.reset();
         configureAnimationAction(action, playback);
         if (playback === 'once') {

@@ -9,7 +9,7 @@ import type { AnimationType } from '../animation-catalog';
 import { calculateFullBodyFraming } from '../camera-framing';
 
 interface SceneProps {
-  animation: AnimationType;
+  animation: AnimationType | string;
   animationRequest: number;
   audioLevel: number;
   onAnimationComplete: () => void;

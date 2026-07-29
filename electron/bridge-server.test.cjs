@@ -61,6 +61,16 @@ test("normalizes state and clamps audio level events", () => {
     type: "animation",
     animation: "FINGER_GUN",
   });
+  assert.deepEqual(normalizeEvent({ type: "animation", animation: "FILE:custom-anim.vrma" }), {
+    type: "animation",
+    animation: "FILE:custom-anim.vrma",
+  });
+  assert.deepEqual(normalizeEvent({ type: "animation", animation: "FILE:anim-name_01.vrma" }), {
+    type: "animation",
+    animation: "FILE:anim-name_01.vrma",
+  });
+  assert.equal(normalizeEvent({ type: "animation", animation: "FILE:../x.vrma" }), null);
+  assert.equal(normalizeEvent({ type: "animation", animation: "FILE:/etc/passwd" }), null);
   assert.equal(normalizeEvent({ type: "animation", animation: "CELEBRATE" }), null);
   assert.equal(normalizeEvent({ type: "animation", animation: "UNKNOWN" }), null);
   assert.equal(normalizeEvent({ type: "state", state: { phase: "wat" } }), null);

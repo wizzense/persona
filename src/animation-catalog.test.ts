@@ -4,6 +4,8 @@ import {
   ANIMATION_MAP,
   nextAnimation,
   randomAnimation,
+  isFileAnimation,
+  parseFileAnimation,
 } from './animation-catalog';
 
 describe('Persona animation contract', () => {
@@ -43,5 +45,28 @@ describe('Persona animation contract', () => {
       'talk3.vrma',
     ]);
     expect(wrapped).toBe(first);
+  });
+
+  describe('FILE: animations', () => {
+    it('recognizes valid FILE: animation patterns', () => {
+      expect(isFileAnimation('FILE:custom-anim.vrma')).toBe(true);
+      expect(isFileAnimation('FILE:anim_01.vrma')).toBe(true);
+      expect(isFileAnimation('FILE:test.vrma')).toBe(true);
+    });
+
+    it('rejects invalid FILE: patterns', () => {
+      expect(isFileAnimation('FILE:../x.vrma')).toBe(false);
+      expect(isFileAnimation('FILE:/etc/passwd')).toBe(false);
+      expect(isFileAnimation('FILE:anim.txt')).toBe(false);
+      expect(isFileAnimation('IDLE')).toBe(false);
+      expect(isFileAnimation('FILE:')).toBe(false);
+    });
+
+    it('parses FILE: animation filenames', () => {
+      expect(parseFileAnimation('FILE:custom-anim.vrma')).toBe('custom-anim.vrma');
+      expect(parseFileAnimation('FILE:test_01.vrma')).toBe('test_01.vrma');
+      expect(parseFileAnimation('IDLE')).toBeNull();
+      expect(parseFileAnimation('FILE:../x.vrma')).toBeNull();
+    });
   });
 });

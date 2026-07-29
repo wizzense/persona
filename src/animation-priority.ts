@@ -1,14 +1,16 @@
 import type { AnimationType } from './animation-catalog';
 
+export type AnimationValue = AnimationType | string;
+
 export interface BodyAnimationOverride {
-  animation: AnimationType;
+  animation: AnimationValue;
   requestId: number;
 }
 
 export function resolveBodyAnimation(
   voiceAnimation: AnimationType,
   override: BodyAnimationOverride | null,
-): AnimationType {
+): AnimationValue {
   return override?.animation ?? voiceAnimation;
 }
 

@@ -16,6 +16,8 @@ const ANIMATIONS = new Set([
   "DANCE",
 ]);
 
+const FILE_ANIMATION_PATTERN = /^FILE:[\w.-]+\.vrma$/;
+
 function isVoiceState(value) {
   return (
     value != null &&
@@ -37,8 +39,13 @@ function normalizeEvent(value) {
       value.bands != null && typeof value.bands === "object" ? value.bands : undefined;
     return { type: "audio-level", level, ...(bands ? { bands } : {}) };
   }
-  if (value?.type === "animation" && ANIMATIONS.has(value.animation)) {
-    return { type: "animation", animation: value.animation };
+  if (value?.type === "animation") {
+    if (ANIMATIONS.has(value.animation)) {
+      return { type: "animation", animation: value.animation };
+    }
+    if (typeof value.animation === "string" && FILE_ANIMATION_PATTERN.test(value.animation)) {
+      return { type: "animation", animation: value.animation };
+    }
   }
   return null;
 }

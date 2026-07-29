@@ -5,6 +5,7 @@ import {
   finishBodyAnimationOverride,
   resolveBodyAnimation,
   type BodyAnimationOverride,
+  type AnimationValue,
 } from './animation-priority';
 
 const INITIAL_STATE: VoiceState = {

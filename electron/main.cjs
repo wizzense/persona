@@ -17,6 +17,7 @@ const { createBridgeServer, DEFAULT_PORT } = require("./bridge-server.cjs");
 const {
   createPersonaMcpHandler,
   getAnimationEventName,
+  ANIMATION_EVENT_NAMES,
 } = require("./mcp-server.cjs");
 const {
   configureHyprlandWindow,
@@ -32,6 +33,7 @@ const {
   installCharacter,
   listCharacters,
 } = require("./character-roster.cjs");
+const fs = require("node:fs");
 
 const WINDOW_WIDTH = 430;
 const WINDOW_HEIGHT = 680;
@@ -306,6 +308,16 @@ function getMcpStatus() {
   };
 }
 
+function listAvailableAnimations() {
+  const animationsDir = path.join(__dirname, "..", "dist", "assets", "animations");
+  try {
+    const files = fs.readdirSync(animationsDir);
+    return files.filter((file) => file.endsWith(".vrma"));
+  } catch {
+    return [];
+  }
+}
+
 function handleProtocolUrl(rawUrl) {
   const commands = parseProtocolUrl(rawUrl, protocolScheme);
   if (!commands) return false;
@@ -452,12 +464,18 @@ if (!app.requestSingleInstanceLock()) {
 
     const mcpHandler = createPersonaMcpHandler({
       onAnimation: (animation) => {
-        const eventName = getAnimationEventName(animation);
-        if (eventName == null) return;
+        let animationEvent;
+        if (animation.startsWith("FILE:")) {
+          animationEvent = animation;
+        } else {
+          const eventName = getAnimationEventName(animation);
+          if (eventName == null) return;
+          animationEvent = eventName;
+        }
         mcpAnimationRequestId += 1;
         handleBridgeEvent({
           type: "animation",
-          animation: eventName,
+          animation: animationEvent,
           source: "mcp",
           requestId: mcpAnimationRequestId,
         });
@@ -469,6 +487,11 @@ if (!app.requestSingleInstanceLock()) {
         characters: listCharacters(),
       }),
       onCharacter: (name) => applyCharacter(name),
+      listAnimations: () => {
+        const builtIn = Object.keys(ANIMATION_EVENT_NAMES);
+        const custom = listAvailableAnimations().map((file) => `FILE:${file}`);
+        return [...builtIn, ...custom];
+      },
     });
     bridge = createBridgeServer({
       port: Number(process.env.PERSONA_BRIDGE_PORT || DEFAULT_PORT),
