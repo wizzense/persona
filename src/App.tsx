@@ -44,8 +44,14 @@ export function App() {
             animation: event.animation,
             requestId: event.requestId,
           });
+        } else if (typeof event.animation === 'string' && event.animation.startsWith('FILE:')) {
+          // FILE: animations are one-shots, treat like MCP overrides
+          setBodyOverride({
+            animation: event.animation,
+            requestId: Math.random(),
+          });
         } else {
-          setVoiceAnimation(event.animation);
+          setVoiceAnimation(event.animation as AnimationType);
         }
       }
     });
