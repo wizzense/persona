@@ -38,6 +38,9 @@ function createPersonaMcpServer({
   listCharacters = null,
   onCharacter = null,
   listAnimations = null,
+  onAgent = null,
+  listAgentAvatars = null,
+  onExportPortrait = null,
 }) {
   const server = new McpServer(
     {
@@ -166,6 +169,67 @@ function createPersonaMcpServer({
             : `No character named ${name} is installed. Use list_characters to see the roster.`,
         );
       },
+    );
+  }
+
+  if (onAgent != null && listAgentAvatars != null) {
+    server.registerTool(
+      "set_agent",
+      {
+        title: "Show an agent's avatar",
+        description:
+          "Switch the desktop window to the character assigned to an agent (aither, atlas, demiurge, lyra, …), so the avatar on screen matches whoever is speaking.",
+        inputSchema: {
+          agent: z.string().min(1).max(64).describe("Agent name, e.g. aither or atlas."),
+        },
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      },
+      async ({ agent }) => {
+        const character = await onAgent(agent);
+        return textResult(
+          character
+            ? `Persona is now showing ${agent}'s avatar (${character}).`
+            : `No avatar is assigned to ${agent}. Assign one from the avatar menu (Characters > Agents) or with list_agent_avatars.`,
+        );
+      },
+    );
+
+    server.registerTool(
+      "list_agent_avatars",
+      {
+        title: "List agent avatar assignments",
+        description: "Read which character each agent is assigned to.",
+        annotations: {
+          readOnlyHint: true,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      },
+      async () => textResult(JSON.stringify(await listAgentAvatars())),
+    );
+  }
+
+  if (onExportPortrait != null) {
+    server.registerTool(
+      "export_to_aithershell",
+      {
+        title: "Render this character into AitherShell",
+        description:
+          "Capture the current 3D character as AitherShell portrait frames (idle loop + talking mouth set) so the same avatar runs inside the shell's docked pane.",
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      },
+      async () => textResult(JSON.stringify(await onExportPortrait())),
     );
   }
 

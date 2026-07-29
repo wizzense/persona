@@ -35,6 +35,13 @@ const {
   listCharacters,
 } = require("./character-roster.cjs");
 const fs = require("node:fs");
+const {
+  getAgentAvatar,
+  listAgents,
+  loadMap: loadAgentAvatars,
+  setAgentAvatar,
+} = require("./agent-avatars.cjs");
+const { exportToAitherShell } = require("./aithershell-export.cjs");
 
 const WINDOW_WIDTH = 430;
 const WINDOW_HEIGHT = 680;
@@ -391,26 +398,53 @@ function applyCharacter(name) {
   return true;
 }
 
-/** Recents only — the full roster is 60+ characters, which as a flat radio list fills
- *  the whole screen and is unusable. "All characters…" opens the picker UI instead. */
+/** Recents on top for one-click switching, then EVERY character in alphabetical groups.
+ *  Nothing is hidden — a flat list of 70+ just filled the whole screen, so the full roster
+ *  lives in chunked sub-submenus instead. */
 function buildCharacterMenu() {
   const active = getActiveCharacter();
-  const characters = getRecentCharacters().map((name) => ({
+  const all = listCharacters();
+  const item = (name) => ({
     label: name,
     type: "radio",
     checked: name === active,
     click: () => applyCharacter(name),
-  }));
-  const total = listCharacters().length;
+  });
+
+  const CHUNK = 14;
+  const groups = [];
+  for (let start = 0; start < all.length; start += CHUNK) {
+    const slice = all.slice(start, start + CHUNK);
+    const first = slice[0].slice(0, 10);
+    const last = slice[slice.length - 1].slice(0, 10);
+    groups.push({
+      label: slice.length > 1 ? `${first} … ${last}` : first,
+      submenu: slice.map(item),
+    });
+  }
+
+  const recents = getRecentCharacters().map(item);
   return [
-    ...(characters.length
-      ? characters
-      : [{ label: "(roster empty)", enabled: false }]),
+    { label: "Recent", enabled: false },
+    ...(recents.length ? recents : [{ label: "(none yet)", enabled: false }]),
     { type: "separator" },
     {
-      label: total ? `All characters… (${total})` : "All characters…",
-      click: openModelBrowser,
+      label: `All characters (${all.length})`,
+      submenu: groups.length ? groups : [{ label: "(roster empty)", enabled: false }],
     },
+    { label: "Browse with pictures…", click: openModelBrowser },
+    {
+      label: "Send this character to AitherShell",
+      click: () => {
+        const name = getActiveCharacter() || "persona";
+        showOverlay();
+        exportToAitherShell(avatarWindow, name, handleBridgeEvent)
+          .then((result) => debugLog("aithershell portrait written", result))
+          .catch((error) => debugLog("aithershell export failed", error));
+      },
+    },
+    { type: "separator" },
+    { label: "Agents", submenu: buildAgentMenu() },
     {
       label: "Enroll newest Downloads .vrm",
       click: () => {
@@ -427,6 +461,42 @@ function buildCharacterMenu() {
       },
     },
   ];
+}
+
+/** Agents ▸ <agent> ▸ [Switch to its avatar | Assign current character]. Lets you keep
+ *  one character per agent (Aither, Atlas, Demiurge, Lyra…) and flip between them. */
+function buildAgentMenu() {
+  const active = getActiveCharacter();
+  return listAgents().map((agent) => {
+    const assigned = getAgentAvatar(agent);
+    return {
+      label: assigned ? `${agent} — ${assigned}` : `${agent} — (unassigned)`,
+      submenu: [
+        {
+          label: assigned ? `Switch to ${assigned}` : "Switch (assign one first)",
+          enabled: Boolean(assigned),
+          click: () => assigned && applyCharacter(assigned),
+        },
+        {
+          label: active ? `Assign current: ${active}` : "Assign current character",
+          enabled: Boolean(active),
+          click: () => {
+            if (!active) return;
+            setAgentAvatar(agent, active);
+            refreshTrayMenu();
+            debugLog("agent avatar assigned", agent, active);
+          },
+        },
+      ],
+    };
+  });
+}
+
+/** Switch the window to whichever character an agent owns. Returns the character or null. */
+function applyAgentAvatar(agent) {
+  const character = getAgentAvatar(agent);
+  if (!character) return null;
+  return applyCharacter(character) ? character : null;
 }
 
 function fsMkdirSafe(dir) {
@@ -521,6 +591,13 @@ if (!app.requestSingleInstanceLock()) {
         characters: listCharacters(),
       }),
       onCharacter: (name) => applyCharacter(name),
+      onAgent: (agent) => applyAgentAvatar(agent),
+      listAgentAvatars: () => loadAgentAvatars(),
+      onExportPortrait: async () => {
+        const name = getActiveCharacter() || "persona";
+        showOverlay();
+        return exportToAitherShell(avatarWindow, name, handleBridgeEvent);
+      },
       listAnimations: () => {
         const builtIn = Object.keys(ANIMATION_EVENT_NAMES);
         const custom = listAvailableAnimations().map((file) => `FILE:${file}`);
