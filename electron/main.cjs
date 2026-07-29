@@ -28,6 +28,7 @@ const { isAllowedRendererNavigation } = require("./navigation-policy.cjs");
 const { parseProtocolUrl, voiceState } = require("./protocol-actions.cjs");
 const {
   ROSTER_DIR,
+  getRecentCharacters,
   enrollNewestDownload,
   getActiveCharacter,
   installCharacter,
@@ -213,6 +214,7 @@ function createWindow() {
     debugLog("avatar context menu requested");
     Menu.buildFromTemplate([
       { label: "Characters", submenu: buildCharacterMenu() },
+      { label: "Talk to Aither…", click: openTalkWindow },
       { label: "Browse models…", click: openModelBrowser },
       { type: "separator" },
       { label: "Preview speaking", click: () => handleBridgeEvent(voiceState("speaking")) },
@@ -335,22 +337,46 @@ function handleProtocolArgv(argv) {
   if (protocolUrl) handleProtocolUrl(protocolUrl);
 }
 
-/** Open the local VRoid model browser (spawns model-browser.py if not already up). */
-function openModelBrowser() {
-  const browserUrl = "http://127.0.0.1:47836/";
-  const probe = require("node:http").get(browserUrl, () => {
+/** Open a local helper page, spawning its python server the first time. */
+function openLocalTool(url, script) {
+  const probe = require("node:http").get(url, () => {
     probe.destroy();
-    void shell.openExternal(browserUrl);
+    void shell.openExternal(url);
   });
   probe.on("error", () => {
     const { spawn } = require("node:child_process");
-    spawn("python", [path.join(__dirname, "..", "model-browser.py")], {
+    spawn("python", [path.join(__dirname, "..", script)], {
       detached: true,
       stdio: "ignore",
       cwd: path.join(__dirname, ".."),
     }).unref();
+    // The server opens the page itself once it is listening.
   });
   probe.setTimeout(1500, () => probe.destroy());
+}
+
+/** Open the local VRoid model browser (spawns model-browser.py if not already up). */
+function openModelBrowser() {
+  openLocalTool("http://127.0.0.1:47836/", "model-browser.py");
+}
+
+/** Open AitherShell — the platform's real chat client. It already drives this avatar
+ *  (speaking state + emotion animations via its persona-bridge), so talking to Aither
+ *  there IS talking to the character on screen. Deliberately NOT a second chat UI. */
+function openTalkWindow() {
+  const { spawn } = require("node:child_process");
+  // Windows Terminal if present, else a plain console — both detached from this process.
+  spawn("cmd", ["/c", "start", "", "wt", "-w", "0", "nt", "--title", "Aither", "cmd", "/k", "aither"], {
+    detached: true,
+    stdio: "ignore",
+  })
+    .on("error", () => {
+      spawn("cmd", ["/c", "start", "Aither", "cmd", "/k", "aither"], {
+        detached: true,
+        stdio: "ignore",
+      }).unref();
+    })
+    .unref();
 }
 
 /** Switch to a roster character and hot-reload the renderer (no app restart). */
@@ -365,19 +391,26 @@ function applyCharacter(name) {
   return true;
 }
 
+/** Recents only — the full roster is 60+ characters, which as a flat radio list fills
+ *  the whole screen and is unusable. "All characters…" opens the picker UI instead. */
 function buildCharacterMenu() {
   const active = getActiveCharacter();
-  const characters = listCharacters().map((name) => ({
+  const characters = getRecentCharacters().map((name) => ({
     label: name,
     type: "radio",
     checked: name === active,
     click: () => applyCharacter(name),
   }));
+  const total = listCharacters().length;
   return [
     ...(characters.length
       ? characters
       : [{ label: "(roster empty)", enabled: false }]),
     { type: "separator" },
+    {
+      label: total ? `All characters… (${total})` : "All characters…",
+      click: openModelBrowser,
+    },
     {
       label: "Enroll newest Downloads .vrm",
       click: () => {
@@ -411,6 +444,7 @@ function refreshTrayMenu() {
       { label: "Hide Persona", click: () => void hideOverlay() },
       { type: "separator" },
       { label: "Characters", submenu: buildCharacterMenu() },
+      { label: "Talk to Aither…", click: openTalkWindow },
       { label: "Browse models…", click: openModelBrowser },
       { type: "separator" },
       { label: "Preview listening", click: () => handleBridgeEvent(voiceState("listening")) },

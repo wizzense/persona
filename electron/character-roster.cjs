@@ -7,6 +7,8 @@ const path = require("node:path");
 const ROOT = path.join(__dirname, "..");
 const ROSTER_DIR = path.join(ROOT, "characters");
 const ACTIVE_FILE = path.join(ROOT, ".active-character");
+const RECENT_FILE = path.join(ROOT, ".recent-characters");
+const RECENT_LIMIT = 6;
 const ASSET_DIRS = [
   path.join(ROOT, "public", "assets"),
   path.join(ROOT, "dist", "assets"),
@@ -27,6 +29,37 @@ function listCharacters() {
     )
     .map((entry) => entry.name)
     .sort();
+}
+
+/** Most-recently-switched-to characters, newest first (menu shows these, not all 60+). */
+function getRecentCharacters(limit = RECENT_LIMIT) {
+  let recent = [];
+  try {
+    recent = JSON.parse(fs.readFileSync(RECENT_FILE, "utf8"));
+  } catch {
+    recent = [];
+  }
+  const installed = new Set(listCharacters());
+  const active = getActiveCharacter();
+  const ordered = [active, ...recent].filter(
+    (name, index, all) => name && installed.has(name) && all.indexOf(name) === index,
+  );
+  return ordered.slice(0, limit);
+}
+
+function rememberCharacter(name) {
+  let recent = [];
+  try {
+    recent = JSON.parse(fs.readFileSync(RECENT_FILE, "utf8"));
+  } catch {
+    recent = [];
+  }
+  recent = [name, ...recent.filter((entry) => entry !== name)].slice(0, RECENT_LIMIT * 2);
+  try {
+    fs.writeFileSync(RECENT_FILE, JSON.stringify(recent));
+  } catch {
+    /* a missing recents file only costs menu ordering */
+  }
 }
 
 function getActiveCharacter() {
@@ -59,6 +92,7 @@ function installCharacter(name) {
     }
   }
   fs.writeFileSync(ACTIVE_FILE, `${name}\n`);
+  rememberCharacter(name);
   return true;
 }
 
@@ -96,6 +130,7 @@ function enrollNewestDownload(preferredName = null) {
 
 module.exports = {
   ROSTER_DIR,
+  getRecentCharacters,
   enrollNewestDownload,
   getActiveCharacter,
   installCharacter,
