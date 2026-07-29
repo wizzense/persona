@@ -10,7 +10,6 @@ Run:  python model-browser.py   (opens the page)
 from __future__ import annotations
 
 import json
-import os
 import re
 import shutil
 import sys
@@ -136,9 +135,18 @@ def persona_switch(slug: str) -> bool:
         return False
 
 
+def active_character() -> str | None:
+    """The character Persona currently has installed (written by switch/set_character)."""
+    try:
+        return (PERSONA_ROOT / ".active-character").read_text().strip() or None
+    except OSError:
+        return None
+
+
 def get_roster() -> list[dict]:
     """Return list of installed characters with metadata."""
     chars = PERSONA_ROOT / "characters"
+    active = active_character()
     roster = []
     if not chars.exists():
         return roster
@@ -157,6 +165,7 @@ def get_roster() -> list[dict]:
             "model_size": model_file.stat().st_size,
             "animation_count": anim_count,
             "animations": sorted([f.stem for f in anim_dir.iterdir() if f.suffix == ".vrma"]) if anim_dir.exists() else [],
+            "is_active": char_dir.name == active,
         })
     return roster
 
@@ -226,7 +235,7 @@ def play_animation(name: str, animation: str) -> dict:
     try:
         with urllib.request.urlopen(request, timeout=10) as response:
             return {"ok": b"success" in response.read()}
-    except OSError as e:
+    except OSError:
         return {"ok": False, "error": "Persona not running"}
 
 
@@ -248,9 +257,20 @@ def add_animation(name: str, filename: str, data: bytes) -> dict:
     try:
         anim_path.parent.mkdir(parents=True, exist_ok=True)
         anim_path.write_bytes(data)
-        return {"ok": True}
-    except Exception as e:
-        return {"ok": False, "error": str(e)[:200]}
+    except OSError as error:
+        return {"ok": False, "error": str(error)[:200]}
+    # The renderer loads from dist/assets — mirror there when this is the LIVE character,
+    # otherwise the upload only takes effect on the next switch.
+    mirrored = False
+    if name == active_character():
+        try:
+            live = PERSONA_ROOT / "dist" / "assets" / "animations"
+            live.mkdir(parents=True, exist_ok=True)
+            (live / filename).write_bytes(data)
+            mirrored = True
+        except OSError:
+            mirrored = False
+    return {"ok": True, "live": mirrored}
 
 
 PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Persona model browser</title>
@@ -368,15 +388,16 @@ async function loadCharacters(){
  for(const ch of data.roster){
   const card=document.createElement('div');card.className='char-card';
   const animHTML=ch.animations.map(a=>`<span class="anim-btn" onclick="playAnim('${ch.name}','${a}',this)">▶ ${a}</span>`).join('');
+  if(ch.is_active) card.style.borderColor='#4457d5';
   card.innerHTML=`<div class="char-info">
-   <div class="char-info-row"><span class="label">Name:</span><strong>${ch.name}</strong></div>
+   <div class="char-info-row"><span class="label">Name:</span><strong>${ch.name}</strong>${ch.is_active?' <span class="badge have">ACTIVE</span>':''}</div>
    <div class="char-info-row"><span class="label">Model size:</span><span>${(ch.model_size/1024/1024).toFixed(1)}MB</span></div>
    <div class="char-info-row"><span class="label">Animations:</span><span>${ch.animation_count}</span></div>
    <div class="anim-list">${animHTML}</div>
    <label class="anim-input"><input type="file" accept=".vrma" onchange="uploadAnim('${ch.name}',this)" style="display:none"> 📁 Add animation</label>
   </div>
   <div class="char-actions">
-   <button onclick="switchChar('${ch.name}',this)">Switch Character</button>
+   <button onclick="switchChar('${ch.name}',this)">${ch.is_active?'Active ✓':'Switch Character'}</button>
    <button onclick="showRenameDialog('${ch.name}')">Rename</button>
    <button onclick="showDeleteConfirm('${ch.name}')" style="background:#d84a4a;border-color:#9a3a3a">Delete</button>
   </div>`;
