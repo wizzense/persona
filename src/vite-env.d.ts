@@ -32,7 +32,8 @@ type AvatarBridgeEvent =
         | 'TALK'
         | 'HAPPY'
         | 'FINGER_GUN'
-        | 'DANCE';
+        | 'DANCE'
+        | string;
       source?: 'mcp';
       requestId?: number;
     }
