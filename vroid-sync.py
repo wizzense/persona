@@ -100,9 +100,9 @@ def enroll(hub: VRoidHub, model: dict, *, switch: bool = True) -> str | None:
         print(f"  SKIP {name} ({model_id}): creator has not enabled download")
         return None
     dest = PERSONA_ROOT / "characters" / slug / "model.vrm"
-    print(f"  {name} ({model_id}) -> characters/{slug}/model.vrm")
     hub.download_vrm(model_id, dest)
     install_motions(hub, model_id, dest.parent)
+    print(f"  OK {name} ({model_id}) -> characters/{slug}/model.vrm")
     if switch:
         subprocess.run(
             [
