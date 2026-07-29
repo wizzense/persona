@@ -49,6 +49,14 @@ def image_url(model: dict) -> str:
 def serialize(model: dict) -> dict:
     name = model.get("name") or model.get("character", {}).get("name") or model.get("id")
     slug = vroid_sync.slugify(name)
+    booth_items = []
+    for item in model.get("character_model_booth_items") or []:
+        if isinstance(item, dict) and item.get("booth_item_id"):
+            booth_items.append({
+                "id": item["booth_item_id"],
+                "category": item.get("part_category", ""),
+                "url": f"https://booth.pm/en/items/{item['booth_item_id']}",
+            })
     return {
         "id": model.get("id"),
         "name": name,
@@ -59,6 +67,7 @@ def serialize(model: dict) -> dict:
         "r15": bool((model.get("age_limit") or {}).get("is_r15")),
         "in_roster": (PERSONA_ROOT / "characters" / slug / "model.vrm").exists(),
         "slug": slug,
+        "booth_items": booth_items,
     }
 
 
@@ -140,6 +149,10 @@ label{display:flex;gap:5px;align-items:center;font-size:13px;color:#bbb}
 .badges{display:flex;gap:4px;font-size:11px}
 .badge{background:#333;border-radius:6px;padding:1px 6px}
 .badge.dl{background:#1d5c2f}.badge.r18{background:#7a2030}.badge.have{background:#4457d5}
+.booth-items{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
+.booth-badge{background:#5a3a8a;border-radius:6px;padding:2px 6px;font-size:11px;text-decoration:none;color:#ddd;display:inline-flex;align-items:center;gap:3px}
+.booth-badge:hover{background:#6f4aa5;color:#fff}
+.booth-icon{font-size:9px}
 .card button{padding:6px}.card button:disabled{opacity:.35;cursor:default}
 #status{padding:6px 14px;color:#9a9;font-size:13px;min-height:20px}
 </style></head><body>
@@ -180,11 +193,13 @@ async function page(){
  const g=document.getElementById('grid');
  for(const m of seen){
   const c=document.createElement('div');c.className='card';
+  const boothHTML=m.booth_items&&m.booth_items.length?`<div class="booth-items">${m.booth_items.map(bi=>`<a class="booth-badge" href="${bi.url}" target="_blank" title="${bi.category||'BOOTH item'}">${bi.category||'shop'}</a>`).join('')}</div>`:'';
   c.innerHTML=`<img loading="lazy" src="${m.image}"><div class="b">
    <div class="n" title="${m.name}">${m.name}</div>
    <div class="badges">${m.downloadable?'<span class="badge dl">DL</span>':'<span class="badge">no-DL</span>'}
     ${m.r18?'<span class="badge r18">R18</span>':''}${m.in_roster?'<span class="badge have">in roster</span>':''}
     <span class="badge">♥ ${m.hearts}</span></div>
+   ${boothHTML}
    <button ${m.downloadable?'':'disabled'} onclick="add('${m.id}',this)">${m.in_roster?'Re-add':'Add to Persona'}</button>
    <button ${m.in_roster?'':'disabled'} onclick="swi('${m.slug}',this)">Switch</button></div>`;
   g.appendChild(c);
