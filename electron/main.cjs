@@ -204,8 +204,11 @@ function createWindow() {
     if (!isAllowedRendererNavigation(targetUrl, rendererUrl)) event.preventDefault();
   });
   // Right-click the avatar for the same menu the tray offers (characters, previews, quit).
-  // Right-DRAG still pans the camera; the menu only pops on release.
-  avatarWindow.webContents.on("context-menu", () => {
+  // Right-DRAG still pans the camera; the menu only pops on release. The renderer's camera
+  // controls preventDefault() the contextmenu event, so the preload relays it over IPC —
+  // keep the native handler too as a fallback.
+  const popupAvatarMenu = () => {
+    debugLog("avatar context menu requested");
     Menu.buildFromTemplate([
       { label: "Characters", submenu: buildCharacterMenu() },
       { type: "separator" },
@@ -224,7 +227,10 @@ function createWindow() {
         },
       },
     ]).popup({ window: avatarWindow });
-  });
+  };
+  avatarWindow.webContents.on("context-menu", popupAvatarMenu);
+  ipcMain.removeAllListeners("persona:context-menu");
+  ipcMain.on("persona:context-menu", popupAvatarMenu);
   void avatarWindow.loadURL(rendererUrl);
   return avatarWindow;
 }
