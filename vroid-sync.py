@@ -14,9 +14,11 @@ Then:
   python vroid-sync.py list                 # hearted + own models, with model ids
   python vroid-sync.py sync <model_id>      # download -> characters/<slug>/model.vrm -> switch
   python vroid-sync.py sync --all-hearted   # pull every hearted downloadable model
+  python vroid-sync.py browsed              # every model page in Edge history -> roster
 """
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
@@ -35,6 +37,61 @@ def slugify(name: str) -> str:
     return slug or "character"
 
 
+MOTION_SLOTS = {
+    "idle": "waiting", "talk1": "waiting", "talk2": "waiting", "talk3": "waiting",
+    "greeting": "appearing", "finger-gun": "appearing",
+    "happy": "liked", "dance": "liked",
+}
+
+
+def install_motions(hub: VRoidHub, model_id: str, character_dir: Path) -> None:
+    """Fill the animation slots from the model's VRoid Hub personality motions."""
+    try:
+        motions = hub.personality_motions(model_id)
+    except VRoidHubError:
+        return
+    cache: dict[str, Path] = {}
+    for slot, role in MOTION_SLOTS.items():
+        url = motions.get(role)
+        if not url:
+            continue
+        dest = character_dir / "animations" / f"{slot}.vrma"
+        if url in cache:
+            dest.write_bytes(cache[url].read_bytes())
+        else:
+            try:
+                cache[url] = hub.download_motion(url, dest)
+            except VRoidHubError:
+                continue
+
+
+def browsed_model_ids() -> list[str]:
+    """Model ids from every hub.vroid.com model page in the Edge browsing history."""
+    import shutil
+    import sqlite3
+    import tempfile
+
+    history = (
+        Path(os.environ["LOCALAPPDATA"])
+        / "Microsoft" / "Edge" / "User Data" / "Default" / "History"
+    )
+    ids: list[str] = []
+    with tempfile.TemporaryDirectory() as tmp:
+        copy = Path(tmp) / "History"
+        shutil.copy(history, copy)  # Edge holds the live DB; a copy reads cleanly
+        con = sqlite3.connect(copy)
+        rows = con.execute(
+            "select url from urls where url like '%hub.vroid.com%models%'"
+            " order by last_visit_time desc limit 500"
+        ).fetchall()
+        con.close()
+    for (url,) in rows:
+        m = re.search(r"models/(\d+)", url)
+        if m and m.group(1) not in ids:
+            ids.append(m.group(1))
+    return ids
+
+
 def enroll(hub: VRoidHub, model: dict, *, switch: bool = True) -> str | None:
     model_id = model["id"]
     name = (model.get("name") or model.get("character", {}).get("name") or model_id).strip()
@@ -45,6 +102,7 @@ def enroll(hub: VRoidHub, model: dict, *, switch: bool = True) -> str | None:
     dest = PERSONA_ROOT / "characters" / slug / "model.vrm"
     print(f"  {name} ({model_id}) -> characters/{slug}/model.vrm")
     hub.download_vrm(model_id, dest)
+    install_motions(hub, model_id, dest.parent)
     if switch:
         subprocess.run(
             [
@@ -102,6 +160,31 @@ def main() -> int:
                 return 1
             if not enroll(hub, detail):
                 return 1
+        return 0
+
+    if command == "browsed":
+        ids = browsed_model_ids()
+        print(f"{len(ids)} model pages in Edge history")
+        new, nodl, refused = 0, 0, 0
+        for mid in ids:
+            try:
+                d = hub.model_detail(mid).get("character_model", {})
+                if not d:
+                    continue
+                name = d.get("name") or d.get("character", {}).get("name") or mid
+                if (PERSONA_ROOT / "characters" / slugify(name) / "model.vrm").exists():
+                    continue
+                if not d.get("is_downloadable"):
+                    nodl += 1
+                    continue
+                if enroll(hub, d, switch=False):
+                    new += 1
+            except VRoidHubError:
+                refused += 1
+        print(
+            f"new: {new} | no-download (creator): {nodl} | "
+            f"license-refused (check app usage settings): {refused}"
+        )
         return 0
 
     print(__doc__)
