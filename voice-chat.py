@@ -131,10 +131,59 @@ def synthesize(text: str, voice: str | None, context: ssl.SSLContext) -> tuple[b
 
 
 def ask_agent(message: str) -> str:
+    """Ask the agent, preferring the STREAMING endpoint.
+
+    Measured 2026-07-29 (D-1579): `POST /chat` takes 108-241s while `POST /chat/stream`
+    answers the same question with a first token in ~3s and completes in ~10s — same
+    model, same minute. So stream by default and only fall back to the slow endpoint if
+    streaming is unavailable.
+    """
+    try:
+        return ask_agent_streaming(message)
+    except (urllib.error.URLError, OSError, ValueError) as error:
+        print(f"  (stream unavailable: {error}; falling back to /chat — this is slow)")
     data = post_json(
         f"{GENESIS_URL}/chat", {"message": message, "session_id": SESSION_ID}, timeout=300
     )
     return (data.get("response") or "").strip()
+
+
+def ask_agent_streaming(message: str) -> str:
+    """Read the SSE stream and return the final answer text."""
+    request = urllib.request.Request(
+        f"{GENESIS_URL}/chat/stream",
+        data=json.dumps({"message": message, "session_id": SESSION_ID}).encode(),
+        headers={"Content-Type": "application/json", "Accept": "text/event-stream"},
+    )
+    answer_parts: list[str] = []
+    final = ""
+    event = None
+    with urllib.request.urlopen(request, timeout=300) as response:
+        for raw in response:
+            line = raw.decode("utf-8", "replace").rstrip()
+            if line.startswith("event:"):
+                event = line[6:].strip()
+                continue
+            if not line.startswith("data:"):
+                continue
+            payload = line[5:].strip()
+            if event == "token":
+                try:
+                    parsed = json.loads(payload)
+                    answer_parts.append(
+                        parsed.get("token") or parsed.get("text") or parsed.get("delta") or ""
+                    )
+                except ValueError:
+                    answer_parts.append(payload)
+            elif event == "answer":
+                try:
+                    parsed = json.loads(payload)
+                    final = parsed.get("answer") or parsed.get("text") or parsed.get("response") or ""
+                except ValueError:
+                    final = payload
+            elif event == "complete":
+                break
+    return (final or "".join(answer_parts)).strip()
 
 
 def play_audio(audio: bytes, fmt: str) -> Path:
