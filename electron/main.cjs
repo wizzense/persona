@@ -203,6 +203,28 @@ function createWindow() {
   avatarWindow.webContents.on("will-navigate", (event, targetUrl) => {
     if (!isAllowedRendererNavigation(targetUrl, rendererUrl)) event.preventDefault();
   });
+  // Right-click the avatar for the same menu the tray offers (characters, previews, quit).
+  // Right-DRAG still pans the camera; the menu only pops on release.
+  avatarWindow.webContents.on("context-menu", () => {
+    Menu.buildFromTemplate([
+      { label: "Characters", submenu: buildCharacterMenu() },
+      { type: "separator" },
+      { label: "Preview speaking", click: () => handleBridgeEvent(voiceState("speaking")) },
+      {
+        label: "Preview dance",
+        click: () => handleBridgeEvent({ type: "animation", animation: "DANCE" }),
+      },
+      { type: "separator" },
+      { label: "Hide Persona", click: () => void hideOverlay() },
+      {
+        label: "Quit",
+        click: () => {
+          isQuitting = true;
+          app.quit();
+        },
+      },
+    ]).popup({ window: avatarWindow });
+  });
   void avatarWindow.loadURL(rendererUrl);
   return avatarWindow;
 }
