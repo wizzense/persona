@@ -1,0 +1,103 @@
+"use strict";
+
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+
+const ROOT = path.join(__dirname, "..");
+const ROSTER_DIR = path.join(ROOT, "characters");
+const ACTIVE_FILE = path.join(ROOT, ".active-character");
+const ASSET_DIRS = [
+  path.join(ROOT, "public", "assets"),
+  path.join(ROOT, "dist", "assets"),
+];
+
+function listCharacters() {
+  let entries = [];
+  try {
+    entries = fs.readdirSync(ROSTER_DIR, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries
+    .filter(
+      (entry) =>
+        entry.isDirectory() &&
+        fs.existsSync(path.join(ROSTER_DIR, entry.name, "model.vrm")),
+    )
+    .map((entry) => entry.name)
+    .sort();
+}
+
+function getActiveCharacter() {
+  try {
+    return fs.readFileSync(ACTIVE_FILE, "utf8").trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Copy the character's model (and optional animation overrides) into both asset
+ *  trees. Returns true when the character existed and was installed. */
+function installCharacter(name) {
+  const source = path.join(ROSTER_DIR, name);
+  const model = path.join(source, "model.vrm");
+  if (!fs.existsSync(model)) return false;
+  for (const assetDir of ASSET_DIRS) {
+    fs.mkdirSync(path.join(assetDir, "animations"), { recursive: true });
+    fs.copyFileSync(model, path.join(assetDir, "model.vrm"));
+    const animations = path.join(source, "animations");
+    if (fs.existsSync(animations)) {
+      for (const file of fs.readdirSync(animations)) {
+        if (file.endsWith(".vrma")) {
+          fs.copyFileSync(
+            path.join(animations, file),
+            path.join(assetDir, "animations", file),
+          );
+        }
+      }
+    }
+  }
+  fs.writeFileSync(ACTIVE_FILE, `${name}\n`);
+  return true;
+}
+
+/** Enroll the newest .vrm from Downloads into the roster; returns its roster name. */
+function enrollNewestDownload(preferredName = null) {
+  const downloads = path.join(os.homedir(), "Downloads");
+  let candidates = [];
+  try {
+    candidates = fs
+      .readdirSync(downloads)
+      .filter((file) => file.toLowerCase().endsWith(".vrm"))
+      .map((file) => {
+        const full = path.join(downloads, file);
+        return { file, full, mtime: fs.statSync(full).mtimeMs };
+      })
+      .sort((a, b) => b.mtime - a.mtime);
+  } catch {
+    return null;
+  }
+  const newest = candidates[0];
+  if (!newest) return null;
+  const base =
+    preferredName ||
+    path
+      .basename(newest.file, path.extname(newest.file))
+      .replace(/[^\w-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .toLowerCase() ||
+    "character";
+  const dir = path.join(ROSTER_DIR, base);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.copyFileSync(newest.full, path.join(dir, "model.vrm"));
+  return base;
+}
+
+module.exports = {
+  ROSTER_DIR,
+  enrollNewestDownload,
+  getActiveCharacter,
+  installCharacter,
+  listCharacters,
+};

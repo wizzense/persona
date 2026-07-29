@@ -10,6 +10,7 @@ const {
   Menu,
   nativeImage,
   screen,
+  shell,
   Tray,
 } = require("electron");
 const { createBridgeServer, DEFAULT_PORT } = require("./bridge-server.cjs");
@@ -24,6 +25,13 @@ const {
 const { createAudioListener } = require("./audio-listener.cjs");
 const { isAllowedRendererNavigation } = require("./navigation-policy.cjs");
 const { parseProtocolUrl, voiceState } = require("./protocol-actions.cjs");
+const {
+  ROSTER_DIR,
+  enrollNewestDownload,
+  getActiveCharacter,
+  installCharacter,
+  listCharacters,
+} = require("./character-roster.cjs");
 
 const WINDOW_WIDTH = 430;
 const WINDOW_HEIGHT = 680;
@@ -286,15 +294,64 @@ function handleProtocolArgv(argv) {
   if (protocolUrl) handleProtocolUrl(protocolUrl);
 }
 
-function createTray() {
-  const iconPath = path.join(__dirname, "..", "build", "icon.png");
-  const icon = nativeImage.createFromPath(iconPath).resize({ width: 20, height: 20 });
-  tray = new Tray(icon);
-  tray.setToolTip("Persona");
-  tray.setContextMenu(
+/** Switch to a roster character and hot-reload the renderer (no app restart). */
+function applyCharacter(name) {
+  if (!installCharacter(name)) return false;
+  debugLog("character switched", name);
+  if (avatarWindow && !avatarWindow.isDestroyed()) {
+    avatarWindow.webContents.reloadIgnoringCache();
+  }
+  refreshTrayMenu();
+  showOverlay();
+  return true;
+}
+
+function buildCharacterMenu() {
+  const active = getActiveCharacter();
+  const characters = listCharacters().map((name) => ({
+    label: name,
+    type: "radio",
+    checked: name === active,
+    click: () => applyCharacter(name),
+  }));
+  return [
+    ...(characters.length
+      ? characters
+      : [{ label: "(roster empty)", enabled: false }]),
+    { type: "separator" },
+    {
+      label: "Enroll newest Downloads .vrm",
+      click: () => {
+        const name = enrollNewestDownload();
+        if (name) applyCharacter(name);
+        else debugLog("no .vrm found in Downloads to enroll");
+      },
+    },
+    {
+      label: "Open characters folder",
+      click: () => {
+        fsMkdirSafe(ROSTER_DIR);
+        void shell.openPath(ROSTER_DIR);
+      },
+    },
+  ];
+}
+
+function fsMkdirSafe(dir) {
+  try {
+    require("node:fs").mkdirSync(dir, { recursive: true });
+  } catch {
+    /* the open below will surface any real problem */
+  }
+}
+
+function refreshTrayMenu() {
+  tray?.setContextMenu(
     Menu.buildFromTemplate([
       { label: "Show Persona", click: () => showOverlay({ focus: true }) },
       { label: "Hide Persona", click: () => void hideOverlay() },
+      { type: "separator" },
+      { label: "Characters", submenu: buildCharacterMenu() },
       { type: "separator" },
       { label: "Preview listening", click: () => handleBridgeEvent(voiceState("listening")) },
       { label: "Preview speaking", click: () => handleBridgeEvent(voiceState("speaking")) },
@@ -312,6 +369,14 @@ function createTray() {
       },
     ]),
   );
+}
+
+function createTray() {
+  const iconPath = path.join(__dirname, "..", "build", "icon.png");
+  const icon = nativeImage.createFromPath(iconPath).resize({ width: 20, height: 20 });
+  tray = new Tray(icon);
+  tray.setToolTip("Persona");
+  refreshTrayMenu();
   tray.on("click", toggleOverlay);
 }
 
@@ -351,6 +416,11 @@ if (!app.requestSingleInstanceLock()) {
       },
       onWindowAction: handleMcpWindowAction,
       getStatus: getMcpStatus,
+      listCharacters: () => ({
+        active: getActiveCharacter(),
+        characters: listCharacters(),
+      }),
+      onCharacter: (name) => applyCharacter(name),
     });
     bridge = createBridgeServer({
       port: Number(process.env.PERSONA_BRIDGE_PORT || DEFAULT_PORT),

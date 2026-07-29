@@ -31,7 +31,13 @@ function getAnimationEventName(animation) {
   return ANIMATION_EVENT_NAMES[animation] ?? null;
 }
 
-function createPersonaMcpServer({ onAnimation, onWindowAction, getStatus }) {
+function createPersonaMcpServer({
+  onAnimation,
+  onWindowAction,
+  getStatus,
+  listCharacters = null,
+  onCharacter = null,
+}) {
   const server = new McpServer(
     {
       name: "Persona",
@@ -103,6 +109,54 @@ function createPersonaMcpServer({ onAnimation, onWindowAction, getStatus }) {
     },
     async () => textResult(JSON.stringify(await getStatus())),
   );
+
+  if (listCharacters != null && onCharacter != null) {
+    server.registerTool(
+      "list_characters",
+      {
+        title: "List Persona characters",
+        description:
+          "List the installed character roster and which character is active.",
+        annotations: {
+          readOnlyHint: true,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      },
+      async () => textResult(JSON.stringify(await listCharacters())),
+    );
+
+    server.registerTool(
+      "set_character",
+      {
+        title: "Switch Persona character",
+        description:
+          "Switch the desktop window to an installed character from the roster and reload the avatar.",
+        inputSchema: {
+          name: z
+            .string()
+            .min(1)
+            .max(64)
+            .describe("The roster character name, as returned by list_characters."),
+        },
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      },
+      async ({ name }) => {
+        const ok = await onCharacter(name);
+        return textResult(
+          ok
+            ? `Persona switched to the ${name} character.`
+            : `No character named ${name} is installed. Use list_characters to see the roster.`,
+        );
+      },
+    );
+  }
 
   return server;
 }
