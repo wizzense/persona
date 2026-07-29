@@ -211,6 +211,7 @@ function createWindow() {
     debugLog("avatar context menu requested");
     Menu.buildFromTemplate([
       { label: "Characters", submenu: buildCharacterMenu() },
+      { label: "Browse models…", click: openModelBrowser },
       { type: "separator" },
       { label: "Preview speaking", click: () => handleBridgeEvent(voiceState("speaking")) },
       {
@@ -322,6 +323,24 @@ function handleProtocolArgv(argv) {
   if (protocolUrl) handleProtocolUrl(protocolUrl);
 }
 
+/** Open the local VRoid model browser (spawns model-browser.py if not already up). */
+function openModelBrowser() {
+  const browserUrl = "http://127.0.0.1:47836/";
+  const probe = require("node:http").get(browserUrl, () => {
+    probe.destroy();
+    void shell.openExternal(browserUrl);
+  });
+  probe.on("error", () => {
+    const { spawn } = require("node:child_process");
+    spawn("python", [path.join(__dirname, "..", "model-browser.py")], {
+      detached: true,
+      stdio: "ignore",
+      cwd: path.join(__dirname, ".."),
+    }).unref();
+  });
+  probe.setTimeout(1500, () => probe.destroy());
+}
+
 /** Switch to a roster character and hot-reload the renderer (no app restart). */
 function applyCharacter(name) {
   if (!installCharacter(name)) return false;
@@ -380,6 +399,7 @@ function refreshTrayMenu() {
       { label: "Hide Persona", click: () => void hideOverlay() },
       { type: "separator" },
       { label: "Characters", submenu: buildCharacterMenu() },
+      { label: "Browse models…", click: openModelBrowser },
       { type: "separator" },
       { label: "Preview listening", click: () => handleBridgeEvent(voiceState("listening")) },
       { label: "Preview speaking", click: () => handleBridgeEvent(voiceState("speaking")) },
