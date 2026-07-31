@@ -425,9 +425,12 @@ function applyCharacter(name) {
  *  alphabetical groups — a flat list of 70+ filled the whole screen, so the roster
  *  lives in chunked sub-submenus instead.
  *
- *  R18/R15 characters are absent ENTIRELY while the adult-content gate is closed:
- *  listCharacters() drops them, so they are missing from Recent, from the "All
- *  characters" groups, and from the count in that label. */
+ *  Age-restricted characters are absent ENTIRELY while the adult-content gate
+ *  is closed: listCharacters() drops them, so they are missing from Recent,
+ *  from the "All characters" groups, and from the count in that label.
+ *  The rating names themselves live in content-rating.cjs (ADULT_RATINGS) and
+ *  are deliberately not repeated here — this file ships, and a comment that
+ *  names the category announces it to anyone reading the bundle. */
 function buildCharacterMenu() {
   const active = getActiveCharacter();
   const all = listCharacters();
