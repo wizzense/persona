@@ -4,6 +4,8 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
+const { filterCharacters, isHidden } = require("./content-rating.cjs");
+
 const ROOT = path.join(__dirname, "..");
 const ROSTER_DIR = path.join(ROOT, "characters");
 const ACTIVE_FILE = path.join(ROOT, ".active-character");
@@ -14,7 +16,9 @@ const ASSET_DIRS = [
   path.join(ROOT, "dist", "assets"),
 ];
 
-function listCharacters() {
+/** Every character on disk, ratings ignored. Internal — callers that show a
+ *  character to a human must use listCharacters() instead. */
+function listAllCharacters() {
   let entries = [];
   try {
     entries = fs.readdirSync(ROSTER_DIR, { withFileTypes: true });
@@ -29,6 +33,14 @@ function listCharacters() {
     )
     .map((entry) => entry.name)
     .sort();
+}
+
+/** The roster as a human may see it: R18/R15 characters are dropped entirely
+ *  while the adult-content gate is closed. This is the ONE list the tray menu,
+ *  the avatar right-click menu, the MCP `list_characters` tool and the renderer
+ *  IPC all read, so filtering here covers every quick-switch surface at once. */
+function listCharacters() {
+  return filterCharacters(listAllCharacters());
 }
 
 /** Most-recently-switched-to characters, newest first (menu shows these, not all 60+). */
@@ -71,8 +83,14 @@ function getActiveCharacter() {
 }
 
 /** Copy the character's model (and optional animation overrides) into both asset
- *  trees. Returns true when the character existed and was installed. */
+ *  trees. Returns true when the character existed and was installed.
+ *
+ *  Refuses a hidden character. Filtering the menus alone would be cosmetic —
+ *  `set_character` over MCP, switch-character.ps1 and the model browser all take
+ *  a name directly, so the gate has to hold at the point of INSTALL as well as
+ *  at the point of display. */
 function installCharacter(name) {
+  if (isHidden(name)) return false;
   const source = path.join(ROSTER_DIR, name);
   const model = path.join(source, "model.vrm");
   if (!fs.existsSync(model)) return false;
@@ -134,5 +152,6 @@ module.exports = {
   enrollNewestDownload,
   getActiveCharacter,
   installCharacter,
+  listAllCharacters,
   listCharacters,
 };

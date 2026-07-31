@@ -81,7 +81,20 @@ function createPersonaMcpServer({
       if (animation.startsWith("FILE:")) {
         displayName = animation.slice(5);
       }
-      await onAnimation(animation);
+      // An explicit `false` means the clip does not exist and nothing was played. Only
+      // `false` counts as a refusal, so an onAnimation that returns nothing (older
+      // callers, test stubs) still reports success.
+      const played = await onAnimation(animation);
+      if (played === false) {
+        return {
+          content: [{
+            type: "text",
+            text: `No animation named "${displayName}" is installed — nothing was played. ` +
+              `Available: ${ANIMATION_NAMES.join(", ")}, or FILE:<filename.vrma>.`,
+          }],
+          isError: true,
+        };
+      }
       return textResult(`Persona is playing the ${displayName} animation.`);
     },
   );
@@ -169,6 +182,29 @@ function createPersonaMcpServer({
             : `No character named ${name} is installed. Use list_characters to see the roster.`,
         );
       },
+    );
+  }
+
+  if (listAnimations != null) {
+    server.registerTool(
+      "list_animations",
+      {
+        title: "List Persona animations",
+        description:
+          "List the animations play_animation can play: the built-in clips plus any installed " +
+          "FILE:<filename.vrma> motion packs.",
+        annotations: {
+          readOnlyHint: true,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      },
+      // `listAnimations` was accepted as a constructor option and passed in by main.cjs,
+      // but NO tool ever exposed it — so `FILE:<name>.vrma` playback worked while a caller
+      // had no way to discover which packs existed short of listing the assets directory
+      // by hand. Registering it closes that (D-1660 in the AitherOS ledger).
+      async () => textResult(JSON.stringify(await listAnimations())),
     );
   }
 

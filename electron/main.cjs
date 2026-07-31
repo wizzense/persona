@@ -34,6 +34,7 @@ const {
   installCharacter,
   listCharacters,
 } = require("./character-roster.cjs");
+const { invalidateGate, isHidden } = require("./content-rating.cjs");
 const fs = require("node:fs");
 const {
   getAgentAvatar,
@@ -386,6 +387,28 @@ function openTalkWindow() {
     .unref();
 }
 
+/** If the gate closed while an adult character was ON SCREEN, swap it off.
+ *
+ *  Filtering the menus is not enough: the avatar is a persistent always-on-top
+ *  window, so a character installed while the gate was open keeps rendering
+ *  after it closes. Runs at startup and whenever the tray menu is rebuilt. */
+function enforceActiveCharacterRating() {
+  const active = getActiveCharacter();
+  if (!active || !isHidden(active)) return false;
+  const replacement = listCharacters()[0];
+  if (!replacement) {
+    debugLog("adult gate closed and no visible character remains; hiding overlay");
+    void hideOverlay();
+    return true;
+  }
+  debugLog("adult gate closed; switching off hidden character", active);
+  installCharacter(replacement);
+  if (avatarWindow && !avatarWindow.isDestroyed()) {
+    avatarWindow.webContents.reloadIgnoringCache();
+  }
+  return true;
+}
+
 /** Switch to a roster character and hot-reload the renderer (no app restart). */
 function applyCharacter(name) {
   if (!installCharacter(name)) return false;
@@ -398,9 +421,13 @@ function applyCharacter(name) {
   return true;
 }
 
-/** Recents on top for one-click switching, then EVERY character in alphabetical groups.
- *  Nothing is hidden — a flat list of 70+ just filled the whole screen, so the full roster
- *  lives in chunked sub-submenus instead. */
+/** Recents on top for one-click switching, then every VISIBLE character in
+ *  alphabetical groups — a flat list of 70+ filled the whole screen, so the roster
+ *  lives in chunked sub-submenus instead.
+ *
+ *  R18/R15 characters are absent ENTIRELY while the adult-content gate is closed:
+ *  listCharacters() drops them, so they are missing from Recent, from the "All
+ *  characters" groups, and from the count in that label. */
 function buildCharacterMenu() {
   const active = getActiveCharacter();
   const all = listCharacters();
@@ -508,6 +535,8 @@ function fsMkdirSafe(dir) {
 }
 
 function refreshTrayMenu() {
+  invalidateGate();
+  enforceActiveCharacterRating();
   tray?.setContextMenu(
     Menu.buildFromTemplate([
       { label: "Show Persona", click: () => showOverlay({ focus: true }) },
@@ -573,7 +602,11 @@ if (!app.requestSingleInstanceLock()) {
           animationEvent = animation;
         } else {
           const eventName = getAnimationEventName(animation);
-          if (eventName == null) return;
+          // Report the miss instead of dropping it. Returning undefined here made
+          // play_animation answer "Persona is playing the X animation" for a clip that
+          // was never played, so a caller could not tell a typo from a working request —
+          // the worst outcome, because it teaches them the feature works.
+          if (eventName == null) return false;
           animationEvent = eventName;
         }
         mcpAnimationRequestId += 1;
@@ -583,6 +616,7 @@ if (!app.requestSingleInstanceLock()) {
           source: "mcp",
           requestId: mcpAnimationRequestId,
         });
+        return true;
       },
       onWindowAction: handleMcpWindowAction,
       getStatus: getMcpStatus,

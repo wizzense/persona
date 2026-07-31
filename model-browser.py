@@ -32,8 +32,34 @@ _spec.loader.exec_module(vroid_sync)
 
 PORT = 47836
 PERSONA_MCP = "http://127.0.0.1:47831/mcp"
+ADULT_GATE_MIRROR = Path.home() / ".aither" / "adult_content.json"
+ADULT_RATINGS = ("r18", "r15")
 hub = VRoidHub()
 lock = threading.Lock()
+
+
+def adult_content_visible() -> bool:
+    """Whether adult models/characters may be shown in this browser at all.
+
+    Reads the mirror the platform writes when the Settings toggle changes.
+    Missing, unreadable or malformed => LOCKED. Filtering happens SERVER-side
+    (here) and not in the page: a client-side "hide R-18" checkbox is a
+    preference, not a gate — the rows still crossed the wire and the checkbox
+    itself announced that R-18 models exist.
+    """
+    try:
+        return json.loads(ADULT_GATE_MIRROR.read_text(encoding="utf-8")).get("visible") is True
+    except (OSError, ValueError):
+        return False
+
+
+def character_rating(slug: str) -> str:
+    """Recorded rating for an installed character, or 'unrated'."""
+    try:
+        raw = (PERSONA_ROOT / "characters" / slug / "character.json").read_text(encoding="utf-8")
+        return str(json.loads(raw).get("rating") or "").lower() or "unrated"
+    except (OSError, ValueError):
+        return "unrated"
 
 
 def image_url(model: dict) -> str:
@@ -147,6 +173,7 @@ def get_roster() -> list[dict]:
     """Return list of installed characters with metadata."""
     chars = PERSONA_ROOT / "characters"
     active = active_character()
+    adult_ok = adult_content_visible()
     roster = []
     if not chars.exists():
         return roster
@@ -155,6 +182,8 @@ def get_roster() -> list[dict]:
             continue
         model_file = char_dir / "model.vrm"
         if not model_file.exists():
+            continue
+        if not adult_ok and character_rating(char_dir.name) in ADULT_RATINGS:
             continue
         anim_dir = char_dir / "animations"
         anim_count = 0
@@ -321,7 +350,7 @@ label{display:flex;gap:5px;align-items:center;font-size:13px;color:#bbb}
  <input type="text" id="q" placeholder="search keyword… (e.g. cute, fox girl, フリーレン)">
  <button onclick="load()">Go</button>
  <label><input type="checkbox" id="dl" checked> downloadable only</label>
- <label><input type="checkbox" id="hideR18"> hide R-18</label>
+ <label id="r18Filter" style="display:none"><input type="checkbox" id="hideR18"> hide R-18</label>
 </header>
 <div id="status"></div><div id="grid"></div>
 <div style="text-align:center;padding:16px"><button id="more" style="display:none">Load more</button></div>
@@ -351,6 +380,10 @@ async function page(){
  loading=false;
  if(data.error){S.textContent='error: '+data.error;return}
  cursor=data.next;
+ // The R-18 filter control only exists once the account has opted in — while the
+ // gate is closed the server has already dropped those rows, and showing a
+ // "hide R-18" checkbox would announce the category being hidden.
+ document.getElementById('r18Filter').style.display=data.adult_visible?'flex':'none';
  const dl=document.getElementById('dl').checked, h18=document.getElementById('hideR18').checked;
  const seen=data.items.filter(m=>(!dl||m.downloadable)&&(!h18||!m.r18)&&!rendered.has(m.id));
  seen.forEach(m=>rendered.add(m.id));
@@ -450,7 +483,15 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 with lock:
                     models, next_cursor = fetch_models(source, query, cursor)
-                self._json({"items": [serialize(m) for m in models], "next": next_cursor})
+                adult_ok = adult_content_visible()
+                items = [serialize(m) for m in models]
+                if not adult_ok:
+                    items = [item for item in items if not (item["r18"] or item["r15"])]
+                self._json({
+                    "items": items,
+                    "next": next_cursor,
+                    "adult_visible": adult_ok,
+                })
             except VRoidHubError as error:
                 self._json({"error": str(error)}, 502)
             return
@@ -477,6 +518,15 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 with lock:
                     detail = hub.model_detail(payload["id"]).get("character_model", {})
+                    # The gate holds at the WRITE too, not only in the listing:
+                    # a model id posted directly would otherwise land an adult
+                    # model in the roster of a locked account.
+                    if (
+                        vroid_sync.rating_from_model(detail) in ADULT_RATINGS
+                        and not adult_content_visible()
+                    ):
+                        self._json({"ok": False, "error": "not available"}, 403)
+                        return
                     slug = vroid_sync.enroll(hub, detail, switch=False)
                 if slug:
                     self._json({"ok": True, "slug": slug})
@@ -485,7 +535,11 @@ class Handler(BaseHTTPRequestHandler):
             except VRoidHubError as error:
                 self._json({"ok": False, "error": str(error)[:200]})
         elif self.path == "/api/switch":
-            self._json({"ok": persona_switch(payload["slug"])})
+            slug = payload.get("slug", "")
+            if not adult_content_visible() and character_rating(slug) in ADULT_RATINGS:
+                self._json({"ok": False, "error": "not available"}, 403)
+                return
+            self._json({"ok": persona_switch(slug)})
         elif self.path == "/api/rename":
             with lock:
                 result = rename_character(payload.get("name", ""), payload.get("new_name", ""))

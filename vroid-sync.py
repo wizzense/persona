@@ -37,6 +37,38 @@ def slugify(name: str) -> str:
     return slug or "character"
 
 
+def rating_from_model(model: dict) -> str:
+    """VRoid Hub's own age rating for a model — the authoritative source.
+
+    Recorded at enroll time, because it is unavailable afterwards: the roster is
+    a directory of .vrm files with no link back to the Hub id, which is exactly
+    why the pre-existing roster needed a separate backfill (rate-characters.py).
+    """
+    age_limit = model.get("age_limit") or {}
+    if age_limit.get("is_r18"):
+        return "r18"
+    if age_limit.get("is_r15"):
+        return "r15"
+    return "general"
+
+
+def write_rating(character_dir: Path, rating: str, source: str = "vroid") -> bool:
+    """Write characters/<slug>/character.json. Returns False if it could not be
+    written — the caller should say so rather than assume the character is rated."""
+    import json
+
+    try:
+        character_dir.mkdir(parents=True, exist_ok=True)
+        (character_dir / "character.json").write_text(
+            json.dumps({"rating": rating, "source": source}, indent=2),
+            encoding="utf-8",
+        )
+        return True
+    except OSError as error:
+        print(f"  WARN could not write rating for {character_dir.name}: {error}")
+        return False
+
+
 MOTION_SLOTS = {
     "idle": "waiting", "talk1": "waiting", "talk2": "waiting", "talk3": "waiting",
     "greeting": "appearing", "finger-gun": "appearing",
@@ -102,7 +134,13 @@ def enroll(hub: VRoidHub, model: dict, *, switch: bool = True) -> str | None:
     dest = PERSONA_ROOT / "characters" / slug / "model.vrm"
     hub.download_vrm(model_id, dest)
     install_motions(hub, model_id, dest.parent)
-    print(f"  OK {name} ({model_id}) -> characters/{slug}/model.vrm")
+    rating = rating_from_model(model)
+    write_rating(dest.parent, rating)
+    print(f"  OK {name} ({model_id}) -> characters/{slug}/model.vrm [{rating}]")
+    if rating in ("r18", "r15") and switch:
+        # Do not auto-switch the always-on-top desktop overlay to an adult model.
+        print("  (adult-rated — not switching automatically; use the roster menu)")
+        return slug
     if switch:
         subprocess.run(
             [

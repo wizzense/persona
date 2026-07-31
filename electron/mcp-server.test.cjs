@@ -150,3 +150,138 @@ test("Persona MCP rejects unknown animation names before invoking the app", asyn
   assert.equal(result.isError, true);
   assert.deepEqual(animations, []);
 });
+
+/**
+ * play_animation used to report success for a clip that was never played: main.cjs's
+ * onAnimation returned undefined for an unknown name and the tool answered "Persona is
+ * playing the X animation" regardless. Measured live 2026-07-29 against a running
+ * Persona — a junk name came back as success. A caller could not distinguish a typo from
+ * a working request, so the mistake looked like a working feature.
+ */
+test("play_animation reports an ERROR when the clip does not exist", async (context) => {
+  const attempted = [];
+  // Mirrors main.cjs: unknown clip -> false, known clip -> true.
+  const mcpHandler = createPersonaMcpHandler({
+    onAnimation: (animation) => {
+      attempted.push(animation);
+      return getAnimationEventName(animation) != null || animation.startsWith("FILE:");
+    },
+    onWindowAction: () => true,
+    getStatus: () => ({ windowVisible: true, voiceState: null, listener: null }),
+  });
+  const bridge = createBridgeServer({ port: 0, onEvent: () => {}, mcpHandler });
+  const address = await bridge.listen();
+  const client = new Client({ name: "persona-test-anim", version: "1.0.0" });
+  const transport = new StreamableHTTPClientTransport(
+    new URL(`http://127.0.0.1:${address.port}/mcp`),
+  );
+  context.after(async () => { await client.close(); await bridge.close(); });
+  await client.connect(transport);
+
+  // A refusal may arrive two ways and BOTH are correct: the SDK rejects it during input
+  // validation (-32602) on an initialized session, or — when validation is bypassed, which
+  // is what a bare JSON-RPC POST does — our handler returns isError. What must never
+  // happen is a success report for a clip that was not played.
+  let refused = false;
+  let how = "reported success";
+  try {
+    const bad = await client.callTool({
+      name: "play_animation",
+      arguments: { animation: "definitely-not-a-clip" },
+    });
+    if (bad.isError === true) { refused = true; how = `isError: ${bad.content[0].text}`; }
+    else how = `success: ${bad.content?.[0]?.text}`;
+  } catch (error) {
+    refused = true;
+    how = `threw: ${error.message}`;
+  }
+  assert.ok(refused, `an unknown clip must be refused, got ${how}`);
+  assert.ok(!attempted.includes("definitely-not-a-clip") || refused,
+    "an unrecognised clip must never be reported as played");
+
+  const good = await client.callTool({
+    name: "play_animation",
+    arguments: { animation: "dance" },
+  });
+  assert.notEqual(good.isError, true, "a real clip must NOT be an error");
+  assert.match(good.content[0].text, /playing the dance animation/i);
+
+  const file = await client.callTool({
+    name: "play_animation",
+    arguments: { animation: "FILE:custom.vrma" },
+  });
+  assert.notEqual(file.isError, true, "a FILE: clip must NOT be an error");
+});
+
+test("a void onAnimation stays backwards-compatible (only false is a refusal)", async (context) => {
+  const mcpHandler = createPersonaMcpHandler({
+    onAnimation: () => undefined,
+    onWindowAction: () => true,
+    getStatus: () => ({ windowVisible: true, voiceState: null, listener: null }),
+  });
+  const bridge = createBridgeServer({ port: 0, onEvent: () => {}, mcpHandler });
+  const address = await bridge.listen();
+  const client = new Client({ name: "persona-test-legacy", version: "1.0.0" });
+  const transport = new StreamableHTTPClientTransport(
+    new URL(`http://127.0.0.1:${address.port}/mcp`),
+  );
+  context.after(async () => { await client.close(); await bridge.close(); });
+  await client.connect(transport);
+  const r = await client.callTool({ name: "play_animation", arguments: { animation: "dance" } });
+  assert.notEqual(r.isError, true, "undefined must not be treated as a refusal");
+});
+
+/**
+ * `listAnimations` was accepted as a constructor option and passed in by main.cjs, but no
+ * tool ever exposed it — so FILE:<name>.vrma playback worked while a caller had no way to
+ * discover which packs were installed (D-1660 in the AitherOS ledger).
+ */
+test("list_animations exposes the built-ins AND installed .vrma packs", async (context) => {
+  const mcpHandler = createPersonaMcpHandler({
+    onAnimation: () => true,
+    onWindowAction: () => true,
+    getStatus: () => ({ windowVisible: true, voiceState: null, listener: null }),
+    listAnimations: () => [...ANIMATION_NAMES, "FILE:wave.vrma", "FILE:MyPose.vrma"],
+  });
+  const bridge = createBridgeServer({ port: 0, onEvent: () => {}, mcpHandler });
+  const address = await bridge.listen();
+  const client = new Client({ name: "persona-test-anims", version: "1.0.0" });
+  const transport = new StreamableHTTPClientTransport(
+    new URL(`http://127.0.0.1:${address.port}/mcp`),
+  );
+  context.after(async () => { await client.close(); await bridge.close(); });
+  await client.connect(transport);
+
+  const tools = await client.listTools();
+  assert.ok(
+    tools.tools.some((t) => t.name === "list_animations"),
+    "list_animations must be registered when listAnimations is supplied",
+  );
+
+  const result = await client.callTool({ name: "list_animations", arguments: {} });
+  const listed = JSON.parse(result.content[0].text);
+  assert.ok(listed.includes("FILE:wave.vrma"), "custom pack not listed");
+  assert.ok(listed.includes("FILE:MyPose.vrma"), "case-sensitive pack name altered");
+  for (const name of ANIMATION_NAMES) {
+    assert.ok(listed.includes(name), `built-in ${name} not listed`);
+  }
+});
+
+test("list_animations is NOT registered when no lister is supplied", async (context) => {
+  // Optional capability: an embedder that cannot enumerate must not advertise the tool.
+  const mcpHandler = createPersonaMcpHandler({
+    onAnimation: () => true,
+    onWindowAction: () => true,
+    getStatus: () => ({ windowVisible: true, voiceState: null, listener: null }),
+  });
+  const bridge = createBridgeServer({ port: 0, onEvent: () => {}, mcpHandler });
+  const address = await bridge.listen();
+  const client = new Client({ name: "persona-test-noanims", version: "1.0.0" });
+  const transport = new StreamableHTTPClientTransport(
+    new URL(`http://127.0.0.1:${address.port}/mcp`),
+  );
+  context.after(async () => { await client.close(); await bridge.close(); });
+  await client.connect(transport);
+  const tools = await client.listTools();
+  assert.ok(!tools.tools.some((t) => t.name === "list_animations"));
+});
