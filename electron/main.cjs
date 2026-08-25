@@ -46,7 +46,7 @@ const {
   setAgentAvatar,
 } = require("./agent-avatars.cjs");
 const { exportToAitherShell } = require("./aithershell-export.cjs");
-const { buildLivingDesktopMenu } = require("./living-desktop-window.cjs");
+const { buildLivingDesktopMenu, showLivingDesktop } = require("./living-desktop-window.cjs");
 const { openDetachedAvatar } = require("./detached-avatar-window.cjs");
 
 /** "Detach to own window" — pull one extra avatar out of the shared canvas into its own
@@ -362,9 +362,19 @@ function createWindow() {
       {
         label:
           openDecisions.length > 0
-            ? `Decision cards (${openDecisions.length} waiting)…`
-            : "Decision cards…",
-        click: () => decisionCards.openQueueWindow(),
+            ? `Decision cards (${openDecisions.length} waiting)`
+            : "Decision cards",
+        submenu: [
+          {
+            // The notification area the owner watches lives IN the Living
+            // Desktop (its bell reads this same queue over the bridge), so the
+            // tray links there first; the popup window stays one item away as
+            // the answering surface.
+            label: "Show in Living Desktop",
+            click: () => showLivingDesktop(),
+          },
+          { label: "Open answer window…", click: () => decisionCards.openQueueWindow() },
+        ],
       },
       { label: "Talk to Aither…", click: openTalkWindow },
       { label: "Browse models…", click: openModelBrowser },
@@ -856,9 +866,19 @@ function refreshTrayMenu() {
       {
         label:
           openDecisions.length > 0
-            ? `Decision cards (${openDecisions.length} waiting)…`
-            : "Decision cards…",
-        click: () => decisionCards.openQueueWindow(),
+            ? `Decision cards (${openDecisions.length} waiting)`
+            : "Decision cards",
+        submenu: [
+          {
+            // The notification area the owner watches lives IN the Living
+            // Desktop (its bell reads this same queue over the bridge), so the
+            // tray links there first; the popup window stays one item away as
+            // the answering surface.
+            label: "Show in Living Desktop",
+            click: () => showLivingDesktop(),
+          },
+          { label: "Open answer window…", click: () => decisionCards.openQueueWindow() },
+        ],
       },
       { label: "Talk to Aither…", click: openTalkWindow },
       { label: "Browse models…", click: openModelBrowser },
