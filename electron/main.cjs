@@ -32,6 +32,7 @@ const {
   enrollNewestDownload,
   getActiveCharacter,
   installCharacter,
+  installCharacterToSlot,
   listCharacters,
 } = require("./character-roster.cjs");
 const { invalidateGate, isHidden } = require("./content-rating.cjs");
@@ -43,9 +44,110 @@ const {
   setAgentAvatar,
 } = require("./agent-avatars.cjs");
 const { exportToAitherShell } = require("./aithershell-export.cjs");
+const { buildLivingDesktopMenu } = require("./living-desktop-window.cjs");
+const { openDetachedAvatar } = require("./detached-avatar-window.cjs");
 
-const WINDOW_WIDTH = 430;
-const WINDOW_HEIGHT = 680;
+/** "Detach to own window" — pull one extra avatar out of the shared canvas into its own
+ *  real, separately-draggable/resizable OS window. See detached-avatar-window.cjs. */
+function detachAvatarToOwnWindow(slotId) {
+  const info = avatarSlots.get(slotId);
+  if (!info) return false;
+  removeAvatarSlot(slotId);
+  openDetachedAvatar(slotId, info.modelUrl, info.agent || info.name, {
+    onMergeBack: () => spawnAvatarSlot(nextFreeSlotId(), info.name, info.agent),
+  });
+  return true;
+}
+
+function buildDetachAvatarMenu() {
+  if (avatarSlots.size === 0) return [{ label: "(no extra avatars)", enabled: false }];
+  return [...avatarSlots.entries()].map(([slotId, info]) => ({
+    label: info.agent ? `${info.agent} — ${info.name}` : info.name,
+    click: () => detachAvatarToOwnWindow(slotId),
+  }));
+}
+
+// D-2170: 430x680 on a 3840x2112 4K display reads as "trapped in a tiny box" —
+// it's genuinely small on a real screen, independent of camera framing. Kept
+// the same ~0.63 aspect ratio, just bigger. Still user-resizable (min 320x480).
+const WINDOW_WIDTH = 600;
+const WINDOW_HEIGHT = 950;
+
+// D-2xxx: `resizable` defaults true, but the window is frameless + transparent
+// and the three.js canvas covers the whole surface capturing every pointer
+// event for camera controls (see the drag-window IPC below, which exists for
+// the identical reason: there is no OS-visible edge left to grab). Native
+// edge-resize is therefore unreachable in practice — "resizable: true" was
+// true and useless. Fixed the same way window MOVE already is: menu items +
+// shortcuts driving setBounds() directly, not relying on an edge nobody can
+// click. Size is persisted so it survives a restart instead of resetting to
+// the D-2170 default every time.
+const SIZE_PRESETS = [
+  { label: "Small", width: 430, height: 680 },
+  { label: "Medium", width: WINDOW_WIDTH, height: WINDOW_HEIGHT },
+  { label: "Large", width: 800, height: 1266 },
+  { label: "Extra Large", width: 1000, height: 1583 },
+];
+const SIZE_STATE_PATH = () => path.join(app.getPath("userData"), "window-size.json");
+
+function loadSavedSize() {
+  try {
+    const raw = fs.readFileSync(SIZE_STATE_PATH(), "utf-8");
+    const parsed = JSON.parse(raw);
+    if (Number.isFinite(parsed?.width) && Number.isFinite(parsed?.height)) {
+      return { width: parsed.width, height: parsed.height };
+    }
+  } catch {
+    /* no saved size yet, or file is corrupt — fall back to the default */
+  }
+  return { width: WINDOW_WIDTH, height: WINDOW_HEIGHT };
+}
+
+function saveSize(width, height) {
+  try {
+    fs.mkdirSync(path.dirname(SIZE_STATE_PATH()), { recursive: true });
+    fs.writeFileSync(SIZE_STATE_PATH(), JSON.stringify({ width, height }), "utf-8");
+  } catch {
+    /* best-effort — a failed save just means the next launch uses the old size */
+  }
+}
+
+/** Resize the overlay in place (top-left corner stays put), clamped to the
+ *  display's work area so a saved size from a bigger monitor can't put the
+ *  window partly off-screen on a smaller one. */
+function setWindowSize(width, height) {
+  if (!avatarWindow || avatarWindow.isDestroyed()) return;
+  const bounds = avatarWindow.getBounds();
+  const area = screen.getDisplayMatching(bounds).workAreaSize;
+  const w = Math.max(320, Math.min(Math.round(width), area.width));
+  const h = Math.max(480, Math.min(Math.round(height), area.height));
+  avatarWindow.setBounds({ x: bounds.x, y: bounds.y, width: w, height: h });
+  saveSize(w, h);
+}
+
+function growWindow(factor = 1.15) {
+  if (!avatarWindow || avatarWindow.isDestroyed()) return;
+  const { width, height } = avatarWindow.getBounds();
+  setWindowSize(width * factor, height * factor);
+}
+
+function shrinkWindow(factor = 1.15) {
+  if (!avatarWindow || avatarWindow.isDestroyed()) return;
+  const { width, height } = avatarWindow.getBounds();
+  setWindowSize(width / factor, height / factor);
+}
+
+function buildSizeMenu() {
+  return [
+    ...SIZE_PRESETS.map((preset) => ({
+      label: preset.label,
+      click: () => setWindowSize(preset.width, preset.height),
+    })),
+    { type: "separator" },
+    { label: "Bigger  (Ctrl+Shift+=)", click: () => growWindow() },
+    { label: "Smaller  (Ctrl+Shift+-)", click: () => shrinkWindow() },
+  ];
+}
 const startInBackground = process.argv.includes("--background");
 const protocolScheme = "persona";
 const debugEnabled = process.env.PERSONA_DEBUG === "1";
@@ -65,6 +167,7 @@ let hyprlandLastPosition = null;
 let rendererLoadHookAttached = false;
 let mcpAnimationRequestId = 0;
 const pendingRendererEvents = new Map();
+const avatarSlots = new Map(); // Map<slotId, { name, modelUrl }> — tracks spawned slots (not slot 0)
 
 app.setName("Persona");
 
@@ -153,9 +256,10 @@ function toggleOverlay() {
 function createWindow() {
   if (avatarWindow && !avatarWindow.isDestroyed()) return avatarWindow;
 
+  const savedSize = loadSavedSize();
   avatarWindow = new BrowserWindow({
-    width: WINDOW_WIDTH,
-    height: WINDOW_HEIGHT,
+    width: savedSize.width,
+    height: savedSize.height,
     minWidth: 320,
     minHeight: 480,
     show: false,
@@ -214,6 +318,26 @@ function createWindow() {
   avatarWindow.webContents.on("will-navigate", (event, targetUrl) => {
     if (!isAllowedRendererNavigation(targetUrl, rendererUrl)) event.preventDefault();
   });
+  // Nothing previously listened for either of these. A renderer crash left the window
+  // showing whatever was on screen at the moment it died (often just black/blank) with
+  // `windowVisible: true` still reported correctly by get_status (that flag reflects the
+  // WINDOW, not the page inside it) and no signal anywhere that anything had gone wrong.
+  // A JS exception in React reads identically from every existing check: healthy process,
+  // healthy MCP server, "visible" window, nothing on screen.
+  avatarWindow.webContents.on("render-process-gone", (_event, details) => {
+    debugLog("RENDERER PROCESS GONE", details.reason, details.exitCode);
+  });
+  // Electron 39's console-message event passes ONE object, not five positional args —
+  // the five-arg form still fires (nothing breaks) but logs a deprecation warning on
+  // every single message, which would have buried the real signal this listener exists
+  // to surface under noise about itself.
+  avatarWindow.webContents.on("console-message", (event) => {
+    // level 2 = error, 3 = warning in Electron's ConsoleMessageLevel; only surface those,
+    // not every console.log — this is a crash/error signal, not a firehose.
+    if (event.level >= 2) {
+      debugLog(`[renderer console] ${event.sourceId}:${event.lineNumber} — ${event.message}`);
+    }
+  });
   // Right-click the avatar for the same menu the tray offers (characters, previews, quit).
   // Right-DRAG still pans the camera; the menu only pops on release. The renderer's camera
   // controls preventDefault() the contextmenu event, so the preload relays it over IPC —
@@ -222,6 +346,11 @@ function createWindow() {
     debugLog("avatar context menu requested");
     Menu.buildFromTemplate([
       { label: "Characters", submenu: buildCharacterMenu() },
+      { label: "Window Size", submenu: buildSizeMenu() },
+      { label: "Add Avatar", submenu: buildSpawnAvatarMenu() },
+      { label: "Remove Avatar", submenu: buildRemoveAvatarMenu() },
+      { label: "Detach to own window", submenu: buildDetachAvatarMenu() },
+      { label: "Living Desktop", submenu: buildLivingDesktopMenu() },
       { label: "Talk to Aither…", click: openTalkWindow },
       { label: "Browse models…", click: openModelBrowser },
       { type: "separator" },
@@ -244,6 +373,32 @@ function createWindow() {
   avatarWindow.webContents.on("context-menu", popupAvatarMenu);
   ipcMain.removeAllListeners("persona:context-menu");
   ipcMain.on("persona:context-menu", popupAvatarMenu);
+
+  // D-2170: middle-mouse-drag window move (preload.cjs sends these). Tracks
+  // the mouse's screen position at drag start against the window's own
+  // position at drag start, then repositions by the same delta on every
+  // move — works from anywhere on the avatar, doesn't touch left/right
+  // click at all so OrbitControls and the context menu stay untouched.
+  let dragOrigin = null;
+  ipcMain.removeAllListeners("persona:drag-start");
+  ipcMain.removeAllListeners("persona:drag-move");
+  ipcMain.removeAllListeners("persona:drag-end");
+  ipcMain.on("persona:drag-start", (_event, { x, y }) => {
+    if (!avatarWindow) return;
+    const [winX, winY] = avatarWindow.getPosition();
+    dragOrigin = { mouseX: x, mouseY: y, winX, winY };
+  });
+  ipcMain.on("persona:drag-move", (_event, { x, y }) => {
+    if (!dragOrigin || !avatarWindow) return;
+    avatarWindow.setPosition(
+      Math.round(dragOrigin.winX + (x - dragOrigin.mouseX)),
+      Math.round(dragOrigin.winY + (y - dragOrigin.mouseY)),
+      false,
+    );
+  });
+  ipcMain.on("persona:drag-end", () => {
+    dragOrigin = null;
+  });
   void avatarWindow.loadURL(rendererUrl);
   return avatarWindow;
 }
@@ -421,6 +576,120 @@ function applyCharacter(name) {
   return true;
 }
 
+/** Add a spawned avatar slot to the scene WITHOUT reloading. Slot "slot0" and
+ *  variants of the default slot ID are reserved and refused. `agent`, when given,
+ *  records which roster agent this slot represents (for the Remove Avatar label and
+ *  future dialogue/arbitration routing) — it does not change which character renders. */
+function spawnAvatarSlot(slotId, name, agent) {
+  // Refuse slot IDs reserved for the default avatar
+  if (slotId === "slot0" || slotId === "default" || slotId === "") return false;
+
+  const modelUrl = installCharacterToSlot(name, slotId);
+  if (!modelUrl) return false;
+
+  avatarSlots.set(slotId, { name, modelUrl, agent: agent || null });
+  debugLog("avatar slot spawned", slotId, name, agent ? `(agent: ${agent})` : "");
+  showOverlay();
+  if (avatarWindow && !avatarWindow.isDestroyed()) {
+    avatarWindow.webContents.send("persona:event", {
+      type: "spawn-avatar",
+      slotId,
+      modelUrl,
+    });
+  }
+  return true;
+}
+
+/** Remove a spawned avatar slot from the scene. Cannot remove slot0 (the default). */
+function removeAvatarSlot(slotId) {
+  // Refuse removal of slot0/default
+  if (slotId === "slot0" || slotId === "default" || slotId === "") return false;
+
+  if (!avatarSlots.has(slotId)) return false;
+
+  avatarSlots.delete(slotId);
+  debugLog("avatar slot removed", slotId);
+  if (avatarWindow && !avatarWindow.isDestroyed()) {
+    avatarWindow.webContents.send("persona:event", {
+      type: "remove-avatar",
+      slotId,
+    });
+  }
+  return true;
+}
+
+/** First "slotN" not already in avatarSlots — spawn_avatar/remove_avatar were MCP-only
+ *  (an agent had to name a slot id itself); the menu needs to pick one for the owner. */
+function nextFreeSlotId() {
+  for (let n = 1; n < 1000; n += 1) {
+    const candidate = `slot${n}`;
+    if (!avatarSlots.has(candidate)) return candidate;
+  }
+  return `slot${Date.now()}`; // pathological case, still a valid unique id
+}
+
+/** Deterministic (not random) fallback character for an agent with no assignment yet —
+ *  so every agent in the roster is spawnable IMMEDIATELY from "Add Avatar" without first
+ *  visiting Characters ▸ Agents ▸ Assign, and so a group of unassigned agents lands on
+ *  DIFFERENT characters instead of all cloning roster[0]. A simple string hash into the
+ *  roster is enough; this is cosmetic seeding, not an identity guarantee. Returns null
+ *  when the roster is empty — nothing to fall back to. */
+function fallbackCharacterForAgent(agent, roster) {
+  if (roster.length === 0) return null;
+  let hash = 0;
+  for (let i = 0; i < agent.length; i += 1) hash = (hash * 31 + agent.charCodeAt(i)) >>> 0;
+  return roster[hash % roster.length];
+}
+
+/** "Add Avatar" — spawn an AGENT's avatar into the next free slot, not a bare VRM
+ *  filename. D-2xxx: this used to list raw roster characters (`aiko-droid-base-model`,
+ *  `celisia-arcroid`, ...) with no agent identity attached at all — meaningless to pick
+ *  from if the point is "spawn Aither" or "spawn Hydra", and the whole reason multi-avatar
+ *  exists is agent personas on screen, not a second copy of a random model. Reuses
+ *  listAgents() (the SAME live union agent-avatars.cjs's other menu uses — sovereign
+ *  roster + Library pack scan, no separate hardcoded list), chunked the same way
+ *  buildCharacterMenu()/the old version of this menu did. Each entry uses the agent's
+ *  ASSIGNED character (Characters ▸ Agents ▸ Assign current) when one exists, or a
+ *  deterministic fallback so an unassigned agent is still spawnable rather than a dead
+ *  menu entry — assign one later and future spawns of that agent pick it up. */
+function buildSpawnAvatarMenu() {
+  const roster = listCharacters();
+  const agents = listAgents();
+  const item = (agent) => {
+    const assigned = getAgentAvatar(agent);
+    const character = assigned || fallbackCharacterForAgent(agent, roster);
+    return {
+      label: assigned ? agent : `${agent}  (unassigned → ${character || "none"})`,
+      enabled: Boolean(character),
+      click: () => character && spawnAvatarSlot(nextFreeSlotId(), character, agent),
+    };
+  };
+  const CHUNK = 14;
+  const groups = [];
+  for (let start = 0; start < agents.length; start += CHUNK) {
+    const slice = agents.slice(start, start + CHUNK);
+    const first = slice[0].slice(0, 10);
+    const last = slice[slice.length - 1].slice(0, 10);
+    groups.push({
+      label: slice.length > 1 ? `${first} … ${last}` : first,
+      submenu: slice.map(item),
+    });
+  }
+  return groups.length ? groups : [{ label: "(no agents found)", enabled: false }];
+}
+
+/** "Remove Avatar" — one entry per currently-spawned extra slot (never slot0/default,
+ *  which this whole mechanism structurally cannot name — see spawnAvatarSlot/removeAvatarSlot).
+ *  Shows the agent name when the slot was spawned from Add Avatar's agent list, since that
+ *  is what the owner picked and remembers, not the underlying VRM filename. */
+function buildRemoveAvatarMenu() {
+  if (avatarSlots.size === 0) return [{ label: "(no extra avatars)", enabled: false }];
+  return [...avatarSlots.entries()].map(([slotId, info]) => ({
+    label: info.agent ? `${info.agent} — ${info.name}  (${slotId})` : `${info.name}  (${slotId})`,
+    click: () => removeAvatarSlot(slotId),
+  }));
+}
+
 /** Recents on top for one-click switching, then every VISIBLE character in
  *  alphabetical groups — a flat list of 70+ filled the whole screen, so the roster
  *  lives in chunked sub-submenus instead.
@@ -546,6 +815,11 @@ function refreshTrayMenu() {
       { label: "Hide Persona", click: () => void hideOverlay() },
       { type: "separator" },
       { label: "Characters", submenu: buildCharacterMenu() },
+      { label: "Window Size", submenu: buildSizeMenu() },
+      { label: "Add Avatar", submenu: buildSpawnAvatarMenu() },
+      { label: "Remove Avatar", submenu: buildRemoveAvatarMenu() },
+      { label: "Detach to own window", submenu: buildDetachAvatarMenu() },
+      { label: "Living Desktop", submenu: buildLivingDesktopMenu() },
       { label: "Talk to Aither…", click: openTalkWindow },
       { label: "Browse models…", click: openModelBrowser },
       { type: "separator" },
@@ -595,7 +869,28 @@ if (!app.requestSingleInstanceLock()) {
     app.dock?.hide();
     if (app.isPackaged) app.setAsDefaultProtocolClient(protocolScheme);
 
-    ipcMain.handle("persona:get-snapshot", () => latestEvent);
+    ipcMain.handle("persona:get-snapshot", () => {
+      // The renderer pulls this once per mount — including after the window
+      // reload applyCharacter() does. Spawned avatar slots live only in main's
+      // memory, and until 2026-08-24 nothing re-sent them after a reload, so
+      // switching characters silently cleared every extra avatar while the
+      // tray still listed them. Replay them here: the renderer registers its
+      // event listener synchronously right after calling getSnapshot(), so by
+      // the time this handler runs the listener exists — a push from here
+      // cannot race the subscription (a push from did-finish-load can).
+      // The renderer de-dupes by slotId, so a second pull cannot double-spawn.
+      if (avatarWindow && !avatarWindow.isDestroyed()) {
+        for (const [slotId, info] of avatarSlots) {
+          avatarWindow.webContents.send("persona:event", {
+            type: "spawn-avatar",
+            slotId,
+            modelUrl: info.modelUrl,
+          });
+        }
+        if (avatarSlots.size > 0) debugLog("replayed avatar slots", avatarSlots.size);
+      }
+      return latestEvent;
+    });
     ipcMain.on("persona:hide", () => void hideOverlay());
 
     const mcpHandler = createPersonaMcpHandler({
@@ -640,6 +935,8 @@ if (!app.requestSingleInstanceLock()) {
         const custom = listAvailableAnimations().map((file) => `FILE:${file}`);
         return [...builtIn, ...custom];
       },
+      onSpawnAvatar: (slotId, name) => spawnAvatarSlot(slotId, name),
+      onRemoveAvatar: (slotId) => removeAvatarSlot(slotId),
     });
     bridge = createBridgeServer({
       port: Number(process.env.PERSONA_BRIDGE_PORT || DEFAULT_PORT),
@@ -658,6 +955,8 @@ if (!app.requestSingleInstanceLock()) {
 
     createTray();
     globalShortcut.register("CommandOrControl+Shift+A", toggleOverlay);
+    globalShortcut.register("CommandOrControl+Shift+=", () => growWindow());
+    globalShortcut.register("CommandOrControl+Shift+-", () => shrinkWindow());
     handleProtocolArgv(process.argv);
 
     audioListener = createAudioListener({
