@@ -1,8 +1,8 @@
 # Desk character switcher — swap the active VRM character from a local roster.
 #
 # Roster layout (one dir per character):
-#   D:\persona\characters\<name>\model.vrm            (required)
-#   D:\persona\characters\<name>\animations\*.vrma    (optional per-character overrides)
+#   D:\desk\characters\<name>\model.vrm            (required)
+#   D:\desk\characters\<name>\animations\*.vrma    (optional per-character overrides)
 #
 # Usage:
 #   .\switch-character.ps1                # list roster + show active

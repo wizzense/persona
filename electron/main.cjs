@@ -177,7 +177,28 @@ let mcpAnimationRequestId = 0;
 const pendingRendererEvents = new Map();
 const avatarSlots = new Map(); // Map<slotId, { name, modelUrl }> — tracks spawned slots (not slot 0)
 
-app.setName("Persona");
+app.setName("Desk");
+
+// ── awdesk rename: migrate the legacy userData dir once ────────────────────────────────────────────────────────
+// app.setName() decides the userData path, so renaming Persona -> Desk points
+// Electron at %APPDATA%\Desk. The old %APPDATA%\Persona holds the character
+// roster, ratings, settings and decision state. On first launch under the new
+// name, copy it across; the legacy dir is LEFT IN PLACE so a rollback to the
+// previous build keeps its data. Copy rather than move: userData can be large
+// (VRM models), and a half-failed move orphans state under BOTH names.
+try {
+  const legacyDir = path.join(app.getPath("appData"), "Persona");
+  const newDir = app.getPath("userData");
+  if (fs.existsSync(legacyDir) && !fs.existsSync(newDir)) {
+    fs.cpSync(legacyDir, newDir, { recursive: true });
+    console.error("[desk] migrated userData Persona -> Desk");
+  }
+} catch (err) {
+  // A failed migration must never block launch: start clean, and the legacy
+  // dir is still there for the next attempt.
+  console.error("[desk] userData migration failed (starting clean):", err?.message || err);
+}
+
 
 function debugLog(...values) {
   if (debugEnabled) console.error("[desk]", ...values);
