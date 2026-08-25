@@ -7,12 +7,43 @@ export interface AvatarTransform {
 
 const STORAGE_KEY = 'persona.avatar-layout.v1';
 
+/** The farthest a stored/dragged avatar may sit from the origin, per axis. The scene's
+ *  usable stage is a few units across; anything beyond this is not a placement, it is an
+ *  accident. Measured 2026-08-25: slot0 was persisted at z=-2665 (a near-horizontal drag
+ *  ray intersecting the ground plane out at the horizon), so every boot restored an
+ *  avatar 2,600 units away — a perfectly healthy renderer showing NOTHING, no errors,
+ *  which read as "Persona is broken". */
+export const POSITION_BOUND = 10;
+const SCALE_MIN = 0.05;
+const SCALE_MAX = 10;
+
+/** A stored transform is only usable if every number is finite and inside the stage.
+ *  An out-of-bounds entry is dropped (fall back to the default placement) rather than
+ *  clamped: clamping a horizon-drag artifact would pin the avatar to a stage edge the
+ *  owner never chose, which is a second surprise instead of a recovery. */
+export function sane(entry: unknown): entry is AvatarTransform {
+  if (!entry || typeof entry !== 'object') return false;
+  const t = entry as { position?: unknown; scale?: unknown };
+  if (!Array.isArray(t.position) || t.position.length !== 3) return false;
+  if (!t.position.every((v) => Number.isFinite(v) && Math.abs(v as number) <= POSITION_BOUND))
+    return false;
+  return typeof t.scale === 'number' && t.scale >= SCALE_MIN && t.scale <= SCALE_MAX;
+}
+
+export function sanitizeLayout(parsed: unknown): Record<string, AvatarTransform> {
+  if (!parsed || typeof parsed !== 'object') return {};
+  const cleaned: Record<string, AvatarTransform> = {};
+  for (const [slot, entry] of Object.entries(parsed as Record<string, unknown>)) {
+    if (sane(entry)) cleaned[slot] = entry;
+  }
+  return cleaned;
+}
+
 function loadStored(): Record<string, AvatarTransform> {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return {};
-    const parsed: unknown = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? (parsed as Record<string, AvatarTransform>) : {};
+    return sanitizeLayout(JSON.parse(raw));
   } catch {
     return {}; // private window / cleared site data / storage disabled -- render with defaults
   }

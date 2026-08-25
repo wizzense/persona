@@ -2,6 +2,8 @@ import { useCallback, useMemo, useRef } from 'react';
 import { useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 
+import { POSITION_BOUND as DRAG_BOUND } from './useAvatarLayout';
+
 /**
  * Drag an avatar across the ground (X/Z) plane by raycasting the pointer against a
  * horizontal plane at the avatar's own Y.
@@ -36,7 +38,16 @@ export function useAvatarDrag(getY: () => number, onMove: (x: number, z: number)
       ndc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
       plane.constant = -getY(); // live height, never a captured one
       raycaster.setFromCamera(ndc, camera);
-      if (raycaster.ray.intersectPlane(plane, point)) onMove(point.x, point.z);
+      if (raycaster.ray.intersectPlane(plane, point)) {
+        // A near-horizontal camera makes this ray almost parallel to the ground
+        // plane, so a pointer just above the horizon intersects it THOUSANDS of
+        // units away — measured 2026-08-25, one such drag persisted slot0 at
+        // z=-2665 and the avatar "vanished" on every boot after. Clamp the drag
+        // to the stage; the layout store additionally refuses to load an
+        // out-of-bounds entry, so the two guards fail independently.
+        const clamp = (v: number) => Math.max(-DRAG_BOUND, Math.min(DRAG_BOUND, v));
+        onMove(clamp(point.x), clamp(point.z));
+      }
     },
     [camera, getY, gl, ndc, onMove, plane, point, raycaster],
   );
