@@ -20,7 +20,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 DESK_ROOT = Path(__file__).parent
-sys.path.insert(0, r"D:\AitherOS-Fresh\AitherOS")
+sys.path.insert(0, r"C:\AitherOS-Fresh\AitherOS")
 sys.path.insert(0, str(DESK_ROOT))
 
 from lib.integrations.vroid_hub import VRoidHub, VRoidHubError  # noqa: E402
@@ -304,65 +304,458 @@ def add_animation(name: str, filename: str, data: bytes) -> dict:
 
 PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Desk model browser</title>
 <style>
-body{margin:0;font-family:system-ui;background:#111;color:#eee}
-header{position:sticky;top:0;background:#1b1b1b;padding:10px 14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;box-shadow:0 2px 8px #0008}
-input[type=text]{background:#2a2a2a;border:1px solid #444;color:#eee;padding:8px 10px;border-radius:8px;min-width:220px}
-button,.tab{background:#2a2a2a;border:1px solid #444;color:#eee;padding:8px 12px;border-radius:8px;cursor:pointer}
-.tab.active{background:#4457d5;border-color:#4457d5}
-label{display:flex;gap:5px;align-items:center;font-size:13px;color:#bbb}
-#grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;padding:14px}
-.card{background:#1c1c1c;border:1px solid #2c2c2c;border-radius:12px;overflow:hidden;display:flex;flex-direction:column}
-.card img{width:100%;aspect-ratio:1;object-fit:cover;background:#222}
-.card .b{padding:8px;display:flex;flex-direction:column;gap:6px}
-.card .n{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.badges{display:flex;gap:4px;font-size:11px}
-.badge{background:#333;border-radius:6px;padding:1px 6px}
-.badge.dl{background:#1d5c2f}.badge.r18{background:#7a2030}.badge.have{background:#4457d5}
-.booth-items{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
-.booth-badge{background:#5a3a8a;border-radius:6px;padding:2px 6px;font-size:11px;text-decoration:none;color:#ddd;display:inline-flex;align-items:center;gap:3px}
-.booth-badge:hover{background:#6f4aa5;color:#fff}
-.booth-icon{font-size:9px}
-.card button{padding:6px}.card button:disabled{opacity:.35;cursor:default}
-#status{padding:6px 14px;color:#9a9;font-size:13px;min-height:20px}
-.char-card{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:14px;background:#1c1c1c;border:1px solid #2c2c2c;border-radius:12px;margin-bottom:12px}
-.char-info{display:flex;flex-direction:column;gap:8px}
-.char-info-row{display:flex;justify-content:space-between;font-size:13px}
-.char-info-row .label{color:#999}
-.char-actions{display:flex;flex-direction:column;gap:6px}
-.char-actions button{padding:8px;font-size:12px}
-.anim-list{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
-.anim-btn{background:#2a3a5a;border:1px solid #3a4a6a;color:#bbb;padding:6px 10px;border-radius:6px;cursor:pointer;font-size:11px}
-.anim-btn:hover{background:#3a4a7a}
-.anim-input{margin-top:8px;padding:8px;border:1px dashed #444;border-radius:8px;background:#0a0a0a;cursor:pointer}
-.modal{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:#0008;z-index:999;justify-content:center;align-items:center}
-.modal.show{display:flex}
-.modal-content{background:#1b1b1b;border:1px solid #444;border-radius:12px;padding:20px;max-width:400px;width:90%}
-.modal-buttons{display:flex;gap:10px;margin-top:15px}
-.modal-buttons button{flex:1;padding:10px}
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, sans-serif;
+  background: linear-gradient(135deg, #000103 0%, #02060D 50%, #040C15 100%);
+  background-attachment: fixed;
+  color: #EEEEEE;
+  min-height: 100vh;
+}
+
+header {
+  position: sticky;
+  top: 0;
+  background: rgba(2, 6, 13, 0.7);
+  backdrop-filter: blur(20px);
+  border-bottom: 1px solid rgba(22, 35, 48, 0.3);
+  padding: 16px 20px;
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  flex-wrap: wrap;
+  z-index: 100;
+}
+
+header > b {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: #EEEEEE;
+}
+
+.tab, button, input[type=text] {
+  border-radius: 8px;
+  font-size: 13px;
+  transition: all 0.2s ease;
+  border: 1px solid rgba(22, 35, 48, 0.4);
+}
+
+.tab {
+  background: transparent;
+  color: #9BA6B1;
+  padding: 8px 16px;
+  cursor: pointer;
+  border: none;
+  font-weight: 500;
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.3px;
+}
+
+.tab:hover {
+  color: #EEEEEE;
+  background: rgba(42, 215, 215, 0.08);
+}
+
+.tab.active {
+  color: #2AD7D7;
+  background: rgba(42, 215, 215, 0.12);
+  border-bottom: 2px solid #2AD7D7;
+  border-color: #2AD7D7;
+}
+
+input[type=text] {
+  background: rgba(4, 12, 21, 0.6);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(22, 35, 48, 0.5);
+  color: #EEEEEE;
+  padding: 10px 14px;
+  min-width: 240px;
+}
+
+input[type=text]::placeholder {
+  color: #69737D;
+}
+
+input[type=text]:focus {
+  outline: none;
+  border-color: #2AD7D7;
+  background: rgba(4, 12, 21, 0.8);
+}
+
+button {
+  background: rgba(4, 12, 21, 0.5);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(22, 35, 48, 0.5);
+  color: #EEEEEE;
+  padding: 10px 16px;
+  cursor: pointer;
+  font-weight: 500;
+  font-size: 12px;
+}
+
+button:hover:not(:disabled) {
+  background: rgba(4, 12, 21, 0.8);
+  border-color: rgba(42, 215, 215, 0.5);
+  color: #EEEEEE;
+}
+
+button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+  color: #9BA6B1;
+  cursor: pointer;
+  transition: color 0.2s ease;
+}
+
+label:hover {
+  color: #EEEEEE;
+}
+
+label input[type=checkbox] {
+  cursor: pointer;
+  width: 16px;
+  height: 16px;
+  accent-color: #2AD7D7;
+}
+
+#status {
+  padding: 12px 20px;
+  color: #70DDB1;
+  font-size: 12px;
+  min-height: 20px;
+  font-weight: 500;
+}
+
+#grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 16px;
+  padding: 20px;
+  max-width: 1600px;
+  margin: 0 auto;
+}
+
+.card {
+  background: rgba(4, 12, 21, 0.4);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(22, 35, 48, 0.5);
+  border-radius: 12px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  transition: all 0.3s ease;
+  cursor: pointer;
+}
+
+.card:hover {
+  transform: translateY(-4px);
+  background: rgba(4, 12, 21, 0.6);
+  border-color: rgba(42, 215, 215, 0.3);
+  box-shadow: 0 8px 24px rgba(42, 215, 215, 0.1);
+}
+
+.card img {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  background: linear-gradient(135deg, #040C15 0%, #02060D 100%);
+}
+
+.card .b {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.card .n {
+  font-size: 13px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #EEEEEE;
+}
+
+.badges {
+  display: flex;
+  gap: 6px;
+  font-size: 10px;
+  flex-wrap: wrap;
+}
+
+.badge {
+  background: rgba(155, 166, 177, 0.2);
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: #9BA6B1;
+}
+
+.badge.dl {
+  background: rgba(42, 215, 215, 0.2);
+  color: #2AD7D7;
+  border: 1px solid rgba(42, 215, 215, 0.3);
+}
+
+.badge.r18 {
+  background: rgba(255, 145, 137, 0.2);
+  color: #FF9189;
+  border: 1px solid rgba(255, 145, 137, 0.3);
+}
+
+.badge.have {
+  background: rgba(112, 221, 177, 0.2);
+  color: #70DDB1;
+  border: 1px solid rgba(112, 221, 177, 0.3);
+}
+
+.booth-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.booth-badge {
+  background: rgba(182, 170, 255, 0.15);
+  border: 1px solid rgba(182, 170, 255, 0.3);
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 10px;
+  text-decoration: none;
+  color: #B6AAFF;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+
+.booth-badge:hover {
+  background: rgba(182, 170, 255, 0.25);
+  border-color: rgba(182, 170, 255, 0.5);
+  color: #EEEEEE;
+}
+
+.booth-icon {
+  font-size: 9px;
+}
+
+.card button {
+  padding: 8px 12px;
+  font-size: 11px;
+  margin-top: 4px;
+}
+
+#more {
+  display: none;
+  margin: 24px auto;
+  padding: 12px 28px;
+}
+
+.char-card {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  padding: 20px;
+  background: rgba(4, 12, 21, 0.4);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(22, 35, 48, 0.5);
+  border-radius: 12px;
+  margin-bottom: 16px;
+}
+
+.char-info {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.char-info-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(22, 35, 48, 0.3);
+}
+
+.char-info-row .label {
+  color: #9BA6B1;
+  font-weight: 500;
+}
+
+.char-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.char-actions button {
+  padding: 10px 16px;
+  font-size: 12px;
+  width: 100%;
+}
+
+.anim-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.anim-btn {
+  background: rgba(0, 100, 185, 0.15);
+  border: 1px solid rgba(0, 100, 185, 0.3);
+  color: #EEEEEE;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 500;
+  transition: all 0.2s ease;
+}
+
+.anim-btn:hover {
+  background: rgba(0, 100, 185, 0.25);
+  border-color: rgba(0, 100, 185, 0.5);
+  color: #2AD7D7;
+}
+
+.anim-input {
+  margin-top: 12px;
+  padding: 16px;
+  border: 2px dashed rgba(22, 35, 48, 0.5);
+  border-radius: 8px;
+  background: rgba(4, 12, 21, 0.3);
+  backdrop-filter: blur(5px);
+  cursor: pointer;
+  text-align: center;
+  color: #9BA6B1;
+  transition: all 0.2s ease;
+}
+
+.anim-input:hover {
+  border-color: rgba(42, 215, 215, 0.4);
+  background: rgba(4, 12, 21, 0.5);
+  color: #EEEEEE;
+}
+
+.modal {
+  display: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 1, 3, 0.7);
+  backdrop-filter: blur(8px);
+  z-index: 999;
+  justify-content: center;
+  align-items: center;
+}
+
+.modal.show {
+  display: flex;
+}
+
+.modal-content {
+  background: rgba(2, 6, 13, 0.85);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(22, 35, 48, 0.5);
+  border-radius: 12px;
+  padding: 28px;
+  max-width: 400px;
+  width: 90%;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+}
+
+.modal-content > div:first-child {
+  color: #EEEEEE;
+  font-size: 14px;
+  margin-bottom: 20px;
+}
+
+.modal-buttons {
+  display: flex;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.modal-buttons button {
+  flex: 1;
+  padding: 12px 16px;
+  font-weight: 500;
+}
+
+.modal-buttons button:first-child {
+  background: rgba(155, 166, 177, 0.15);
+  border-color: rgba(155, 166, 177, 0.3);
+  color: #9BA6B1;
+}
+
+.modal-buttons button:first-child:hover {
+  background: rgba(155, 166, 177, 0.25);
+  border-color: rgba(155, 166, 177, 0.5);
+}
+
+.modal-buttons button:last-child {
+  background: rgba(255, 145, 137, 0.2);
+  border-color: rgba(255, 145, 137, 0.4);
+  color: #FF9189;
+}
+
+.modal-buttons button:last-child:hover {
+  background: rgba(255, 145, 137, 0.3);
+  border-color: rgba(255, 145, 137, 0.6);
+}
 </style></head><body>
 <header>
- <b>Desk models</b>
- <span class="tab active" data-s="search">Search</span>
- <span class="tab" data-s="characters">Characters</span>
- <span class="tab" data-s="staff_picks">Staff picks</span>
- <span class="tab" data-s="hearts">Hearted</span>
- <span class="tab" data-s="history">Browsed</span>
- <input type="text" id="q" placeholder="search keyword… (e.g. cute, fox girl, フリーレン)">
- <button onclick="load()">Go</button>
- <label><input type="checkbox" id="dl" checked> downloadable only</label>
- <label id="r18Filter" style="display:none"><input type="checkbox" id="hideR18"> hide R-18</label>
+  <b>Desk models</b>
+  <div style="display:flex;gap:8px">
+    <span class="tab active" data-s="search">Search</span>
+    <span class="tab" data-s="characters">Characters</span>
+    <span class="tab" data-s="staff_picks">Staff picks</span>
+    <span class="tab" data-s="hearts">Hearted</span>
+    <span class="tab" data-s="history">Browsed</span>
+  </div>
+  <input type="text" id="q" placeholder="search keyword… (e.g. cute, fox girl, フリーレン)">
+  <button onclick="load()">Go</button>
+  <label><input type="checkbox" id="dl" checked> downloadable only</label>
+  <label id="r18Filter" style="display:none"><input type="checkbox" id="hideR18"> hide R-18</label>
 </header>
-<div id="status"></div><div id="grid"></div>
-<div style="text-align:center;padding:16px"><button id="more" style="display:none">Load more</button></div>
+
+<div id="status"></div>
+<div id="grid"></div>
+
+<div style="text-align:center;padding:24px">
+  <button id="more" style="display:none">Load more</button>
+</div>
 
 <div id="confirmModal" class="modal">
- <div class="modal-content">
-  <div id="confirmText"></div>
-  <div class="modal-buttons">
-   <button onclick="confirmAction=false;hideConfirm()" style="background:#333">Cancel</button>
-   <button onclick="confirmAction=true;hideConfirm()" style="background:#d84a4a">Delete</button>
+  <div class="modal-content">
+    <div id="confirmText"></div>
+    <div class="modal-buttons">
+      <button onclick="confirmAction=false;hideConfirm()">Cancel</button>
+      <button onclick="confirmAction=true;hideConfirm()">Delete</button>
+    </div>
   </div>
- </div>
 </div>
 <script>
 let source='search', cursor=null, total=0, shown=0, loading=false, rendered=new Set(), confirmAction=false;

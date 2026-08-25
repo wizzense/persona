@@ -11,7 +11,13 @@ const {
 } = require("./content-rating-loader.cjs");
 
 const ROOT = path.join(__dirname, "..");
-const ROSTER_DIR = path.join(ROOT, "characters");
+// Test seam: content-rating.test.cjs points this at a per-process temp dir so
+// its fixtures never appear in the REAL roster that pack-roster.test.cjs
+// snapshots — the two test files run as parallel child processes and raced
+// on this directory (measured 2026-08-25: "open roster lost a PG character:
+// zz-gate-fixture-plain"). Production never sets the var.
+const ROSTER_DIR =
+  process.env.DESK_ROSTER_DIR || path.join(ROOT, "characters");
 const ACTIVE_FILE = path.join(ROOT, ".active-character");
 const RECENT_FILE = path.join(ROOT, ".recent-characters");
 const RECENT_LIMIT = 6;
@@ -21,7 +27,7 @@ const ASSET_DIRS = [
 ];
 
 /**
- * Get pack characters if the persona:characters-mature capability is available.
+ * Get pack characters if the desk:characters-mature capability is available.
  * Returns a list of character names from the pack, or [] if unavailable.
  */
 function getPackCharacters() {
@@ -53,7 +59,7 @@ function getPackCharacters() {
 /** Every character on disk (dev tree + pack), ratings ignored. Internal — callers that show a
  *  character to a human must use listCharacters() instead. */
 function listAllCharacters() {
-  let devCharacters = [];
+  let devCharacters;
   try {
     const entries = fs.readdirSync(ROSTER_DIR, { withFileTypes: true });
     devCharacters = entries
@@ -82,7 +88,7 @@ function listCharacters() {
 
 /** Most-recently-switched-to characters, newest first (menu shows these, not all 60+). */
 function getRecentCharacters(limit = RECENT_LIMIT) {
-  let recent = [];
+  let recent;
   try {
     recent = JSON.parse(fs.readFileSync(RECENT_FILE, "utf8"));
   } catch {
@@ -97,7 +103,7 @@ function getRecentCharacters(limit = RECENT_LIMIT) {
 }
 
 function rememberCharacter(name) {
-  let recent = [];
+  let recent;
   try {
     recent = JSON.parse(fs.readFileSync(RECENT_FILE, "utf8"));
   } catch {
@@ -167,7 +173,7 @@ function installCharacter(name) {
 /** Enroll the newest .vrm from Downloads into the roster; returns its roster name. */
 function enrollNewestDownload(preferredName = null) {
   const downloads = path.join(os.homedir(), "Downloads");
-  let candidates = [];
+  let candidates;
   try {
     candidates = fs
       .readdirSync(downloads)

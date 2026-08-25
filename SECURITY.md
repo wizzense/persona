@@ -3,7 +3,7 @@
 ## Reporting
 
 Before the public repository exists, report security issues privately to the
-maintainer. After `xikhar/persona` is created, use GitHub private vulnerability
+maintainer. After `xikhar/desk` is created, use GitHub private vulnerability
 reporting rather than a public issue.
 
 ## Data boundary

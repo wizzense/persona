@@ -13,9 +13,23 @@ coverage/
 *.tsbuildinfo
 *.tgz
 
-# Local character media
+# Local character media (the default model ships via `git add -f` once its
+# embedded VRM 1.0 license is verified — see ASSET_LICENSES.md)
 *.vrm
 *.vrma
+
+# Local roster and runtime state (per-user, never shipped)
+characters/
+.active-character
+.recent-characters
+
+# Session junk (old trees left by parallel/previous sessions)
+.orphaned-session-work-*/
+dist.abandoned-src-build/
+__pycache__/
+scripts/__pycache__/
+scripts/stage-*-2026-*.py
+IMPLEMENTATION_SUMMARY.md
 
 # Native compiler output
 *.dSYM/

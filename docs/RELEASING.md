@@ -1,7 +1,7 @@
 # Releasing Desk
 
 GitHub releases are produced only from version tags. The expected repository is
-`https://github.com/xikhar/persona`; the workflow does not create or push to it.
+`https://github.com/xikhar/desk`; the workflow does not create or push to it.
 
 ## One-time repository setup
 
@@ -23,9 +23,13 @@ Treat signed and notarized artifacts as the production release path.
 
 ## Before tagging
 
-1. Replace every local test character file.
-2. Complete `public/assets/manifest.json` and `ASSET_LICENSES.md`.
-3. Set `distributionAllowed` to `true`.
+1. Confirm the committed default model's EMBEDDED VRM meta permits corporate
+   commercial use and redistribution (character.json sidecars are not
+   licenses) — see `ASSET_LICENSES.md`.
+2. Confirm `public/assets/manifest.json` matches the committed model and
+   `ASSET_LICENSES.md` carries the required attribution (the shipped Gyigi
+   model requires credit — it is in the tray's About Desk item).
+3. `distributionAllowed` is `true` in the manifest.
 4. Update `version` in `package.json` and `package-lock.json`.
 5. Add release notes to `CHANGELOG.md`.
 6. Run:
@@ -72,4 +76,6 @@ The release workflow:
 6. writes `SHA256SUMS.txt`; and
 7. publishes one GitHub Release with generated notes.
 
-The current test placeholders intentionally make step 1 fail.
+As of the first beta (2026-08-25) the committed default model (Gyigi, VRM 1.0)
+is verified and licensed, so step 1 of the release workflow passes. The
+animations remain per-user VRoid Hub downloads and are never shipped.

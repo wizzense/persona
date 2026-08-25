@@ -1,90 +1,88 @@
-import { useCallback, useMemo, useRef } from 'react';
+import { useCallback, useRef } from 'react';
 import { useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 
 import { POSITION_BOUND as DRAG_BOUND } from './useAvatarLayout';
+import {
+  activated as dragActivated,
+  dragTarget,
+  worldPerPixel,
+} from './avatarDragMath';
 
 /**
- * Drag an avatar across the ground (X/Z) plane by raycasting the pointer against a
- * horizontal plane at the avatar's own Y.
+ * Drag an avatar across the ground (X/Z) plane.
  *
  * Not drei's PivotControls (a gizmo with its own controlled-matrix API) -- the shared
- * OrbitControls camera already owns left-drag on empty space to rotate, so this only
- * needs to (a) grab ONE avatar on pointerdown when the pointer is actually over it, (b)
- * suspend orbit for the duration, and (c) release everything on pointerup even if the
- * pointer leaves the canvas or the avatar mid-drag. Window-level listeners guarantee
- * (c) -- a plain r3f onPointerMove bound to the mesh does not: the pointer can outrun a
- * small/fast-moving mesh and simply stop delivering events, leaving the drag "stuck on".
+ * OrbitControls camera owns rotation, so this only needs to (a) grab ONE avatar on
+ * pointerdown when the pointer is actually over it, (b) suspend orbit for the duration,
+ * and (c) release everything on pointerup even if the pointer leaves the canvas or the
+ * avatar mid-drag. Window-level listeners guarantee (c) -- a plain r3f onPointerMove
+ * bound to the mesh does not: the pointer can outrun a small/fast-moving mesh and simply
+ * stop delivering events, leaving the drag "stuck on".
  *
  * De-jank rework: `onMove` is expected to mutate the THREE object IMPERATIVELY (a ref),
  * not setState -- a setState per pointermove forces a React re-render between the
  * pointer moving and the avatar following it, which is the measured "janky as fuck"
- * stutter. Commit to persisted state ONCE, in `onEnd`. `getY` is a function (read from
- * a ref) instead of a captured number so a re-render mid-drag can never leave the drag
- * raycasting against a stale plane height.
+ * stutter. Commit to persisted state ONCE, in `onEnd`.
+ *
+ * SCREEN-SPACE rework (the fly-away fix, 2026-08-25): every earlier version moved the
+ * avatar by raycasting the pointer against the world ground plane. With the desk camera
+ * nearly horizontal, the ground ray's intersection distance is wildly nonlinear -- a
+ * fast flick swings the hit point from a few units to the horizon, so a "click too
+ * fast" teleported the avatar meters away (reported twice: the bare-click teleport, and
+ * again after the delta rework, because delta-of-ray-hit inherits the same singularity).
+ * Screen-space mapping has no singularity: convert the pointer's PIXEL delta to world
+ * units at the avatar's own depth (world-per-pixel is linear there by definition). A
+ * fast flick can only ever move the avatar as far as its pixels say -- no ray, no
+ * horizon, no fly-away -- and a sub-5px click still moves nothing at all.
  */
 export function useAvatarDrag(
-  getY: () => number,
   onMove: (x: number, z: number) => void,
   getStart: () => { x: number; z: number },
 ) {
   const { camera, gl } = useThree();
-  const raycaster = useMemo(() => new THREE.Raycaster(), []);
-  const plane = useMemo(() => new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), []);
-  const point = useMemo(() => new THREE.Vector3(), []);
-  const ndc = useMemo(() => new THREE.Vector2(), []);
   const draggingRef = useRef(false);
-
-  const raycastGround = useCallback(
-    (clientX: number, clientY: number): { x: number; z: number } | null => {
-      const rect = gl.domElement.getBoundingClientRect();
-      ndc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
-      ndc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
-      plane.constant = -getY(); // live height, never a captured one
-      raycaster.setFromCamera(ndc, camera);
-      if (!raycaster.ray.intersectPlane(plane, point)) return null;
-      return { x: point.x, z: point.z };
-    },
-    [camera, getY, gl, ndc, plane, point, raycaster],
-  );
 
   /** Call from onPointerDown with the native event's clientX/clientY. `onEnd` fires
    *  exactly once, on pointerup, wherever it happens -- re-enable orbit AND commit the
-   *  final position to persisted state there.
-   *
-   *  DELTA-BASED, never jump-to-cursor. The first version called onMove with the
-   *  pointer-down ray hit itself, which TELEPORTED the avatar on a bare CLICK: the
-   *  pointer sits on the model's chest, the ground ray lands wherever the near-
-   *  horizontal camera sends it (meters away, off the visible stage even inside the
-   *  ±BOUND clamp), and the avatar "vanishes when I just click it" — reported live
-   *  2026-08-25, third distinct leg of the disappearing-avatar saga. Now: the ray
-   *  hit at pointer-down is only the ANCHOR; movement applies (hit − anchor) to the
-   *  avatar's own start position, and nothing moves until the pointer has actually
-   *  travelled ≥5px — so a click, by construction, moves nothing at all. */
+   *  final position to persisted state there. */
   const beginDrag = useCallback(
     (clientX: number, clientY: number, onEnd: () => void) => {
       if (draggingRef.current) return;
       draggingRef.current = true;
-      const anchor = raycastGround(clientX, clientY);
       const start = getStart();
       const startClientX = clientX;
       const startClientY = clientY;
-      let activated = false;
-      const clamp = (v: number) => Math.max(-DRAG_BOUND, Math.min(DRAG_BOUND, v));
+      let isActive = false;
+
+      // World units per pixel AT THE AVATAR'S DEPTH (pure math lives in
+      // avatarDragMath.ts — the module the fly-away test hammers, so what the
+      // test pins is exactly what runs). Camera is PerspectiveCamera (fov 20
+      // in the desk scene); square pixels mean one wpp serves both axes.
+      const rect = gl.domElement.getBoundingClientRect();
+      const fov = camera instanceof THREE.PerspectiveCamera ? camera.fov : 45;
+      const depth = camera.position.distanceTo(
+        new THREE.Vector3(start.x, 1, start.z),
+      );
+      const wpp = worldPerPixel(depth, fov, Math.max(1, rect.height));
+      const frame = {
+        start,
+        startClient: { x: startClientX, y: startClientY },
+        wpp,
+        bound: DRAG_BOUND,
+      };
 
       const handleMove = (event: PointerEvent) => {
-        if (!anchor) return; // ray missed the stage at pointer-down: gesture is inert
-        if (!activated) {
+        if (!isActive) {
           const travelled = Math.hypot(
             event.clientX - startClientX,
             event.clientY - startClientY,
           );
-          if (travelled < 5) return; // click-sized wiggle: not a drag
-          activated = true;
+          if (!dragActivated(travelled)) return; // click-sized wiggle: not a drag
+          isActive = true;
         }
-        const hit = raycastGround(event.clientX, event.clientY);
-        if (!hit) return;
-        onMove(clamp(start.x + hit.x - anchor.x), clamp(start.z + hit.z - anchor.z));
+        const target = dragTarget(frame, event.clientX, event.clientY);
+        onMove(target.x, target.z);
       };
       const handleUp = () => {
         draggingRef.current = false;
@@ -95,7 +93,7 @@ export function useAvatarDrag(
       window.addEventListener('pointermove', handleMove);
       window.addEventListener('pointerup', handleUp);
     },
-    [getStart, onMove, raycastGround],
+    [camera, getStart, gl, onMove],
   );
 
   return { beginDrag, isDragging: () => draggingRef.current };

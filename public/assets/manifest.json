@@ -1,61 +1,13 @@
 {
   "schemaVersion": 1,
-  "distributionAllowed": false,
-  "notice": "Character media is intentionally not committed. Add redistributable files and complete all license metadata before publishing Desk.",
+  "distributionAllowed": true,
+  "notice": "The default character model is redistributed under the VRM 1.0 license recorded in its own embedded metadata (verified 2026-08-25 by direct glb inspection). Animations are per-user VRoid Hub downloads and are intentionally never shipped; see ASSET_LICENSES.md.",
   "assets": [
     {
       "path": "model.vrm",
       "role": "model",
-      "license": null,
-      "source": null
-    },
-    {
-      "path": "animations/idle.vrma",
-      "role": "idle",
-      "license": null,
-      "source": null
-    },
-    {
-      "path": "animations/talk1.vrma",
-      "role": "talk",
-      "license": null,
-      "source": null
-    },
-    {
-      "path": "animations/talk2.vrma",
-      "role": "talk",
-      "license": null,
-      "source": null
-    },
-    {
-      "path": "animations/talk3.vrma",
-      "role": "talk",
-      "license": null,
-      "source": null
-    },
-    {
-      "path": "animations/greeting.vrma",
-      "role": "greeting",
-      "license": null,
-      "source": null
-    },
-    {
-      "path": "animations/happy.vrma",
-      "role": "happy",
-      "license": null,
-      "source": null
-    },
-    {
-      "path": "animations/finger-gun.vrma",
-      "role": "finger-gun",
-      "license": null,
-      "source": null
-    },
-    {
-      "path": "animations/dance.vrma",
-      "role": "dance",
-      "license": null,
-      "source": null
+      "license": "VRM 1.0 embedded meta (https://vrm.dev/licenses/1.0/): commercialUsage=corporation, allowRedistribution=true, creditNotation=required",
+      "source": "VRoid Hub — 'Gyigi' v1.1 by Robotnik (contact: Discord baldy.mcnosehair)"
     }
   ]
 }

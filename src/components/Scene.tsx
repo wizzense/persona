@@ -9,6 +9,7 @@ import type { AnimationType } from '../animation-catalog';
 import { calculateFullBodyFraming } from '../camera-framing';
 import { useAvatarLayout, type AvatarTransform } from '../hooks/useAvatarLayout';
 import { useAvatarDrag } from '../hooks/useAvatarDrag';
+import { getDragMode } from '../hooks/useDragMode';
 
 const MIN_SCALE = 0.3;
 const MAX_SCALE = 3;
@@ -230,14 +231,16 @@ function PlacedAvatar({ slotId, transform, onDrag, onScale, onFocus, avatarProps
               };
             }
             if (event.button !== 0) return; // left button only -- right-click stays the context menu
-            if (event.button !== 0) return; // left button only -- right-click stays the context menu
-            // Plain left-drag must keep rotating the camera — that is the gesture
-            // everyone already has (avatar-move claimed bare left-drag once and the
-            // owner could no longer swivel; reported 2026-08-25). One button cannot
-            // serve two intents on the same pixels, so MOVE is the modified gesture:
-            // Shift+left-drag repositions the avatar; a plain drag falls through (no
-            // stopPropagation) to OrbitControls and rotates as it always did.
-            if (!event.nativeEvent.shiftKey) return;
+            // Gesture split, FINAL iteration (2026-08-25): v1 move-only, v2
+            // Shift-move and v3 Shift-rotate all failed with the owner, because
+            // one button cannot serve two intents on the same pixels and every
+            // hidden modifier is undiscoverable. The intent is now EXPLICIT,
+            // VISIBLE state: the drag-mode toggle (useDragMode; bead + panel
+            // row). Default rotate — plain drag falls through to OrbitControls
+            // and the avatar swivels exactly like every 3D surface on earth.
+            // In move mode the same plain drag repositions it. Empty space
+            // always rotates, whatever the mode.
+            if (getDragMode() !== 'move') return;
             event.stopPropagation();
             const { controls } = getThreeState();
             const orbit = controls as { enabled?: boolean } | null;

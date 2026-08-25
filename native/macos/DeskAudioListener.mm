@@ -206,7 +206,7 @@ int main(int argc, const char *argv[]) {
     NSString *tapUID = [(__bridge NSString *)tapUIDRef copy];
     CFRelease(tapUIDRef);
 
-    NSString *aggregateUID = [NSString stringWithFormat:@"com.xikhar.awdesk.%@",
+    NSString *aggregateUID = [NSString stringWithFormat:@"com.xikhar.desk.%@",
                                                         NSUUID.UUID.UUIDString];
     NSDictionary *aggregateDescription = @{
       @kAudioAggregateDeviceNameKey : @"Desk Output Meter",

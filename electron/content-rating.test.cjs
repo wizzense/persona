@@ -18,15 +18,32 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const test = require("node:test");
+const { after, test } = require("node:test");
 
-const MIRROR = path.join(os.homedir(), ".aither", "adult_content.json");
-const ROSTER = path.join(__dirname, "..", "characters");
+// A per-process mirror. node --test runs each test file in its own PARALLEL
+// child process, and pack-roster.test.cjs flips the same real mirror — the two
+// racing on ~/.aither/adult_content.json made both flaky (measured 2026-08-25,
+// different processes, so no amount of within-file ordering fixes it). The env
+// var must be set BEFORE requiring content-rating: the module resolves the
+// path once at require time.
+const MIRROR = path.join(os.tmpdir(), `desk-adult-gate-${process.pid}.json`);
+process.env.DESK_ADULT_CONTENT_MIRROR = MIRROR;
+// Fixtures also go to a per-process temp roster: pack-roster.test.cjs
+// snapshots the REAL characters/ dir from a parallel process, and a fixture
+// that lives between its two snapshots breaks the superset check (measured
+// 2026-08-25: "open roster lost a PG character: zz-gate-fixture-plain").
+const ROSTER = path.join(os.tmpdir(), `desk-roster-${process.pid}`);
+process.env.DESK_ROSTER_DIR = ROSTER;
+fs.mkdirSync(ROSTER, { recursive: true });
+after(() => {
+  fs.rmSync(MIRROR, { force: true });
+  fs.rmSync(ROSTER, { recursive: true, force: true });
+});
 
 const rating = require("./content-rating.cjs");
 const roster = require("./character-roster.cjs");
 
-/** Run `fn` with the gate forced to `visible`, then restore the real mirror. */
+/** Run `fn` with the gate forced to `visible`, then restore the mirror. */
 function withGate(visible, fn) {
   const had = fs.existsSync(MIRROR);
   const previous = had ? fs.readFileSync(MIRROR) : null;

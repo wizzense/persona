@@ -21,7 +21,13 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
-const MIRROR = path.join(os.homedir(), ".aither", "adult_content.json");
+// A per-process mirror (see content-rating.test.cjs): node --test runs test
+// files as parallel child processes, and content-rating.test.cjs flips the
+// same real mirror — the two racing made both flaky (measured 2026-08-25).
+// Set BEFORE freshRoster() re-requires the modules: content-rating resolves
+// the path once at require time.
+const MIRROR = path.join(os.tmpdir(), `desk-adult-gate-${process.pid}.json`);
+process.env.DESK_ADULT_CONTENT_MIRROR = MIRROR;
 const ADULT_RE = /cumdump|milf|r-18|dilf|ロリ/i;
 
 function freshRoster() {
@@ -40,8 +46,8 @@ function withGate(visible, fn) {
     fs.writeFileSync(MIRROR, JSON.stringify({ visible }), "utf8");
     return fn();
   } finally {
-    // Restore the REAL user mirror -- leaving it open would enable adult
-    // content on this box, which is the inverse of the gate's purpose.
+    // Restore the pre-test mirror state -- leaving it open would flip the
+    // gate on this box (or leak an open gate into a parallel test process).
     if (had) fs.writeFileSync(MIRROR, backup, "utf8");
     else if (fs.existsSync(MIRROR)) fs.unlinkSync(MIRROR);
   }
@@ -94,8 +100,12 @@ check("closed roster is not empty", () => {
 });
 
 check("mirror was restored", () => {
-  const raw = fs.readFileSync(MIRROR, "utf8");
-  assert.strictEqual(JSON.parse(raw).visible, false, "gate left OPEN after tests");
+  // Restored means the pre-test state: absent, or present-and-closed. Never
+  // open — a gate left open enables adult content on this box.
+  if (fs.existsSync(MIRROR)) {
+    const raw = fs.readFileSync(MIRROR, "utf8");
+    assert.strictEqual(JSON.parse(raw).visible, false, "gate left OPEN after tests");
+  }
 });
 
 if (failures) {

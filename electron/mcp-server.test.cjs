@@ -183,7 +183,7 @@ test("play_animation reports an ERROR when the clip does not exist", async (cont
   // is what a bare JSON-RPC POST does — our handler returns isError. What must never
   // happen is a success report for a clip that was not played.
   let refused = false;
-  let how = "reported success";
+  let how;
   try {
     const bad = await client.callTool({
       name: "play_animation",

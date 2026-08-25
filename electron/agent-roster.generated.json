@@ -1,0 +1,20 @@
+{
+  "_generated_from": "awdk/adk/harnesses/agents.py:AGENT_ROSTER + gen_persona_agent_roster.py:EXTRA_AGENTS",
+  "_generator": "AitherOS/dev/tools/gen_persona_agent_roster.py",
+  "_note": "DERIVED FILE - do not hand-edit; regenerate after editing AGENT_ROSTER",
+  "agents": [
+    "aeon",
+    "aither",
+    "athena",
+    "atlas",
+    "demiurge",
+    "hera",
+    "hydra",
+    "iris",
+    "lyra",
+    "plutus",
+    "prometheus",
+    "themis",
+    "viviane"
+  ]
+}

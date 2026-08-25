@@ -15,6 +15,20 @@ contextBridge.exposeInMainWorld("deskBridge", {
     ipcRenderer.on("desk:event", handler);
     return () => ipcRenderer.off("desk:event", handler);
   },
+  // The Desk panel (bead deck): state pull + push subscription + actions. The
+  // deck is a VIEW over main's state — every write goes back through main's own
+  // functions, so the panel can never drift from the tray.
+  deck: {
+    getState: () => ipcRenderer.invoke("desk:deck-get-state"),
+    open: () => ipcRenderer.send("desk:deck-open"),
+    close: () => ipcRenderer.send("desk:deck-close"),
+    answer: (id, choice) => ipcRenderer.invoke("desk:deck-answer", { id, choice }),
+    action: (name, arg) => ipcRenderer.invoke("desk:deck-action", name, arg),
+    // The Aitherium marketplace, one-stop-shop data layer
+    // (market-client.cjs speaks MCP to the local gateway with the session
+    // bearer; same credential story as the relay feed).
+    marketBrowse: (query) => ipcRenderer.invoke("desk:market-browse", query ?? ""),
+  },
 });
 
 // The camera controls preventDefault() on contextmenu (right-drag pans), which suppresses

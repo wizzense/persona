@@ -5,6 +5,7 @@ const { pathToFileURL } = require("node:url");
 const {
   app,
   BrowserWindow,
+  dialog,
   globalShortcut,
   ipcMain,
   Menu,
@@ -15,6 +16,12 @@ const {
   Tray,
 } = require("electron");
 const decisionCards = require("./decision-cards.cjs");
+const {
+  fetchHistory: fetchRelayHistory,
+  post: postToRelay,
+  RELAY_CHANNEL,
+} = require("./relay-feed.cjs");
+const marketClient = require("./market-client.cjs");
 const { createBridgeServer, DEFAULT_PORT } = require("./bridge-server.cjs");
 const {
   createDeskMcpHandler,
@@ -46,7 +53,12 @@ const {
   setAgentAvatar,
 } = require("./agent-avatars.cjs");
 const { exportToAitherShell } = require("./aithershell-export.cjs");
-const { buildLivingDesktopMenu, showLivingDesktop } = require("./living-desktop-window.cjs");
+const {
+  buildLivingDesktopMenu,
+  pushDeskState,
+  setDeskStateProvider,
+  showLivingDesktop,
+} = require("./living-desktop-window.cjs");
 const { openDetachedAvatar } = require("./detached-avatar-window.cjs");
 
 /** "Detach to own window" — pull one extra avatar out of the shared canvas into its own
@@ -59,14 +71,6 @@ function detachAvatarToOwnWindow(slotId) {
     onMergeBack: () => spawnAvatarSlot(nextFreeSlotId(), info.name, info.agent),
   });
   return true;
-}
-
-function buildDetachAvatarMenu() {
-  if (avatarSlots.size === 0) return [{ label: "(no extra avatars)", enabled: false }];
-  return [...avatarSlots.entries()].map(([slotId, info]) => ({
-    label: info.agent ? `${info.agent} — ${info.name}` : info.name,
-    click: () => detachAvatarToOwnWindow(slotId),
-  }));
 }
 
 // D-2170: 430x680 on a 3840x2112 4K display reads as "trapped in a tiny box" —
@@ -151,10 +155,14 @@ function buildSizeMenu() {
   ];
 }
 const startInBackground = process.argv.includes("--background");
+/** "Open the Desk panel at startup" — the owner's quick path into the panel, and a
+ *  deterministic way to verify the deck live (restart with this flag, screenshot). */
+const deckIsRequested = process.argv.includes("--open-deck");
 const protocolScheme = "desk";
 const debugEnabled = process.env.DESK_DEBUG === "1";
 
 let avatarWindow = null;
+let deckWindow = null;
 let bridge = null;
 let isQuitting = false;
 let latestEvent = null;
@@ -165,6 +173,8 @@ let tray = null;
 // Decision-card plane (see decision-cards.cjs): the open queue drives the tray
 // label/tooltip, and new arrivals raise a native notification.
 let openDecisions = [];
+let relayFeed = [];
+let relayFeedTimer = null;
 let knownDecisionIds = new Set();
 let decisionsSeenOnce = false;
 let decisionWatchStop = null;
@@ -179,7 +189,7 @@ const avatarSlots = new Map(); // Map<slotId, { name, modelUrl }> — tracks spa
 
 app.setName("Desk");
 
-// ── awdesk rename: migrate the legacy userData dir once ────────────────────────────────────────────────────────
+// ── awdesk rename: migrate the legacy userData dir once ──────────────────────
 // app.setName() decides the userData path, so renaming Persona -> Desk points
 // Electron at %APPDATA%\Desk. The old %APPDATA%\Persona holds the character
 // roster, ratings, settings and decision state. On first launch under the new
@@ -198,7 +208,6 @@ try {
   // dir is still there for the next attempt.
   console.error("[desk] userData migration failed (starting clean):", err?.message || err);
 }
-
 
 function debugLog(...values) {
   if (debugEnabled) console.error("[desk]", ...values);
@@ -282,6 +291,15 @@ function toggleOverlay() {
   else showOverlay({ focus: true });
 }
 
+/** One bundle, three modes: the default avatar scene, `?solo=<model>` detached windows,
+ *  and `?deck=1` the Desk panel (see createDeckWindow). */
+function rendererUrl() {
+  return (
+    process.env.VITE_DEV_SERVER_URL ||
+    pathToFileURL(path.join(__dirname, "..", "dist", "index.html")).href
+  );
+}
+
 function createWindow() {
   if (avatarWindow && !avatarWindow.isDestroyed()) return avatarWindow;
 
@@ -340,12 +358,10 @@ function createWindow() {
     avatarWindow = null;
   });
 
-  const rendererUrl =
-    process.env.VITE_DEV_SERVER_URL ||
-    pathToFileURL(path.join(__dirname, "..", "dist", "index.html")).href;
+  const homeUrl = rendererUrl();
   avatarWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   avatarWindow.webContents.on("will-navigate", (event, targetUrl) => {
-    if (!isAllowedRendererNavigation(targetUrl, rendererUrl)) event.preventDefault();
+    if (!isAllowedRendererNavigation(targetUrl, homeUrl)) event.preventDefault();
   });
   // Nothing previously listened for either of these. A renderer crash left the window
   // showing whatever was on screen at the moment it died (often just black/blank) with
@@ -367,58 +383,17 @@ function createWindow() {
       debugLog(`[renderer console] ${event.sourceId}:${event.lineNumber} — ${event.message}`);
     }
   });
-  // Right-click the avatar for the same menu the tray offers (characters, previews, quit).
-  // Right-DRAG still pans the camera; the menu only pops on release. The renderer's camera
-  // controls preventDefault() the contextmenu event, so the preload relays it over IPC —
-  // keep the native handler too as a fallback.
-  const popupAvatarMenu = () => {
-    debugLog("avatar context menu requested");
-    Menu.buildFromTemplate([
-      { label: "Characters", submenu: buildCharacterMenu() },
-      { label: "Window Size", submenu: buildSizeMenu() },
-      { label: "Add Avatar", submenu: buildSpawnAvatarMenu() },
-      { label: "Remove Avatar", submenu: buildRemoveAvatarMenu() },
-      { label: "Detach to own window", submenu: buildDetachAvatarMenu() },
-      { label: "Living Desktop", submenu: buildLivingDesktopMenu() },
-      {
-        label:
-          openDecisions.length > 0
-            ? `Decision cards (${openDecisions.length} waiting)`
-            : "Decision cards",
-        submenu: [
-          {
-            // The notification area the owner watches lives IN the Living
-            // Desktop (its bell reads this same queue over the bridge), so the
-            // tray links there first; the popup window stays one item away as
-            // the answering surface.
-            label: "Show in Living Desktop",
-            click: () => showLivingDesktop(),
-          },
-          { label: "Open answer window…", click: () => decisionCards.openQueueWindow() },
-        ],
-      },
-      { label: "Talk to Aither…", click: openTalkWindow },
-      { label: "Browse models…", click: openModelBrowser },
-      { type: "separator" },
-      { label: "Preview speaking", click: () => handleBridgeEvent(voiceState("speaking")) },
-      {
-        label: "Preview dance",
-        click: () => handleBridgeEvent({ type: "animation", animation: "DANCE" }),
-      },
-      { type: "separator" },
-      { label: "Hide Desk", click: () => void hideOverlay() },
-      {
-        label: "Quit",
-        click: () => {
-          isQuitting = true;
-          app.quit();
-        },
-      },
-    ]).popup({ window: avatarWindow });
-  };
-  avatarWindow.webContents.on("context-menu", popupAvatarMenu);
+  // Right-click the avatar opens the DESK PANEL (the bead deck), not a native
+  // menu — owner redesign 2026-08-25: "move away from nested menus... on right
+  // click a full ui/ux opens up". Right-DRAG still pans the camera; the menu
+  // only pops on release. The renderer's camera controls preventDefault() the
+  // contextmenu event, so the preload relays it over IPC — keep the native
+  // handler too as a fallback. All the old submenus (decisions, talk, models,
+  // living desktop, avatar slots, size) are now deck sections, one click deep
+  // instead of three.
+  avatarWindow.webContents.on("context-menu", () => createDeckWindow());
   ipcMain.removeAllListeners("desk:context-menu");
-  ipcMain.on("desk:context-menu", popupAvatarMenu);
+  ipcMain.on("desk:context-menu", () => createDeckWindow());
 
   // D-2170: middle-mouse-drag window move (preload.cjs sends these). Tracks
   // the mouse's screen position at drag start against the window's own
@@ -445,7 +420,11 @@ function createWindow() {
   ipcMain.on("desk:drag-end", () => {
     dragOrigin = null;
   });
-  void avatarWindow.loadURL(rendererUrl);
+  // NOTE: rendererUrl is a FUNCTION — call it. Passing the function itself to
+  // loadURL throws "Error processing argument at index 0, conversion failure"
+  // (a rename collision, caught 2026-08-25), which aborts the whenReady chain:
+  // blank avatar, never shown, deck never created.
+  void avatarWindow.loadURL(rendererUrl());
   return avatarWindow;
 }
 
@@ -468,7 +447,25 @@ function ensureRendererLoadHook() {
     return;
   }
   rendererLoadHookAttached = true;
-  avatarWindow.webContents.once("did-finish-load", flushPendingRendererEvents);
+  avatarWindow.webContents.once("did-finish-load", () => {
+    flushPendingRendererEvents();
+    // Re-apply the toggleable window boundary if it was left on (the overlay
+    // div dies with every page load; the flag in localStorage survives it).
+    void avatarWindow.webContents.executeJavaScript(
+      "(() => {"
+      + "if (localStorage.getItem('desk.window-outline') === '1'"
+      + " && !document.getElementById('desk-window-outline')) {"
+      + "const d = document.createElement('div');"
+      + "d.id = 'desk-window-outline';"
+      + "d.style.cssText = 'position:fixed;inset:0;border:2px dashed"
+      + " rgba(120,160,255,.5);pointer-events:none;z-index:9999;"
+      + "background:rgba(120,160,255,.06);box-sizing:border-box;"
+      + "border-radius:10px;';"
+      + "document.body.appendChild(d);"
+      + "}"
+      + "true;"
+      + "})();").catch(() => {});
+  });
 }
 
 function emitToRenderer(event) {
@@ -604,8 +601,6 @@ function openMediaForge() {
   probe.setTimeout(1500, () => probe.destroy());
 }
 
-
-
 /** Open AitherShell — the platform's real chat client. It already drives this avatar
  *  (speaking state + emotion animations via its desk-bridge), so talking to Aither
  *  there IS talking to the character on screen. Deliberately NOT a second chat UI. */
@@ -680,6 +675,7 @@ function spawnAvatarSlot(slotId, name, agent) {
       modelUrl,
     });
   }
+  sendDeckState();
   return true;
 }
 
@@ -698,6 +694,7 @@ function removeAvatarSlot(slotId) {
       slotId,
     });
   }
+  sendDeckState();
   return true;
 }
 
@@ -746,7 +743,6 @@ ipcMain.on("desk:avatar-context-menu", (_event, slotId) => {
   popupAvatarMenu(String(slotId || ""));
 });
 
-
 /** First "slotN" not already in avatarSlots — spawn_avatar/remove_avatar were MCP-only
  *  (an agent had to name a slot id itself); the menu needs to pick one for the owner. */
 function nextFreeSlotId() {
@@ -781,44 +777,6 @@ function fallbackCharacterForAgent(agent, roster) {
  *  ASSIGNED character (Characters ▸ Agents ▸ Assign current) when one exists, or a
  *  deterministic fallback so an unassigned agent is still spawnable rather than a dead
  *  menu entry — assign one later and future spawns of that agent pick it up. */
-function buildSpawnAvatarMenu() {
-  const roster = listCharacters();
-  const agents = listAgents();
-  const item = (agent) => {
-    const assigned = getAgentAvatar(agent);
-    const character = assigned || fallbackCharacterForAgent(agent, roster);
-    return {
-      label: assigned ? agent : `${agent}  (unassigned → ${character || "none"})`,
-      enabled: Boolean(character),
-      click: () => character && spawnAvatarSlot(nextFreeSlotId(), character, agent),
-    };
-  };
-  const CHUNK = 14;
-  const groups = [];
-  for (let start = 0; start < agents.length; start += CHUNK) {
-    const slice = agents.slice(start, start + CHUNK);
-    const first = slice[0];
-    const last = slice[slice.length - 1];
-    groups.push({
-      label: slice.length > 1 ? `${first} … ${last}` : first,
-      submenu: slice.map(item),
-    });
-  }
-  return groups.length ? groups : [{ label: "(no agents found)", enabled: false }];
-}
-
-/** "Remove Avatar" — one entry per currently-spawned extra slot (never slot0/default,
- *  which this whole mechanism structurally cannot name — see spawnAvatarSlot/removeAvatarSlot).
- *  Shows the agent name when the slot was spawned from Add Avatar's agent list, since that
- *  is what the owner picked and remembers, not the underlying VRM filename. */
-function buildRemoveAvatarMenu() {
-  if (avatarSlots.size === 0) return [{ label: "(no extra avatars)", enabled: false }];
-  return [...avatarSlots.entries()].map(([slotId, info]) => ({
-    label: info.agent ? `${info.agent} — ${info.name}  (${slotId})` : `${info.name}  (${slotId})`,
-    click: () => removeAvatarSlot(slotId),
-  }));
-}
-
 /** Recents on top for one-click switching, then every VISIBLE character in
  *  alphabetical groups — a flat list of 70+ filled the whole screen, so the roster
  *  lives in chunked sub-submenus instead.
@@ -956,43 +914,52 @@ function fsMkdirSafe(dir) {
 function refreshTrayMenu() {
   invalidateGate();
   enforceActiveCharacterRating();
+  // SLIMMED 2026-08-25 (owner redesign: "move away from nested menus"). The
+  // deck panel (right-click the avatar, or "Open the Desk panel") carries the
+  // decision cards, models, talk, living desktop, avatar slots and size
+  // controls — each is now ONE click from the deck instead of a three-deep
+  // submenu. Characters stays as the single deliberate exception: a 70+
+  // character roster needs a picker with more than a row of chips, and that
+  // picker moves into the deck next.
   tray?.setContextMenu(
     Menu.buildFromTemplate([
       { label: "Show Desk", click: () => showOverlay({ focus: true }) },
       { label: "Hide Desk", click: () => void hideOverlay() },
       { type: "separator" },
-      { label: "Characters", submenu: buildCharacterMenu() },
-      { label: "Window Size", submenu: buildSizeMenu() },
-      { label: "Add Avatar", submenu: buildSpawnAvatarMenu() },
-      { label: "Remove Avatar", submenu: buildRemoveAvatarMenu() },
-      { label: "Detach to own window", submenu: buildDetachAvatarMenu() },
-      { label: "Living Desktop", submenu: buildLivingDesktopMenu() },
       {
-        label:
-          openDecisions.length > 0
-            ? `Decision cards (${openDecisions.length} waiting)`
-            : "Decision cards",
-        submenu: [
-          {
-            // The notification area the owner watches lives IN the Living
-            // Desktop (its bell reads this same queue over the bridge), so the
-            // tray links there first; the popup window stays one item away as
-            // the answering surface.
-            label: "Show in Living Desktop",
-            click: () => showLivingDesktop(),
-          },
-          { label: "Open answer window…", click: () => decisionCards.openQueueWindow() },
-        ],
+        label: openDecisions.length > 0
+          ? `Desk panel — ${openDecisions.length} decision${openDecisions.length === 1 ? "" : "s"} waiting`
+          : "Open the Desk panel",
+        click: () => createDeckWindow(),
       },
       { label: "Talk to Aither…", click: openTalkWindow },
       { label: "Browse models…", click: openModelBrowser },
       { label: "Media Forge", click: openMediaForge },
+      { label: "Living Desktop", submenu: buildLivingDesktopMenu() },
       { type: "separator" },
-      { label: "Preview listening", click: () => handleBridgeEvent(voiceState("listening")) },
-      { label: "Preview speaking", click: () => handleBridgeEvent(voiceState("speaking")) },
+      { label: "Characters", submenu: buildCharacterMenu() },
+      { label: "Window Size", submenu: buildSizeMenu() },
+      { type: "separator" },
       {
-        label: "Preview dance",
-        click: () => handleBridgeEvent({ type: "animation", animation: "DANCE" }),
+        label: "About Desk",
+        click: () => {
+          // The default character's VRM 1.0 license has creditNotation:
+          // required, so the attribution lives in the product itself, not
+          // just ASSET_LICENSES.md (verified from the file's embedded meta,
+          // 2026-08-25).
+          dialog.showMessageBox({
+            type: "info",
+            title: "About Desk",
+            message: `Desk ${app.getVersion()}`,
+            detail: [
+              "The AitherOS desktop hub — avatar presence, decision cards, model & agent browsing, relay.",
+              "",
+              'Default character model: "Gyigi" v1.1 by Robotnik (VRoid Hub).',
+              "VRM 1.0 license — corporate commercial use permitted, redistribution allowed, credit required.",
+              "Full asset licenses: ASSET_LICENSES.md.",
+            ].join("\n"),
+          });
+        },
       },
       { type: "separator" },
       {
@@ -1006,11 +973,148 @@ function refreshTrayMenu() {
   );
 }
 
+/** Everything the deck panel renders, in one object — the panel is a VIEW over
+ *  main's state, so the tray and the deck can never disagree about what is
+ *  waiting or which avatars exist (the one-source-of-truth class). */
+function deckState() {
+  return {
+    decisions: openDecisions,
+    openCount: openDecisions.length,
+    deskVisible: Boolean(
+      avatarWindow && !avatarWindow.isDestroyed() && avatarWindow.isVisible(),
+    ),
+    slots: [...avatarSlots.entries()].map(([slotId, info]) => ({
+      slotId,
+      name: info.name,
+      agent: info.agent || "",
+    })),
+    agents: listAgents(),
+    // The fleet-at-a-glance data the owner asked for (2026-08-25): roster
+    // agents WITH their assigned avatars, and the installed character roster
+    // count — one stop for fleet/roster/avatars/settings, not a launch button.
+    characters: listCharacters(),
+    activeCharacter: getActiveCharacter() || "",
+    agentCharacters: Object.fromEntries(
+      listAgents().map((agent) => [agent, getAgentAvatar(agent) || ""]),
+    ),
+    // The relay channel the sessions coordinate on — the desk is the cockpit,
+    // and a cockpit that cannot see #agents is a window onto half the fleet
+    // (owner: "why would awask + awdesk not be integrated into awrelay").
+    relay: relayFeed,
+    relayChannel: RELAY_CHANNEL,
+  };
+}
+
+/** Push fresh state to the deck panel (slot changes, decision arrivals). */
+function sendDeckState() {
+  if (!deckWindow || deckWindow.isDestroyed()) return;
+  deckWindow.webContents.send("desk:event", { type: "deck-state", ...deckState() });
+}
+
+// Feed the Living Desktop overlay the same snapshot the deck panel consumes, so the
+// shell can render decision cards / slots / agents — the Veil side listens for
+// { __aither: 'desk-state' } postMessages (relayed by living-desktop-preload.cjs).
+// Polled lightly: deckState() is cheap and the overlay is a separate renderer, so
+// nothing here can lag the avatar window.
+setDeskStateProvider(() => deckState());
+setInterval(() => {
+  pushDeskState();
+}, 5000);
+
+/** Poll #agents for the deck's relay section. [] on refusal — the section
+ *  renders "relay unavailable" rather than pretending the channel is empty. */
+async function refreshRelayFeed() {
+  const rows = await fetchRelayHistory();
+  relayFeed = rows;
+  sendDeckState();
+}
+
+/** Push the open-count badge to the avatar window's floating beads. */
+function sendDecisionBadge() {
+  if (!avatarWindow || avatarWindow.isDestroyed()) return;
+  avatarWindow.webContents.send("desk:event", {
+    type: "decisions-changed",
+    openCount: openDecisions.length,
+  });
+}
+
+/** The Desk panel — a frameless always-on-top window that opens beside the avatar
+ *  on right-click. Same bundle as the avatar scene (`?deck=1`), same preload, so
+ *  it shares the bridge and every future awdesk rename moves it along for free. */
+function createDeckWindow() {
+  if (deckWindow && !deckWindow.isDestroyed()) {
+    deckWindow.show();
+    deckWindow.focus();
+    return deckWindow;
+  }
+  const workArea = screen.getPrimaryDisplay().workArea;
+  const base =
+    avatarWindow && !avatarWindow.isDestroyed() ? avatarWindow.getBounds() : null;
+  const width = 460;
+  const height = 700;
+  let x = base ? base.x + base.width + 10 : workArea.x + workArea.width - width - 40;
+  let y = base ? base.y : workArea.y + 80;
+  // If the avatar sits against the right edge, open to its LEFT instead of off-screen.
+  if (x + width > workArea.x + workArea.width) {
+    x = Math.max(workArea.x + 8, base ? base.x - width - 10 : x);
+  }
+  y = Math.max(workArea.y + 8, Math.min(y, workArea.y + workArea.height - height - 8));
+
+  deckWindow = new BrowserWindow({
+    x,
+    y,
+    width,
+    height,
+    minWidth: 360,
+    minHeight: 480,
+    show: false,
+    frame: false,
+    transparent: true,
+    backgroundColor: "#00000000",
+    hasShadow: true,
+    autoHideMenuBar: true,
+    alwaysOnTop: true,
+    // In the taskbar on purpose: an always-on-top frameless panel the owner
+    // cannot find again once it loses focus is a trap, not a feature.
+    skipTaskbar: false,
+    title: "Desk",
+    webPreferences: {
+      preload: path.join(__dirname, "preload.cjs"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  deckWindow.setAlwaysOnTop(true, "floating");
+  deckWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  const deckUrl = rendererUrl() + (rendererUrl().includes("?") ? "&" : "?") + "deck=1";
+  deckWindow.webContents.on("will-navigate", (event, targetUrl) => {
+    if (!isAllowedRendererNavigation(targetUrl, deckUrl)) event.preventDefault();
+  });
+  deckWindow.webContents.on("console-message", (event) => {
+    if (event.level >= 2) {
+      debugLog(`[deck console] ${event.sourceId}:${event.lineNumber} — ${event.message}`);
+    }
+  });
+  deckWindow.webContents.on("render-process-gone", (_event, details) => {
+    debugLog("DECK RENDERER PROCESS GONE", details.reason, details.exitCode);
+  });
+  deckWindow.once("ready-to-show", () => {
+    deckWindow.show();
+    deckWindow.focus();
+  });
+  deckWindow.on("closed", () => {
+    deckWindow = null;
+  });
+  void deckWindow.loadURL(deckUrl);
+  return deckWindow;
+}
+
 function createTray() {
   const iconPath = path.join(__dirname, "..", "build", "icon.png");
   const icon = nativeImage.createFromPath(iconPath).resize({ width: 20, height: 20 });
   tray = new Tray(icon);
-  tray.setToolTip("Desk");
+  tray.setToolTip("Desk — click to show/hide the avatar; right-click for decisions, avatars and surfaces");
   refreshTrayMenu();
   tray.on("click", toggleOverlay);
 }
@@ -1021,6 +1125,10 @@ if (!app.requestSingleInstanceLock()) {
   app.on("second-instance", (_event, argv) => {
     const handled = argv.some((value) => value.startsWith(`${protocolScheme}://`));
     handleProtocolArgv(argv);
+    if (argv.includes("--open-deck")) {
+      createDeckWindow();
+      return;
+    }
     if (!handled && !argv.includes("--background")) showOverlay({ focus: true });
   });
 
@@ -1032,10 +1140,11 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(async () => {
     // Unpackaged runs (npx electron .) have no Start Menu shortcut registering
     // the AUMID, so Windows shows the RAW id as every toast's header — the
-    // owner's decision-card notification read "com.xikhar.awdesk" instead of
+    // owner's decision-card notification read "com.xikhar.persona" instead of
     // the app's name (screenshot, 2026-08-25). Dev uses the display name;
-    // packaged installs keep the registered id so their toast grouping and
-    // notification settings survive.
+    // packaged installs carry the awdesk id. Changing the AUMID resets toast
+    // grouping and per-app notification settings once — the deliberate cost
+    // of the rename, not a regression to chase.
     app.setAppUserModelId(app.isPackaged ? "com.xikhar.awdesk" : "Desk");
     app.dock?.hide();
     if (app.isPackaged) app.setAsDefaultProtocolClient(protocolScheme);
@@ -1063,6 +1172,158 @@ if (!app.requestSingleInstanceLock()) {
       return latestEvent;
     });
     ipcMain.on("desk:hide", () => void hideOverlay());
+
+    // ---- Desk panel IPC (the bead deck) -------------------------------------
+    // The deck is a VIEW over main's state: it pulls deckState() once on mount,
+    // subscribes to desk:event pushes for updates, and routes every action
+    // back through the same functions the old menus used — no second path to
+    // drift from.
+    ipcMain.handle("desk:deck-get-state", () => deckState());
+    ipcMain.on("desk:deck-open", () => createDeckWindow());
+    ipcMain.on("desk:deck-close", () => {
+      if (deckWindow && !deckWindow.isDestroyed()) deckWindow.close();
+    });
+    ipcMain.handle("desk:deck-answer", (_event, payload) => {
+      const { id, choice } = payload || {};
+      const ok = decisionCards.answerCard(id, choice);
+      if (ok) {
+        // The loop closes only if the SESSIONS see the answer: post it to the
+        // coordination channel the fleet already reads. Best-effort — a quiet
+        // relay must never make the answer look undone.
+        void postToRelay(RELAY_CHANNEL, `answered ${id}: ${choice} (via desk)`).then(() => {
+          void refreshRelayFeed();
+        });
+      }
+      return ok;
+    });
+    // One-stop-shop data: the Aitherium marketplace via market-client.cjs
+    // (MCP to the local gateway, session bearer — same story as relay).
+    ipcMain.handle("desk:market-browse", (_event, query) =>
+      marketClient.browse(typeof query === "string" ? query : "", "", 24));
+    ipcMain.handle("desk:deck-action", (_event, name, arg) => {
+      switch (name) {
+        case "models":
+          openModelBrowser();
+          return true;
+        case "marketplace":
+          // The aitherium agent-pack + avatar marketplace. Portal is the
+          // platform surface; the deep marketplace route gets pinned when the
+          // Living-Desktop app phase lands.
+          void shell.openExternal("https://portal.aitherium.com");
+          return true;
+        case "switch-character": {
+          // One-stop-shop switching: same path set_character over MCP uses,
+          // so the panel, the tray, the MCP and the model browser can never
+          // disagree about who is active. Pushes fresh state so the panel's
+          // active badge moves in the same breath.
+          if (typeof arg !== "string" || arg.length === 0) return false;
+          const ok = applyCharacter(arg);
+          if (ok) sendDeckState();
+          return ok;
+        }
+        case "market-open": {
+          // Open one marketplace listing (aither:// or https://) externally.
+          if (typeof arg !== "string" || arg.length === 0) return false;
+          if (!/^(aither|https?):\/\//.test(arg)) return false;
+          void shell.openExternal(arg);
+          return true;
+        }
+        case "talk":
+          openTalkWindow();
+          return true;
+        case "popup":
+          decisionCards.openQueueWindow();
+          return true;
+        case "popout-card": {
+          if (typeof arg !== "string" || arg.length === 0) return false;
+          return decisionCards.openCardWindow(arg);
+        }
+        case "living-desktop":
+          showLivingDesktop();
+          return true;
+        case "toggle-desk":
+          toggleOverlay();
+          return true;
+        case "hide-desk":
+          void hideOverlay();
+          return true;
+        case "grow":
+          growWindow();
+          return true;
+        case "shrink":
+          shrinkWindow();
+          return true;
+        case "toggle-window-outline": {
+          // Toggleable "invisible glass" boundary: a dashed edge + faint tint
+          // so the avatar window's borders are visible while arranging it
+          // (owner 2026-08-25: had to expand the window and move the avatar
+          // left with no way to see the boundaries). Persisted per-window;
+          // restored on every renderer load by ensureRendererLoadHook.
+          if (avatarWindow && !avatarWindow.isDestroyed()) {
+            void avatarWindow.webContents.executeJavaScript(
+              "(() => {"
+              + "const KEY = 'desk.window-outline';"
+              + "const on = localStorage.getItem(KEY) !== '1';"
+              + "localStorage.setItem(KEY, on ? '1' : '0');"
+              + "document.getElementById('desk-window-outline')?.remove();"
+              + "if (on) {"
+              + "const d = document.createElement('div');"
+              + "d.id = 'desk-window-outline';"
+              + "d.style.cssText = 'position:fixed;inset:0;border:2px dashed"
+              + " rgba(120,160,255,.5);pointer-events:none;z-index:9999;"
+              + "background:rgba(120,160,255,.06);box-sizing:border-box;"
+              + "border-radius:10px;';"
+              + "document.body.appendChild(d);"
+              + "}"
+              + "return on;"
+              + "})();")
+              .catch(() => {});
+          }
+          return true;
+        }
+        case "reset-layout":
+          // "Reset" the desk: drop the persisted per-slot transforms (every
+          // invisible-avatar artifact of 2026-08-25 lived in that key) and
+          // reload the avatar window, which re-frames with the default
+          // placement. The deck window stays open. Requested live by the
+          // owner after the D:\desk move window knocked the avatars off
+          // screen: "need like a reset button".
+          if (avatarWindow && !avatarWindow.isDestroyed()) {
+            void avatarWindow.webContents
+              .executeJavaScript(
+                "localStorage.removeItem('desk.avatar-layout.v1'); true;")
+              .finally(() => avatarWindow.reloadIgnoringCache());
+          }
+          return true;
+        case "quit":
+          isQuitting = true;
+          app.quit();
+          return true;
+        case "relay-post": {
+          if (typeof arg !== "string" || arg.length === 0) return false;
+          void postToRelay(RELAY_CHANNEL, arg).then(() => void refreshRelayFeed());
+          return true;
+        }
+        case "spawn-agent": {
+          if (typeof arg !== "string" || arg.length === 0) return false;
+          const roster = listCharacters();
+          const assigned = getAgentAvatar(arg);
+          const character = assigned || fallbackCharacterForAgent(arg, roster);
+          if (!character) return false;
+          return spawnAvatarSlot(nextFreeSlotId(), character, arg);
+        }
+        case "remove-slot": {
+          if (typeof arg !== "string" || arg.length === 0) return false;
+          return removeAvatarSlot(arg);
+        }
+        case "detach-slot": {
+          if (typeof arg !== "string" || arg.length === 0) return false;
+          return detachAvatarToOwnWindow(arg);
+        }
+        default:
+          return false;
+      }
+    });
 
     const mcpHandler = createDeskMcpHandler({
       onAnimation: (animation) => {
@@ -1134,6 +1395,12 @@ if (!app.requestSingleInstanceLock()) {
     // and a genuinely new card raises a native notification whose click opens
     // the shared queue window. The first observation is summarised as ONE
     // notification, never a burst — a backlog is a fact, not an alarm per row.
+    // Relay feed for the deck: first pull immediately, then every 60s. A
+    // cockpit feed lags the channel by design — it is a summary, not a client.
+    void refreshRelayFeed();
+    relayFeedTimer = setInterval(() => void refreshRelayFeed(), 60_000);
+    relayFeedTimer.unref?.();
+
     decisionWatchStop = decisionCards.watch({
       onChange: (cards) => {
         const previouslyKnown = knownDecisionIds;
@@ -1145,6 +1412,8 @@ if (!app.requestSingleInstanceLock()) {
             ? `Desk — ${cards.length} decision${cards.length === 1 ? "" : "s"} waiting`
             : "Desk",
         );
+        sendDeckState();
+        sendDecisionBadge();
         if (!Notification.isSupported()) return;
         if (!decisionsSeenOnce) {
           decisionsSeenOnce = true;
@@ -1225,6 +1494,7 @@ ${where}` : ""),
       createWindow();
       showOverlay({ focus: true });
     }
+    if (deckIsRequested) createDeckWindow();
   });
 }
 
@@ -1233,6 +1503,7 @@ app.on("activate", () => showOverlay({ focus: true }));
 app.on("before-quit", () => {
   isQuitting = true;
   clearTimeout(hyprlandConfigurationTimer);
+  if (relayFeedTimer) clearInterval(relayFeedTimer);
   decisionWatchStop?.();
   audioListener?.stop();
   globalShortcut.unregisterAll();

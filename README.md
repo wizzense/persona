@@ -113,30 +113,26 @@ self-test suite on Linux, Windows, and macOS. Prerelease tags shaped like
 `v0.1.0-beta.0` create native packages and a checksum file, but only after the
 asset release gate passes. See [Releasing](docs/RELEASING.md).
 
-## Replace the character assets before publishing
+## Character assets
 
-Character media is intentionally excluded from Git. Local test files must not
-be distributed. Desk's stable replacement slots are:
+Desk ships exactly one redistributed asset: `public/assets/model.vrm`, the
+default character — "Gyigi" v1.1 by Robotnik, redistributed under the VRM 1.0
+license in its own embedded metadata (corporate commercial use permitted,
+redistribution allowed, **credit required** — the attribution lives in the
+tray's About Desk item and in [ASSET_LICENSES.md](ASSET_LICENSES.md)).
 
-```text
-assets/
-├── model.vrm
-├── manifest.json
-└── animations/
-    ├── idle.vrma
-    ├── talk1.vrma
-    ├── talk2.vrma
-    ├── talk3.vrma
-    ├── greeting.vrma
-    ├── happy.vrma
-    ├── finger-gun.vrma
-    └── dance.vrma
-```
+Everything else under `assets/` is per-user runtime media, never shipped:
 
-Replace files in place, then complete every license and source field in
-`manifest.json` and set `distributionAllowed` to `true`. Remove the VRM and
-VRMA ignore rules only when those exact files are safe to publish. The release
-workflow will fail closed until then. Read [Asset licenses](ASSET_LICENSES.md).
+- `animations/*.vrma` — VRoid Hub personality motions. They are downloaded
+  through the user's own VRoid Hub license when a character is enrolled, so a
+  fresh install has none; the avatar stays in its idle pose until then, and
+  enrolling any roster character fills the slots.
+- `model-slot<N>.vrm` — per-slot copies for spawned extra avatars.
+
+The stable asset contract (`scripts/check-assets.cjs`) requires exactly the
+licensed model, complete manifest metadata, and `distributionAllowed: true`
+before any release tag. See [Releasing](docs/RELEASING.md) and
+[Asset licenses](ASSET_LICENSES.md).
 
 ## Development
 

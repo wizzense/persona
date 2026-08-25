@@ -6,27 +6,29 @@ const path = require("node:path");
 const PROJECT_ROOT = path.join(__dirname, "..");
 const ASSET_ROOT = path.join(PROJECT_ROOT, "public", "assets");
 const MANIFEST_PATH = path.join(ASSET_ROOT, "manifest.json");
-const EXPECTED_ASSETS = [
-  "model.vrm",
-  "animations/idle.vrma",
-  "animations/talk1.vrma",
-  "animations/talk2.vrma",
-  "animations/talk3.vrma",
-  "animations/greeting.vrma",
-  "animations/happy.vrma",
-  "animations/finger-gun.vrma",
-  "animations/dance.vrma",
-];
+
+/**
+ * The stable asset contract is the ONE file Desk redistributes and licenses
+ * in its installer: the default character model. Everything else under
+ * assets/ is per-user runtime media, never shipped:
+ *
+ *   - animations/*.vrma — VRoid Hub "personality motions", downloaded through
+ *     the user's own Hub license at character-enroll time (vroid-sync.py).
+ *     Their redistribution terms are NOT ours to grant, so they are never
+ *     committed and the packaged app ships without them; the animation
+ *     loader tolerates their absence (useVrmAnimation.play catches and
+ *     completes the once-callback).
+ *   - model-slot<N>.vrm — per-slot runtime copies written by
+ *     installCharacterToSlot() for spawned avatar slots.
+ *
+ * So validation is PRESENCE of the required asset (all-or-nothing in dev,
+ * mandatory in release), never an equality against the whole directory —
+ * the old equality check counted two stale slot models as undeclared assets
+ * and broke `npm test` (measured 2026-08-25).
+ */
+const EXPECTED_ASSETS = ["model.vrm"];
 const EXPECTED_ASSET_ROLES = {
   "model.vrm": "model",
-  "animations/idle.vrma": "idle",
-  "animations/talk1.vrma": "talk",
-  "animations/talk2.vrma": "talk",
-  "animations/talk3.vrma": "talk",
-  "animations/greeting.vrma": "greeting",
-  "animations/happy.vrma": "happy",
-  "animations/finger-gun.vrma": "finger-gun",
-  "animations/dance.vrma": "dance",
 };
 
 function listRuntimeAssets(directory = ASSET_ROOT, prefix = "") {
@@ -57,8 +59,6 @@ function validateAssets({
 
   const manifestPaths = (manifest.assets ?? []).map((asset) => asset.path).sort();
   const expected = [...EXPECTED_ASSETS].sort();
-  const actual = listRuntimeAssets(assetRoot);
-  const mediaAbsent = actual.length === 0;
   if (JSON.stringify(manifestPaths) !== JSON.stringify(expected)) {
     errors.push("Asset manifest paths do not match Desk's stable asset contract.");
   }
@@ -67,11 +67,14 @@ function validateAssets({
       errors.push(`Incorrect asset role for ${asset.path ?? "unknown asset"}.`);
     }
   }
-  if ((!mediaAbsent || release) && JSON.stringify(actual) !== JSON.stringify(expected)) {
-    errors.push("Runtime asset files do not match Desk's stable asset contract.");
-  }
 
-  if (!mediaAbsent || release) {
+  // Dev accepts EITHER no media at all (a fresh checkout — the user enrolls a
+  // character at runtime) OR every required asset present AND non-empty. A
+  // present-but-empty file is media and must not pass.
+  const anyMedia = EXPECTED_ASSETS.some((relative) =>
+    fs.existsSync(path.join(assetRoot, relative)),
+  );
+  if (anyMedia || release) {
     for (const relative of EXPECTED_ASSETS) {
       const absolute = path.join(assetRoot, relative);
       if (!fs.existsSync(absolute) || fs.statSync(absolute).size === 0) {
@@ -83,7 +86,7 @@ function validateAssets({
   if (release) {
     if (manifest.distributionAllowed !== true) {
       errors.push(
-        "Asset distribution is disabled. Replace the test-only files and set distributionAllowed to true.",
+        "Asset distribution is disabled. Complete the license metadata and set distributionAllowed to true.",
       );
     }
     for (const asset of manifest.assets ?? []) {

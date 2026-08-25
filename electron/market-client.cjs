@@ -111,7 +111,12 @@ async function browse(query = "", type = "", limit = 24) {
       name: "agent_marketplace_browse",
       // sort enum is popular|rating|newest|name|revenue — "recent" is a
       // validation error that silently reads as zero listings.
-      arguments: { query, sort: "newest", limit },
+      arguments: {
+        query,
+        sort: "newest",
+        limit,
+        ...(type ? { type } : {}),
+      },
     });
     const content = res?.result?.content;
     if (!content) throw new Error("no content in tools/call result");

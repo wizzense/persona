@@ -36,8 +36,8 @@ electron/**
 .github/workflows/**
 
 # Character directories - general-rated only (explicit list)
-# Explicitly EXCLUDES: cumdump-cellica, lucario-milf, r-18-variant,
-# semi-creepy-dilf, ロリーナr-18, モブ子a-size-a-und-w-r-15-ver-1-1, pc-001-004
+# Adult-rated characters (r15/r18) have been moved to the content pack
+# (~/.aither/packs/persona-adult-pack-v1/) and are not present in dev tree
 characters/aiko-droid-base-model/**
 characters/asuka-yujitomoto/**
 characters/avatarsample_o/**

@@ -19,7 +19,12 @@ const path = require("node:path");
 // character unreachable EVEN WITH THE GATE OPEN, which turns the gate into
 // a deletion: it passes every denial test while the feature is simply gone.
 const PACKS_ROOT = path.join(os.homedir(), ".aither", "content-packs");
-const ADULT_GATE = path.join(os.homedir(), ".aither", "adult_content.json");
+// Same test seam as content-rating.cjs: the env var points both gate readers
+// at one per-process temp file, because node --test runs test files as
+// parallel child processes that would otherwise race on the real mirror.
+const ADULT_GATE =
+  process.env.DESK_ADULT_CONTENT_MIRROR ||
+  path.join(os.homedir(), ".aither", "adult_content.json");
 
 let packCache = null;
 let gateCacheAt = 0;
@@ -36,7 +41,7 @@ function readAdultGate() {
     return packCache.gateValue || false;
   }
 
-  let visible = false;
+  let visible;
   try {
     visible = JSON.parse(fs.readFileSync(ADULT_GATE, "utf8")).visible === true;
   } catch {

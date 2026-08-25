@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Scene } from './components/Scene';
+import { Deck } from './components/Deck';
+import { Beads } from './components/Beads';
 import type { AnimationType } from './animation-catalog';
 import {
   finishBodyAnimationOverride,
   resolveBodyAnimation,
   type BodyAnimationOverride,
-  type AnimationValue,
 } from './animation-priority';
 
 const INITIAL_STATE: VoiceState = {
@@ -27,7 +28,26 @@ function getSoloModelUrl(): string | null {
 }
 
 export function App() {
-  const soloModelUrl = useRef(getSoloModelUrl()).current;
+  // `?deck=1` loads the Desk panel instead of the avatar scene — the "full
+  // UI/UX" that opens on right-click (owner redesign 2026-08-25). Same bundle,
+  // same bridge, so the panel is a second window over the SAME app, never a
+  // second app.
+  //
+  // App is a pure router: it reads the URL ONCE (lazy state, not a ref read
+  // during render) and renders exactly one subtree. The scene hooks below
+  // used to live here after a conditional early-return, which violates the
+  // rules of hooks — a window that ever flipped modes would have corrupted
+  // hook state (measured lint class, 2026-08-25).
+  const [isDeck] = useState(
+    () => new URLSearchParams(window.location.search).get('deck') === '1',
+  );
+  if (isDeck) return <Deck />;
+  return <AvatarSceneApp />;
+}
+
+/** The avatar window: the scene, the beads, and the voice/animation state. */
+function AvatarSceneApp() {
+  const [soloModelUrl] = useState(getSoloModelUrl);
   const [voice, setVoice] = useState<VoiceState>(INITIAL_STATE);
   const [audioLevel, setAudioLevel] = useState(0);
   const [voiceAnimation, setVoiceAnimation] = useState<AnimationType>('IDLE');
@@ -152,6 +172,10 @@ export function App() {
         extraSlots={extraSlots}
         modelUrl={soloModelUrl ?? undefined}
       />
+      {/* Floating beads — the notification badge + quick actions that live ON
+          the avatar box. Not in solo mode: a detached single-character window
+          is a view of one avatar, not the desk. */}
+      {soloModelUrl ? null : <Beads />}
     </main>
   );
 }

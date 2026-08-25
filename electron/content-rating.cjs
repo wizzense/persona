@@ -29,8 +29,22 @@ const os = require("node:os");
 const path = require("node:path");
 
 const ROOT = path.join(__dirname, "..");
-const ROSTER_DIR = path.join(ROOT, "characters");
-const MIRROR = path.join(os.homedir(), ".aither", "adult_content.json");
+// Same test seam as character-roster.cjs: the env var points both rating and
+// roster at a per-process temp dir so parallel test processes never collide
+// on the real characters/ tree (see character-roster.cjs for the measured
+// incident). Production never sets the var.
+const ROSTER_DIR =
+  process.env.DESK_ROSTER_DIR || path.join(ROOT, "characters");
+/**
+ * The gate mirror. Tests point this at a per-process temp file via the env
+ * var, because node --test runs test files as PARALLEL child processes and
+ * two of them (content-rating, pack-roster) each wrote the real mirror —
+ * measured 2026-08-25: they raced and both flaked, in different processes.
+ * Production never sets the var, so the real path is unchanged.
+ */
+const MIRROR =
+  process.env.DESK_ADULT_CONTENT_MIRROR ||
+  path.join(os.homedir(), ".aither", "adult_content.json");
 const RATING_FILE = "character.json";
 
 /** Ratings that are hidden while the gate is closed. */
@@ -43,7 +57,7 @@ const GATE_CACHE_MS = 5000;
 function isAdultContentVisible() {
   const now = Date.now();
   if (gateCache && now - gateCache.at < GATE_CACHE_MS) return gateCache.value;
-  let visible = false;
+  let visible;
   try {
     visible = JSON.parse(fs.readFileSync(MIRROR, "utf8")).visible === true;
   } catch {
@@ -73,7 +87,7 @@ function getRating(name) {
 function setRating(name, rating, source = "manual") {
   const dir = path.join(ROSTER_DIR, name);
   if (!fs.existsSync(dir)) return false;
-  let existing = {};
+  let existing;
   try {
     existing = JSON.parse(fs.readFileSync(path.join(dir, RATING_FILE), "utf8"));
   } catch {
@@ -104,7 +118,7 @@ function filterCharacters(names) {
 
 /** Roster ratings, for `rate-characters.py --report` and diagnostics. */
 function ratingReport() {
-  let entries = [];
+  let entries;
   try {
     entries = fs.readdirSync(ROSTER_DIR, { withFileTypes: true });
   } catch {

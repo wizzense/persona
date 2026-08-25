@@ -37,8 +37,8 @@ for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
         _stream.reconfigure(encoding="utf-8", errors="replace")
 
-DESK_ROOT = Path(__file__).parent
-ROSTER = DESK_ROOT / "characters"
+PERSONA_ROOT = Path(__file__).parent
+ROSTER = PERSONA_ROOT / "characters"
 VALID_RATINGS = ("general", "r15", "r18")
 
 # Name markers. Deliberately narrow: a false R18 only hides one character from a
@@ -51,6 +51,20 @@ _ADULT_MARKERS = re.compile(
     r"cum\w*|slut|whore|bimbo|milf|dilf|futa|bdsm|fetish|erp|adult)(?:[-_]|$)",
     re.IGNORECASE,
 )
+
+# Japanese markers need no [-_] word boundaries — slugs like りお28歳-全裸ver2-0
+# ("fully nude") and 真夏の夜のサキュバス ("succubus") sailed straight through the
+# ASCII list above and landed rating=general via the step-4 default, which is how
+# 2026-08-07's audit found R18 models one deploy away from the public roster.
+# Substring match is safe here: these tokens have no innocent compound uses in a
+# character-name context.
+_ADULT_MARKERS_UNICODE = re.compile(
+    r"全裸|おもらし|サキュバス|えっち|エロ|裸体|半裸|淫|痴女|絶頂|乳首|下着|"
+    r"ランジェリー|セクシー|オナ|ふたなり"
+)
+# Suggestive-but-not-R18 markers (swimsuit, etc.) → r15: hidden from the public
+# SFW roster, still visible on age-gated surfaces.
+_R15_MARKERS_UNICODE = re.compile(r"水着|ビキニ|バニー|レオタード")
 
 
 def installed_characters() -> list[str]:
@@ -90,8 +104,12 @@ def write_rating(name: str, rating: str, source: str) -> bool:
 
 
 def heuristic_rating(name: str) -> str | None:
-    """R18 when the slug itself carries an adult marker, else None (undecided)."""
-    return "r18" if _ADULT_MARKERS.search(name) else None
+    """R18/R15 when the slug itself carries an adult marker, else None (undecided)."""
+    if _ADULT_MARKERS.search(name) or _ADULT_MARKERS_UNICODE.search(name):
+        return "r18"
+    if _R15_MARKERS_UNICODE.search(name):
+        return "r15"
+    return None
 
 
 def hub_ratings() -> dict[str, str]:
@@ -104,11 +122,11 @@ def hub_ratings() -> dict[str, str]:
     """
     try:
         sys.path.insert(0, r"D:\AitherOS-Fresh\AitherOS")
-        sys.path.insert(0, str(DESK_ROOT))
+        sys.path.insert(0, str(PERSONA_ROOT))
         from lib.integrations.vroid_hub import VRoidHub, VRoidHubError
 
         spec_util = __import__("importlib.util", fromlist=["spec_from_file_location"])
-        spec = spec_util.spec_from_file_location("vroid_sync", DESK_ROOT / "vroid-sync.py")
+        spec = spec_util.spec_from_file_location("vroid_sync", PERSONA_ROOT / "vroid-sync.py")
         vroid_sync = spec_util.module_from_spec(spec)
         spec.loader.exec_module(vroid_sync)
     except Exception as error:

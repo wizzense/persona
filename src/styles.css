@@ -34,3 +34,553 @@ body {
   height: 100% !important;
   background: transparent !important;
 }
+
+/* D-2170: frameless (frame:false in main.cjs) means there is no title bar
+   to grab, so the window looked undraggable. A drag region on the CANVAS
+   was tried first and reverted — Windows treats an app-region:drag element
+   as non-client area (same as a title bar), which swallows right-click
+   (breaks the Characters/Talk/Quit menu), OrbitControls rotate-drag, AND
+   edge resize, all at once, for the same reason. This is a dedicated strip
+   along the top edge instead: it does not overlap the model or the
+   resize border, so drag/rotate/resize/right-click all keep working. */
+.drag-handle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 18px;
+  -webkit-app-region: drag;
+  z-index: 10;
+}
+
+/* ── floating beads (owner redesign 2026-08-25: icons on the avatar box,
+      no nested menus) ─────────────────────────────────────────────────── */
+
+:root {
+  --bead-bg: rgba(22, 26, 38, 0.72);
+  --bead-fg: #e8ecf6;
+  --bead-hover: rgba(52, 60, 88, 0.85);
+  --bead-badge: #ff5d5d;
+  --deck-bg: rgba(15, 18, 28, 0.96);
+  --deck-panel: rgba(30, 36, 54, 0.92);
+  --deck-edge: rgba(255, 255, 255, 0.08);
+  --deck-text: #e8ecf6;
+  --deck-soft: #aab3c9;
+  --deck-muted: #6b7690;
+  --deck-accent: #7aa2ff;
+  --deck-accent-fg: #0d1120;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bead-bg: rgba(250, 251, 255, 0.72);
+    --bead-fg: #1c2233;
+    --bead-hover: rgba(222, 228, 246, 0.9);
+    --bead-badge: #e04444;
+    --deck-bg: rgba(246, 248, 253, 0.97);
+    --deck-panel: rgba(255, 255, 255, 0.94);
+    --deck-edge: rgba(20, 30, 60, 0.1);
+    --deck-text: #1c2233;
+    --deck-soft: #46506b;
+    --deck-muted: #7a849e;
+    --deck-accent: #3f6fe0;
+    --deck-accent-fg: #ffffff;
+  }
+}
+
+.beads {
+  position: absolute;
+  /* Vertical centre of the window edge: on a full-span overlay the avatar sits
+     centre-screen, so a top-corner cluster reads as unrelated icons ("where are
+     the buttons??" -- owner, 2026-08-25). The side rail at eye height is the
+     nearest edge point to the avatar and reads as part of it. */
+  top: 50%;
+  right: 16px;
+  transform: translateY(-50%);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  pointer-events: auto;
+}
+
+.bead-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 190px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--deck-edge);
+  background: var(--bead-bg);
+  color: var(--bead-fg);
+  font-size: 12px;
+  line-height: 1.35;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+
+.bead-hint-x {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--bead-fg);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.bead-hint-x:hover {
+  background: var(--bead-hover);
+}
+
+/* The drag-mode bead's lettered label (ROT / MOVE) — a visible state
+   indicator, not an icon, because the whole point is that the current mode
+   is readable at a glance. */
+.bead-mode-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--bead-fg);
+}
+
+.bead {
+  position: relative;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: 1px solid var(--deck-edge);
+  background: var(--bead-bg);
+  color: var(--bead-fg);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform 0.12s ease, background 0.12s ease, box-shadow 0.12s ease;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+}
+
+.bead:hover {
+  background: var(--bead-hover);
+  transform: scale(1.08);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+
+.bead:active {
+  transform: scale(0.96);
+}
+
+.bead-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: 9px;
+  background: var(--bead-badge);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+  animation: bead-pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes bead-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.12); }
+}
+
+/* ── the Desk panel (`?deck=1` window) ─────────────────────────────────── */
+
+.deck {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--deck-bg);
+  color: var(--deck-text);
+  border-radius: 14px;
+  overflow: hidden;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  user-select: none;
+}
+
+.deck-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px 10px 16px;
+  border-bottom: 1px solid var(--deck-edge);
+  -webkit-app-region: drag; /* the panel moves by its header */
+}
+
+.deck-header-icon {
+  color: var(--deck-accent);
+  display: flex;
+}
+
+.deck-title {
+  font-size: 15px;
+  font-weight: 650;
+  margin: 0;
+  letter-spacing: 0.02em;
+}
+
+.deck-count {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 10px;
+  background: var(--deck-panel);
+  border: 1px solid var(--deck-edge);
+  color: var(--deck-soft);
+}
+
+.deck-count-live {
+  background: var(--deck-accent);
+  border-color: transparent;
+  color: var(--deck-accent-fg);
+}
+
+.deck-close {
+  -webkit-app-region: no-drag;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--deck-soft);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.deck-close:hover {
+  background: var(--deck-edge);
+  color: var(--deck-text);
+}
+
+.deck-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 12px 12px;
+}
+
+.deck-section {
+  margin-top: 10px;
+}
+
+.deck-section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--deck-muted);
+  margin: 0 0 8px 4px;
+}
+
+.deck-section-icon {
+  display: flex;
+  color: var(--deck-accent);
+}
+
+.deck-empty {
+  margin: 2px 4px 10px;
+  font-size: 12px;
+  color: var(--deck-muted);
+}
+
+.deck-card {
+  background: var(--deck-panel);
+  border: 1px solid var(--deck-edge);
+  border-radius: 12px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+
+.deck-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.deck-urgency-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.deck-card-title {
+  font-size: 13px;
+  font-weight: 650;
+  margin: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.deck-card-age {
+  font-size: 11px;
+  color: var(--deck-muted);
+  flex: none;
+}
+
+.deck-card-summary {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--deck-soft);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.deck-card-where {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--deck-muted);
+  font-family: Consolas, 'Courier New', monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.deck-card-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.deck-btn {
+  border: 1px solid var(--deck-edge);
+  background: transparent;
+  color: var(--deck-soft);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.1s ease, color 0.1s ease;
+}
+
+.deck-btn:hover {
+  background: var(--deck-edge);
+  color: var(--deck-text);
+}
+
+.deck-btn-primary {
+  background: var(--deck-accent);
+  border-color: transparent;
+  color: var(--deck-accent-fg);
+}
+
+.deck-btn-primary:hover {
+  filter: brightness(1.1);
+  background: var(--deck-accent);
+  color: var(--deck-accent-fg);
+}
+
+.deck-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  background: var(--deck-panel);
+  border: 1px solid var(--deck-edge);
+  border-radius: 10px;
+  color: var(--deck-text);
+  font-size: 12.5px;
+  padding: 9px 12px;
+  margin-bottom: 6px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.1s ease;
+}
+
+.deck-row:hover {
+  background: var(--deck-edge);
+}
+
+.deck-row-static {
+  cursor: default;
+}
+
+.deck-row-static:hover {
+  background: var(--deck-panel);
+}
+
+.deck-row-icon {
+  display: flex;
+  color: var(--deck-accent);
+  flex: none;
+}
+
+.deck-row-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.deck-row-danger {
+  color: var(--bead-badge);
+}
+
+.deck-icon-btn {
+  border: none;
+  background: transparent;
+  color: var(--deck-muted);
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex: none;
+}
+
+.deck-icon-btn:hover {
+  background: var(--deck-edge);
+  color: var(--deck-text);
+}
+
+.deck-icon-btn-danger:hover {
+  color: var(--bead-badge);
+}
+
+.deck-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 2px 2px 8px;
+}
+
+.deck-chip {
+  border: 1px solid var(--deck-edge);
+  background: var(--deck-panel);
+  color: var(--deck-soft);
+  font-size: 11.5px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.1s ease, color 0.1s ease, border-color 0.1s ease;
+}
+
+.deck-chip:hover {
+  border-color: var(--deck-accent);
+  color: var(--deck-text);
+}
+
+.deck-chip-avatar {
+  color: var(--deck-muted);
+  font-size: 10.5px;
+}
+
+.deck-chip-more {
+  font-size: 11.5px;
+  color: var(--deck-muted);
+  padding: 5px 2px;
+}
+
+.deck-footer {
+  padding: 8px 16px;
+  border-top: 1px solid var(--deck-edge);
+  font-size: 10.5px;
+  color: var(--deck-muted);
+  letter-spacing: 0.03em;
+}
+
+/* ── the card flipper (flip through notifications one at a time) ────────── */
+
+.deck-flipper-nav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 4px 8px;
+}
+
+.deck-flipper-nav .deck-icon-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.deck-flipper-count {
+  font-size: 11.5px;
+  color: var(--deck-muted);
+  min-width: 52px;
+  text-align: center;
+}
+
+.deck-flipper-popout {
+  margin-left: auto;
+}
+
+/* ── relay section (the desk as cockpit over #agents) ──────────────────── */
+
+.deck-relay-compose {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.deck-relay-input {
+  flex: 1;
+  background: var(--deck-panel);
+  border: 1px solid var(--deck-edge);
+  border-radius: 8px;
+  color: var(--deck-text);
+  font-size: 12px;
+  padding: 7px 10px;
+  outline: none;
+}
+
+.deck-relay-input:focus {
+  border-color: var(--deck-accent);
+}
+
+.deck-relay-row {
+  background: var(--deck-panel);
+  border: 1px solid var(--deck-edge);
+  border-radius: 10px;
+  padding: 8px 12px;
+  margin-bottom: 6px;
+}
+
+.deck-relay-author {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--deck-accent);
+  margin-right: 8px;
+}
+
+.deck-relay-age {
+  font-size: 10.5px;
+  color: var(--deck-muted);
+}
+
+.deck-relay-text {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--deck-soft);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
