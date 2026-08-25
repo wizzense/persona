@@ -79,29 +79,28 @@ jobs:
       - name: Lint and test
         run: npm run check
 
-      # Signing env is set ONLY when certificates exist. Setting CSC_LINK to an
-      # EMPTY string (the old `secrets.X || ''` expression) makes electron-builder
-      # treat "" as a certificate FILE — it resolves to the project dir and dies
-      # with "⨯ <projectDir> not a file" (measured 2026-08-25, both macOS jobs).
-      # Without certs the documented fallback is unsigned packages
-      # (RELEASING.md) — Gatekeeper will warn, installation still works.
-      - name: Configure signing (certificates present)
-        if: matrix.platform == 'macos' && secrets.MAC_CSC_LINK != ''
-        run: |
-          echo "CSC_LINK=${{ secrets.MAC_CSC_LINK }}" >> "$GITHUB_ENV"
-          echo "CSC_KEY_PASSWORD=${{ secrets.MAC_CSC_KEY_PASSWORD }}" >> "$GITHUB_ENV"
-          echo "APPLE_ID=${{ secrets.APPLE_ID }}" >> "$GITHUB_ENV"
-          echo "APPLE_APP_SPECIFIC_PASSWORD=${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}" >> "$GITHUB_ENV"
-          echo "APPLE_TEAM_ID=${{ secrets.APPLE_TEAM_ID }}" >> "$GITHUB_ENV"
-
-      - name: Disable signing auto-discovery (no certificates)
-        if: matrix.platform == 'macos' && secrets.MAC_CSC_LINK == ''
-        run: echo "CSC_IDENTITY_AUTO_DISCOVERY=false" >> "$GITHUB_ENV"
-
       - name: Build native installer
         run: ${{ matrix.command }}
-          WIN_CSC_LINK: ${{ matrix.platform == 'windows' && secrets.WIN_CSC_LINK || '' }}
-          WIN_CSC_KEY_PASSWORD: ${{ matrix.platform == 'windows' && secrets.WIN_CSC_KEY_PASSWORD || '' }}
+        env:
+          # Signing: this fork has no MAC_CSC_LINK secret, so CSC_LINK is
+          # empty — and with identity auto-discovery ON, electron-builder 26
+          # treated "" as a certificate FILE and died with "<projectDir> not
+          # a file" (measured 2026-08-25, both macOS jobs; Linux + Windows
+          # packaged fine). Auto-discovery OFF skips signing entirely — the
+          # documented unsigned-packages fallback (RELEASING.md). When
+          # certificates are added, CSC_LINK is set and signing proceeds.
+          # NOTE 2026-08-25: a previous edit dropped the `env:` key while
+          # leaving these lines — GitHub's workflow parser then produced
+          # 0-job "failure" runs on every push with the workflow registered
+          # under its file path. Keep `env:` on the step.
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
 
       - name: Upload installers
         uses: actions/upload-artifact@v7
