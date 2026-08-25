@@ -28,6 +28,8 @@ contextBridge.exposeInMainWorld("deskBridge", {
     // (market-client.cjs speaks MCP to the local gateway with the session
     // bearer; same credential story as the relay feed).
     marketBrowse: (query) => ipcRenderer.invoke("desk:market-browse", query ?? ""),
+    // Per-avatar direct chat: the thread under an agent's message.
+    relayThread: (messageId) => ipcRenderer.invoke("desk:relay-thread", messageId ?? ""),
   },
 });
 

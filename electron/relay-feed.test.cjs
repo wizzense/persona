@@ -4,7 +4,7 @@ const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
 const test = require("node:test");
 
-const { fetchHistory, post, RELAY_URL } = require("./relay-feed.cjs");
+const { fetchHistory, fetchThread, post, postThreadReply, RELAY_URL } = require("./relay-feed.cjs");
 
 function fakeSpawn(handler) {
   return (_cmd, args) => {
@@ -88,4 +88,75 @@ test("post sends the text and reports the relay verdict", async () => {
     "a relay refusal must be false, not thrown",
   );
   assert.equal(await post("#agents", "   "), false, "blank text never spawns");
+});
+
+test("fetchThread shapes thread replies and carries id/threadId/agent", async () => {
+  const seen = [];
+  const rows = await fetchThread(
+    "#agents",
+    "451a3460",
+    fakeSpawn((args) => {
+      // never echo the --token pair back into an assertion message (secret-safety)
+      seen.push(args.filter((a, i) => args[i - 1] !== "--token" && a !== "--token"));
+      return {
+        code: 0,
+        stdout: JSON.stringify([
+          {
+            id: "parent-id",
+            channel: "#agents",
+            nick: "athena",
+            content: "here is the fix",
+            timestamp: "2026-08-25T00:00:10.000Z",
+            agent: true,
+            thread_id: "451a3460",
+            reply_count: 2,
+          },
+        ]),
+      };
+    }),
+  );
+  assert.deepEqual(
+    seen[0],
+    ["--url", RELAY_URL, "--json", "thread", "#agents", "451a3460"],
+  );
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].id, "parent-id");
+  assert.equal(rows[0].threadId, "451a3460");
+  assert.equal(rows[0].replyCount, 2);
+  assert.equal(rows[0].agent, true);
+});
+
+test("fetchThread returns [] on refusal, bad json, or a missing id", async () => {
+  assert.deepEqual(
+    await fetchThread("#agents", "m", fakeSpawn(() => ({ code: 1, stdout: "" }))),
+    [],
+  );
+  assert.deepEqual(
+    await fetchThread("#agents", "m", fakeSpawn(() => ({ code: 0, stdout: "nope" }))),
+    [],
+  );
+  assert.deepEqual(await fetchThread("#agents", ""), [], "an empty id never spawns");
+});
+
+test("postThreadReply sends a thread-reply and reports the verdict", async () => {
+  const seen = [];
+  assert.equal(
+    await postThreadReply("#agents", "451a3460", "nice catch", fakeSpawn((args) => {
+      // never echo the --token pair back into an assertion message (secret-safety)
+      seen.push(args.filter((a, i) => args[i - 1] !== "--token" && a !== "--token"));
+      return { code: 0, stdout: "" };
+    })),
+    true,
+  );
+  assert.deepEqual(
+    seen[0],
+    ["--url", RELAY_URL, "thread-reply", "#agents", "451a3460", "nice catch"],
+  );
+  assert.equal(
+    await postThreadReply("#agents", "m", "x", fakeSpawn(() => ({ code: 1, stdout: "" }))),
+    false,
+    "a relay refusal must be false",
+  );
+  assert.equal(await postThreadReply("#agents", "", "x"), false, "a missing id never spawns");
+  assert.equal(await postThreadReply("#agents", "m", "  "), false, "blank text never spawns");
 });

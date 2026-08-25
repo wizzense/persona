@@ -18,7 +18,9 @@ const {
 const decisionCards = require("./decision-cards.cjs");
 const {
   fetchHistory: fetchRelayHistory,
+  fetchThread: fetchRelayThread,
   post: postToRelay,
+  postThreadReply: postRelayThreadReply,
   RELAY_CHANNEL,
 } = require("./relay-feed.cjs");
 const marketClient = require("./market-client.cjs");
@@ -1177,6 +1179,10 @@ if (!app.requestSingleInstanceLock()) {
     // (MCP to the local gateway, session bearer — same story as relay).
     ipcMain.handle("desk:market-browse", (_event, query) =>
       marketClient.browse(typeof query === "string" ? query : "", "", 24));
+    // The per-avatar direct chat READ side: every reply under one message
+    // (the thread = the conversation with that agent). [] on any failure.
+    ipcMain.handle("desk:relay-thread", (_event, messageId) =>
+      fetchRelayThread(RELAY_CHANNEL, typeof messageId === "string" ? messageId : ""));
     ipcMain.handle("desk:deck-action", (_event, name, arg) => {
       switch (name) {
         case "models":
@@ -1279,6 +1285,28 @@ if (!app.requestSingleInstanceLock()) {
         case "relay-post": {
           if (typeof arg !== "string" || arg.length === 0) return false;
           void postToRelay(RELAY_CHANNEL, arg).then(() => void refreshRelayFeed());
+          return true;
+        }
+        // The per-avatar DIRECT chat send path: the conversation with a
+        // spawned agent is the THREAD under its message (the relay's
+        // thread-reply primitive — no per-agent channels exist, and the
+        // group chat is #agents itself). The thread READ side is the
+        // desk:relay-thread handle (data must reach the renderer).
+        case "relay-thread-reply": {
+          if (typeof arg !== "string" || arg.length === 0) return false;
+          let parsed;
+          try {
+            parsed = JSON.parse(arg); // {channel, messageId, text}
+          } catch {
+            return false;
+          }
+          if (!parsed || typeof parsed.messageId !== "string") return false;
+          if (typeof parsed.text !== "string" || !parsed.text.trim()) return false;
+          void postRelayThreadReply(
+            parsed.channel || RELAY_CHANNEL,
+            parsed.messageId,
+            parsed.text,
+          ).then(() => void refreshRelayFeed());
           return true;
         }
         case "spawn-agent": {

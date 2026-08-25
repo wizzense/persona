@@ -28,6 +28,12 @@ export interface RelayRow {
   author: string;
   text: string;
   at: number;
+  /** The relay message id — the anchor for the per-agent chat THREAD. */
+  id: string | null;
+  threadId: string | null;
+  replyCount: number;
+  /** True when the author is an agent (not a session/human). */
+  agent: boolean;
 }
 
 export interface DeckState {

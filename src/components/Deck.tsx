@@ -9,6 +9,7 @@ import {
   secondaryChoice,
   type DeckDecision,
   type DeckState,
+  type RelayRow,
 } from '../deck/deck-types';
 
 /**
@@ -114,6 +115,8 @@ interface BridgeDeck {
   close(): void;
   answer(id: string, choice: string): Promise<boolean>;
   action(name: string, arg?: string): Promise<boolean>;
+  /** The thread under a relay message — the per-agent direct chat read path. */
+  relayThread(messageId: string): Promise<RelayRow[]>;
 }
 
 function bridgeDeck(): BridgeDeck | null {
@@ -193,6 +196,81 @@ function RelaySection({
           </div>
         ))
       )}
+    </section>
+  );
+}
+
+/** The per-agent DIRECT chat pane (owner ask 2026-08-25): the relay thread
+ *  under the agent's most recent #agents message IS the conversation — one
+ *  agent at a time, composed with the same chrome as the group feed. */
+function AgentChatPane({
+  agent,
+  rows,
+  nowMs,
+  onSend,
+  onClose,
+}: {
+  agent: string;
+  rows: RelayRow[];
+  nowMs: number;
+  onSend: (text: string) => void;
+  onClose: () => void;
+}) {
+  const [draft, setDraft] = useState('');
+  const submit = () => {
+    const text = draft.trim();
+    if (!text) return;
+    setDraft('');
+    onSend(text);
+  };
+  return (
+    <section className="deck-section" aria-label={`Chat with ${agent}`}>
+      <h2 className="deck-section-head">
+        <span className="deck-section-icon"><ChatIcon /></span>
+        <span className="deck-row-label" title={`Direct conversation with ${agent}`}>
+          Chat with {agent}
+        </span>
+        <button
+          className="deck-icon-btn deck-close-inline"
+          aria-label="Close chat"
+          title="Close this chat"
+          onClick={onClose}
+        >
+          <CloseIcon />
+        </button>
+      </h2>
+      {rows.length === 0 ? (
+        <p className="deck-empty">
+          Nothing yet — send a message and {agent} answers here. The group chat
+          is the {`#agents`} feed below.
+        </p>
+      ) : (
+        rows.map((row, index) => (
+          <div className="deck-relay-row" key={`${row.id ?? 'chat'}-${index}`}>
+            <span className="deck-relay-author">{row.author}</span>
+            <span className="deck-relay-age">{formatAge(row.at, nowMs)}</span>
+            <p className="deck-relay-text">{row.text}</p>
+          </div>
+        ))
+      )}
+      <div className="deck-relay-compose">
+        <input
+          className="deck-relay-input"
+          placeholder={`Talk to ${agent}…`}
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') submit();
+          }}
+        />
+        <button
+          className="deck-btn deck-btn-primary"
+          title={`Send to ${agent}`}
+          onClick={submit}
+        >
+          Send
+        </button>
+      </div>
     </section>
   );
 }
@@ -470,6 +548,12 @@ export function Deck() {
   const [state, setState] = useState<DeckState>(EMPTY_DECK_STATE);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const answering = useRef<Set<string>>(new Set());
+  // The per-agent DIRECT chat (owner ask 2026-08-25): one open conversation at
+  // a time, anchored on the agent's most recent #agents message — the relay
+  // thread under it IS the conversation (no per-agent channels exist).
+  const [chatTarget, setChatTarget] = useState<string | null>(null);
+  const [chatRootId, setChatRootId] = useState<string | null>(null);
+  const [chatRows, setChatRows] = useState<RelayRow[]>([]);
 
   useEffect(() => {
     const deck = bridgeDeck();
@@ -520,6 +604,64 @@ export function Deck() {
   const runAction = useCallback((name: string, arg?: string) => {
     void bridgeDeck()?.action(name, arg);
   }, []);
+
+  /** Open the per-agent DIRECT chat: the relay thread under the agent's most
+   *  recent #agents message IS the conversation (no per-agent channels
+   *  exist; the group chat is #agents itself). Falls back to the agent's own
+   *  feed messages when it has no thread yet. */
+  const openChat = useCallback((agent: string) => {
+    setChatTarget(agent);
+    const agentRows = state.relay
+      .filter((row) => row.agent && (row.author === agent || row.author.startsWith(`${agent}+`)))
+      .sort((a, b) => b.at - a.at);
+    const newest = agentRows[0] ?? null;
+    const rootId = newest?.id ?? null;
+    setChatRootId(rootId);
+    setChatRows(newest ? [newest] : []);
+    if (rootId) {
+      void bridgeDeck()
+        ?.relayThread(rootId)
+        .then((rows) => setChatRows(rows.length > 0 ? rows : [newest]))
+        .catch(() => {});
+    }
+  }, [state.relay]);
+
+  /** Send one message in the open direct chat: a thread-reply when an anchor
+   *  message exists, else a plain channel post mentioning the agent (the
+   *  agent's next message becomes the anchor on refresh). */
+  const sendChat = useCallback((text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed || !chatTarget) return;
+    setChatRows((rows) => [
+      ...rows,
+      {
+        channel: state.relayChannel,
+        author: 'you',
+        text: trimmed,
+        at: Math.floor(Date.now() / 1000),
+        id: null,
+        threadId: chatRootId,
+        replyCount: 0,
+        agent: false,
+      },
+    ]);
+    if (chatRootId) {
+      runAction(
+        'relay-thread-reply',
+        JSON.stringify({ channel: state.relayChannel, messageId: chatRootId, text: trimmed }),
+      );
+      // The relay accepts asynchronously — refetch the thread once the post
+      // has had time to land, so the agent's reply appears here too.
+      window.setTimeout(() => {
+        void bridgeDeck()
+          ?.relayThread(chatRootId)
+          .then((rows) => setChatRows(rows))
+          .catch(() => {});
+      }, 800);
+    } else {
+      runAction('relay-post', `@${chatTarget} ${trimmed}`);
+    }
+  }, [chatRootId, chatTarget, runAction, state.relayChannel]);
 
   return (
     <main className="deck">
@@ -634,6 +776,15 @@ export function Deck() {
                 >
                   {slot.agent ? `${slot.agent} — ${slot.name}` : slot.name}
                 </span>
+                {slot.agent ? (
+                  <button
+                    className="deck-icon-btn"
+                    title={`Chat with ${slot.agent} — the conversation lives as the relay thread under this agent's messages`}
+                    onClick={() => openChat(slot.agent)}
+                  >
+                    <ChatIcon />
+                  </button>
+                ) : null}
                 <button
                   className="deck-icon-btn"
                   title="Detach to own window"
@@ -672,6 +823,16 @@ export function Deck() {
             ))}
           </div>
         </section>
+
+        {chatTarget ? (
+          <AgentChatPane
+            agent={chatTarget}
+            rows={chatRows}
+            nowMs={nowMs}
+            onSend={sendChat}
+            onClose={() => setChatTarget(null)}
+          />
+        ) : null}
 
         <ModelsMarketSection
           characters={state.characters}
