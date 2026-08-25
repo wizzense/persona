@@ -7,7 +7,7 @@ import { useAmplitudeLipSync } from '../hooks/useAmplitudeLipSync';
 import { useBlink } from '../hooks/useBlink';
 import type { AnimationType } from '../animation-catalog';
 
-interface AvatarProps {
+export interface AvatarProps {
   animation: AnimationType | string;
   animationRequest: number;
   audioLevel: number;
@@ -15,6 +15,7 @@ interface AvatarProps {
   playback: 'loop' | 'once';
   speaking: boolean;
   onReady?: (scene: THREE.Object3D) => void;
+  modelUrl?: string;
 }
 
 function AvatarModel({
@@ -25,8 +26,9 @@ function AvatarModel({
   playback,
   speaking,
   onReady,
+  modelUrl,
 }: AvatarProps) {
-  const vrm = useVrmLoader('./assets/model.vrm');
+  const vrm = useVrmLoader(modelUrl ?? './assets/model.vrm');
   const { play, update: updateAnimation } = useVrmAnimation(vrm);
   const updateLipSync = useAmplitudeLipSync(vrm);
   const updateBlink = useBlink(vrm);
