@@ -806,8 +806,26 @@ function buildAgentMenu() {
   });
 }
 
-/** Switch the window to whichever character an agent owns. Returns the character or null. */
+/** Switch the window to whichever character an agent owns. Returns the character or null.
+ *
+ * OPT-IN as of 2026-08-25 (PERSONA_AGENT_AVATAR_SWITCH=1 enables). Every agent
+ * surface (awsh turns, the decision-card fanout, Living OS, Awconnect) calls
+ * set_agent as ambient telemetry, and each call re-installed that agent's
+ * mapped character and RELOADED the window — so with several shells running,
+ * the owner's manually chosen avatar was overwritten within seconds, over and
+ * over ("keeps defaulting and changing to an avatar I don't want", measured
+ * live: the unwanted character was exactly gobbonet's vrm-1-0 mapping while a
+ * gobbonet companion shell was open). A window reload per agent turn is also a
+ * visible seconds-long blank under GPU load, so the flips read as "the avatar
+ * keeps breaking". The owner's explicit pick must never lose to telemetry;
+ * per the AC001 rule the gate ships WITH its control (the env var), and the
+ * refusal is logged so a silent no-op cannot be misread as a broken mapping.
+ */
 function applyAgentAvatar(agent) {
+  if (process.env.PERSONA_AGENT_AVATAR_SWITCH !== "1") {
+    debugLog("agent avatar switch suppressed (opt-in; PERSONA_AGENT_AVATAR_SWITCH!=1)", agent);
+    return null;
+  }
   const character = getAgentAvatar(agent);
   if (!character) return null;
   return applyCharacter(character) ? character : null;
@@ -964,6 +982,10 @@ if (!app.requestSingleInstanceLock()) {
       port: Number(process.env.PERSONA_BRIDGE_PORT || DEFAULT_PORT),
       onEvent: handleBridgeEvent,
       mcpHandler,
+      // The Living Desktop overlay renders the STATIC site, whose
+      // /api/decisions is a build stub — this loopback read is how its bell
+      // sees the queue at all. Read-only; answering stays in the queue window.
+      decisionsProvider: () => decisionCards.listOpen(),
     });
     try {
       await bridge.listen();
