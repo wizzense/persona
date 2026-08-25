@@ -26,7 +26,7 @@ const MAP_FILE = path.join(ROOT, ".agent-avatars.json");
  *     (aither, aeon, plutus, viviane, ...) that route through Genesis /chat/stream and
  *     have no local pack of their own. Mirrored (still generated, because it's Python and
  *     Desk is Node — a cross-language read needs SOME artifact) by
- *     `python AitherOS/dev/tools/gen_persona_agent_roster.py` into agent-roster.generated.json.
+ *     `python AitherOS/dev/tools/gen_desk_agent_roster.py` into agent-roster.generated.json.
  *  2. AitherOS/Library/packs/*​/{agent.yaml,brain_pack.yaml} — the REAL, larger, growing set
  *     of pack-defined agents (gargbot, saga, dgg, vera, chaos, jgames, ...) that the
  *     sovereign roster does not and should not know about (it is Genesis's list, not the

@@ -75,7 +75,7 @@ function selectVoiceProcessTree(processes, {
 }
 
 function configuredPattern(environment = process.env) {
-  const source = environment.PERSONA_TARGET_PROCESS_PATTERN;
+  const source = environment.DESK_TARGET_PROCESS_PATTERN;
   if (!source) return DEFAULT_VOICE_APP_PATTERN;
   try {
     return new RegExp(source, "i");

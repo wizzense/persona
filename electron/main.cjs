@@ -152,7 +152,7 @@ function buildSizeMenu() {
 }
 const startInBackground = process.argv.includes("--background");
 const protocolScheme = "desk";
-const debugEnabled = process.env.PERSONA_DEBUG === "1";
+const debugEnabled = process.env.DESK_DEBUG === "1";
 
 let avatarWindow = null;
 let bridge = null;
@@ -818,7 +818,7 @@ function buildAgentMenu() {
 
 /** Switch the window to whichever character an agent owns. Returns the character or null.
  *
- * OPT-IN as of 2026-08-25 (PERSONA_AGENT_AVATAR_SWITCH=1 enables). Every agent
+ * OPT-IN as of 2026-08-25 (DESK_AGENT_AVATAR_SWITCH=1 enables). Every agent
  * surface (awsh turns, the decision-card fanout, Living OS, Awconnect) calls
  * set_agent as ambient telemetry, and each call re-installed that agent's
  * mapped character and RELOADED the window — so with several shells running,
@@ -832,8 +832,8 @@ function buildAgentMenu() {
  * refusal is logged so a silent no-op cannot be misread as a broken mapping.
  */
 function applyAgentAvatar(agent) {
-  if (process.env.PERSONA_AGENT_AVATAR_SWITCH !== "1") {
-    debugLog("agent avatar switch suppressed (opt-in; PERSONA_AGENT_AVATAR_SWITCH!=1)", agent);
+  if (process.env.DESK_AGENT_AVATAR_SWITCH !== "1") {
+    debugLog("agent avatar switch suppressed (opt-in; DESK_AGENT_AVATAR_SWITCH!=1)", agent);
     return null;
   }
   const character = getAgentAvatar(agent);
@@ -1005,7 +1005,7 @@ if (!app.requestSingleInstanceLock()) {
       onRemoveAvatar: (slotId) => removeAvatarSlot(slotId),
     });
     bridge = createBridgeServer({
-      port: Number(process.env.PERSONA_BRIDGE_PORT || DEFAULT_PORT),
+      port: Number(process.env.DESK_BRIDGE_PORT || DEFAULT_PORT),
       onEvent: handleBridgeEvent,
       mcpHandler,
       // The Living Desktop overlay renders the STATIC site, whose

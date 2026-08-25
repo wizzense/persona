@@ -33,7 +33,7 @@ from pathlib import Path
 
 VOICE_BASE = os.environ.get("AITHER_VOICE_URL", "https://127.0.0.1:8084/voice")
 GENESIS_URL = os.environ.get("AITHER_GENESIS_URL", "http://localhost:8001")
-PERSONA_EVENTS = os.environ.get("PERSONA_EVENTS_URL", "http://127.0.0.1:47831/events")
+PERSONA_EVENTS = os.environ.get("DESK_EVENTS_URL", "http://127.0.0.1:47831/events")
 CA_BUNDLE = os.environ.get(
     "AITHER_CA_BUNDLE", r"D:\AitherOS-Fresh\AitherOS\config\certs\aithernet-ca-bundle.pem"
 )

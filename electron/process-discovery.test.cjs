@@ -46,8 +46,8 @@ test("parses one or many Windows CIM process records", () => {
 });
 
 test("supports a custom target application pattern without accepting invalid regex", () => {
-  assert.equal(configuredPattern({ PERSONA_TARGET_PROCESS_PATTERN: "my-voice-app" }).test("my-voice-app"), true);
-  assert.equal(configuredPattern({ PERSONA_TARGET_PROCESS_PATTERN: "[" }).test("Codex"), true);
+  assert.equal(configuredPattern({ DESK_TARGET_PROCESS_PATTERN: "my-voice-app" }).test("my-voice-app"), true);
+  assert.equal(configuredPattern({ DESK_TARGET_PROCESS_PATTERN: "[" }).test("Codex"), true);
 });
 
 test("does not confuse Desk's project path with the Codex application", () => {
