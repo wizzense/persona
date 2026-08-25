@@ -543,27 +543,13 @@ function handleProtocolArgv(argv) {
   if (protocolUrl) handleProtocolUrl(protocolUrl);
 }
 
-/** Open a local helper page, spawning its python server the first time. */
-function openLocalTool(url, script) {
-  const probe = require("node:http").get(url, () => {
-    probe.destroy();
-    void shell.openExternal(url);
-  });
-  probe.on("error", () => {
-    const { spawn } = require("node:child_process");
-    spawn("python", [path.join(__dirname, "..", script)], {
-      detached: true,
-      stdio: "ignore",
-      cwd: path.join(__dirname, ".."),
-    }).unref();
-    // The server opens the page itself once it is listening.
-  });
-  probe.setTimeout(1500, () => probe.destroy());
-}
-
-/** Open the local VRoid model browser (spawns model-browser.py if not already up). */
+/** Open the model browser — the deck panel's Models & Market section. */
 function openModelBrowser() {
-  openLocalTool("http://127.0.0.1:47836/", "model-browser.py");
+  // Owner-overruled 2026-08-25: the standalone python page (model-browser.py
+  // on :47836) was "still fucking lame" and its marketplace tab never
+  // existed — the deck panel's Models & Market section IS the browser now
+  // (search + roster characters + the live Aitherium marketplace feed).
+  createDeckWindow();
 }
 
 /** Open Forge Studio — media-forge's web UI, served by a HOST process
@@ -601,23 +587,14 @@ function openMediaForge() {
   probe.setTimeout(1500, () => probe.destroy());
 }
 
-/** Open AitherShell — the platform's real chat client. It already drives this avatar
- *  (speaking state + emotion animations via its desk-bridge), so talking to Aither
- *  there IS talking to the character on screen. Deliberately NOT a second chat UI. */
+/** Open the talk surface. The deck panel IS the chat window: its relay section
+ *  posts to #agents (the channel Aither and every connected session read and
+ *  answer in) and shows the feed right there. The old behaviour — spawning a
+ *  Windows Terminal tab running the `aither` CLI — was owner-overruled
+ *  2026-08-25: "STILL just opens a terminal tab instead of a chat window right
+ *  there". One chat surface, in the app, no terminal. */
 function openTalkWindow() {
-  const { spawn } = require("node:child_process");
-  // Windows Terminal if present, else a plain console — both detached from this process.
-  spawn("cmd", ["/c", "start", "", "wt", "-w", "0", "nt", "--title", "Aither", "cmd", "/k", "aither"], {
-    detached: true,
-    stdio: "ignore",
-  })
-    .on("error", () => {
-      spawn("cmd", ["/c", "start", "Aither", "cmd", "/k", "aither"], {
-        detached: true,
-        stdio: "ignore",
-      }).unref();
-    })
-    .unref();
+  createDeckWindow();
 }
 
 /** If the gate closed while an adult character was ON SCREEN, swap it off.

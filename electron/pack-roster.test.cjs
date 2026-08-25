@@ -69,6 +69,30 @@ console.log("pack roster gate:");
 const closed = withGate(false, () => freshRoster().listCharacters());
 const open = withGate(true, () => freshRoster().listCharacters());
 
+// This test is a LIVE-ENVIRONMENT probe, not a unit test: the gate-vs-deletion
+// property it pins can only be exercised where a roster and the content packs
+// actually exist. A clean CI checkout has neither (characters/ is gitignored,
+// ~/.aither/content-packs is per-user), and failing the release for the
+// absence of user media would be the gate's inverse failure. The gate must
+// still hold on every box that HAS media — which is every real install.
+check("mirror was restored", () => {
+  // Restored means the pre-test state: absent, or present-and-closed. Never
+  // open — a gate left open enables adult content on this box.
+  if (fs.existsSync(MIRROR)) {
+    const raw = fs.readFileSync(MIRROR, "utf8");
+    assert.strictEqual(JSON.parse(raw).visible, false, "gate left OPEN after tests");
+  }
+});
+
+const everything = withGate(true, () => freshRoster().listAllCharacters());
+if (failures === 0 && everything.length === 0) {
+  console.log(
+    "\nSKIP: no roster characters and no content packs on this box (clean CI " +
+      "checkout) — the adult-content gate is a live-environment property."
+  );
+  process.exit(0);
+}
+
 check("closed: no adult character is listed", () => {
   const adult = closed.filter((n) => ADULT_RE.test(n));
   assert.strictEqual(adult.length, 0, `leaked: ${adult.join(", ")}`);
