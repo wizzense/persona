@@ -5,6 +5,11 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("deskBridge", {
   getSnapshot: () => ipcRenderer.invoke("desk:get-snapshot"),
   hide: () => ipcRenderer.send("desk:hide"),
+  // Per-avatar context menu (2026-08-25): the renderer raycasts the click itself and
+  // names the slot it hit; main builds the native Menu. The window-level deck trigger
+  // below is suppressed for avatar hits via a dataset flag the renderer sets on the
+  // canvas at pointerdown — the deck opening behind the avatar menu reads as a bug.
+  avatarContextMenu: (slotId) => ipcRenderer.send("desk:avatar-context-menu", slotId),
   subscribe: (listener) => {
     const handler = (_event, payload) => listener(payload);
     ipcRenderer.on("desk:event", handler);
@@ -29,8 +34,18 @@ window.addEventListener(
     if (event.button !== 2 || !rightDownAt) return;
     const moved =
       Math.abs(event.screenX - rightDownAt.x) + Math.abs(event.screenY - rightDownAt.y);
+    // The renderer marks a right-click that hit an AVATAR by setting
+    // dataset.rightOnAvatar on the canvas at pointerdown; main shows the per-avatar
+    // menu for that click instead of the deck (both would otherwise open).
+    const target = event.target;
+    const onAvatar =
+      target instanceof Element &&
+      Boolean(target.dataset && target.dataset.rightOnAvatar);
     rightDownAt = null;
-    if (moved < 5) ipcRenderer.send("desk:context-menu");
+    // Always clear the flag — a right-DRAG pan starting on an avatar must not make
+    // the NEXT empty-space right-click open nothing.
+    if (target instanceof Element && target.dataset) delete target.dataset.rightOnAvatar;
+    if (moved < 5 && !onAvatar) ipcRenderer.send("desk:context-menu");
   },
   true,
 );

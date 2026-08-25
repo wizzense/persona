@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { useThree } from '@react-three/fiber';
 import { Environment, OrbitControls } from '@react-three/drei';
@@ -49,7 +49,15 @@ function supportsTarget(controls: unknown): controls is TargetControls {
 // UNION of every avatar's bounding box, not just slot 0's — with zero extra slots this
 // degenerates to exactly the old single-box behavior (a union of one box is that box), so
 // nothing changes for the existing single-avatar case.
-function FullBodyCamera({ objects }: { objects: THREE.Object3D[] }) {
+function FullBodyCamera({
+  objects,
+  focusUuid,
+}: {
+  objects: THREE.Object3D[];
+  /** When set (per-avatar "Focus camera here"), frame ONLY the object with this uuid
+   *  instead of the union of all avatars. Cleared by "Frame everyone". */
+  focusUuid?: string | null;
+}) {
   const getThreeState = useThree((state) => state.get);
   const controlsReady = useThree((state) => Boolean(state.controls));
   // D-2170: this used to guard on `framedObject.current === object` and
@@ -64,11 +72,15 @@ function FullBodyCamera({ objects }: { objects: THREE.Object3D[] }) {
   // spawning/removing an avatar must re-trigger framing even though slot 0's own object
   // reference never changes.
   const objectsKey = objects.map((o) => o.uuid).join(',');
+  // Focus narrows the framed set to one avatar. A focus whose object has since been
+  // removed filters to nothing and the effect returns early — the camera holds its last
+  // framing until "Frame everyone" clears it, which is the least surprising hold.
+  const framed = focusUuid ? objects.filter((o) => o.uuid === focusUuid) : objects;
 
   useLayoutEffect(() => {
     const { camera, controls } = getThreeState();
     if (
-      objects.length === 0 ||
+      framed.length === 0 ||
       !(camera instanceof THREE.PerspectiveCamera) ||
       !supportsTarget(controls)
     ) {
@@ -76,7 +88,7 @@ function FullBodyCamera({ objects }: { objects: THREE.Object3D[] }) {
     }
 
     const box = new THREE.Box3();
-    for (const object of objects) {
+    for (const object of framed) {
       object.updateWorldMatrix(true, true);
       box.union(new THREE.Box3().setFromObject(object));
     }
@@ -98,7 +110,7 @@ function FullBodyCamera({ objects }: { objects: THREE.Object3D[] }) {
     controls.target.copy(framing.target);
     controls.update();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- objectsKey stands in for objects' identities
-  }, [controlsReady, getThreeState, objectsKey, size.width, size.height]);
+  }, [controlsReady, getThreeState, objectsKey, focusUuid, size.width, size.height]);
 
   return null;
 }
@@ -197,6 +209,15 @@ function PlacedAvatar({ slotId, transform, onDrag, onScale, avatarProps, onReady
         <mesh
           position={[0, 1.05, 0]}
           onPointerDown={(event) => {
+            // Tell the preload's window-level right-click handler this click hit an
+            // AVATAR (dataset flag on the canvas) so it opens the per-avatar menu via
+            // main instead of the deck. R3F delivers every button to this handler, so
+            // non-right clicks clear any stale flag from a drag that ended elsewhere.
+            const canvasTarget = event.nativeEvent.target as HTMLElement | null;
+            if (canvasTarget?.dataset) {
+              if (event.button === 2) canvasTarget.dataset.rightOnAvatar = slotId;
+              else delete canvasTarget.dataset.rightOnAvatar;
+            }
             if (event.button !== 0) return; // left button only -- right-click stays the context menu
             // Plain left-drag must keep rotating the camera — that is the gesture
             // everyone already has (avatar-move claimed bare left-drag once and the
@@ -230,6 +251,14 @@ function PlacedAvatar({ slotId, transform, onDrag, onScale, avatarProps, onReady
           onWheel={(event) => {
             event.stopPropagation();
             onScale(clampScale(transformRef.current.scale - event.nativeEvent.deltaY * 0.001));
+          }}
+          onContextMenu={(event) => {
+            // OrbitControls preventDefault()s contextmenu (right-drag pans), which kills
+            // Electron's own menu event — so the per-avatar menu goes through the bridge,
+            // same pattern the deck trigger uses. A plain right-CLICK lands here; a
+            // right-DRAG pans and never does.
+            event.stopPropagation();
+            window.deskBridge?.avatarContextMenu(slotId);
           }}
         >
           <boxGeometry args={[1.8, 2.1, 1.0]} />
@@ -298,6 +327,29 @@ export function Scene(props: SceneProps) {
     ? [avatarScene, ...Object.values(extraScenes)]
     : [];
 
+  // Per-avatar context-menu actions, delivered by main over the same desk:event wire
+  // spawn/remove use. Subscribing HERE (not App) keeps every camera/layout write next
+  // to the state it mutates; App's own subscription handles the spawn/remove half and
+  // both listeners coexist (the preload subscribe returns its own unsubscribe).
+  const [focusUuid, setFocusUuid] = useState<string | null>(null);
+  useEffect(() => {
+    const bridge = window.deskBridge;
+    if (!bridge) return;
+    return bridge.subscribe((event) => {
+      if (event.type === 'focus-avatar') {
+        if (!event.slotId) {
+          setFocusUuid(null);
+        } else if (event.slotId === 'slot0') {
+          setFocusUuid(avatarScene?.uuid ?? null);
+        } else {
+          setFocusUuid(extraScenes[event.slotId]?.uuid ?? null);
+        }
+      } else if (event.type === 'reset-avatar-layout') {
+        clearSlot(event.slotId);
+      }
+    });
+  }, [avatarScene, extraScenes, clearSlot]);
+
   return (
     <Canvas
       camera={{ position: [0, 2, 4.8], fov: 20 }}
@@ -328,7 +380,7 @@ export function Scene(props: SceneProps) {
         intensity={Math.PI}
       />
       <Environment files={dawnEnvironment} />
-      <FullBodyCamera objects={allObjects} />
+      <FullBodyCamera objects={allObjects} focusUuid={focusUuid} />
       {/* Slot 0: default avatar, drives voice/animation/audio — unchanged. Now individually
           draggable/scalable like every other slot; camera framing unions ALL avatars. */}
       <PlacedAvatar

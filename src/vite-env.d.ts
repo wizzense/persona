@@ -40,12 +40,18 @@ type AvatarBridgeEvent =
   | { type: 'listener-status'; status: AudioListenerStatus }
   | { type: 'bridge-status'; connected: boolean }
   | { type: 'spawn-avatar'; slotId: string; modelUrl: string }
-  | { type: 'remove-avatar'; slotId: string };
+  | { type: 'remove-avatar'; slotId: string }
+  // Per-avatar context-menu actions (main -> renderer). focus-avatar with a slotId
+  // frames THAT avatar only; slotId null frames everyone again. reset-avatar-layout
+  // drops the slot's stored spot/scale so it returns to the default transform.
+  | { type: 'focus-avatar'; slotId: string | null }
+  | { type: 'reset-avatar-layout'; slotId: string };
 
 interface Window {
   deskBridge?: {
     getSnapshot(): Promise<AvatarBridgeEvent | null>;
     hide(): void;
+    avatarContextMenu(slotId: string): void;
     subscribe(listener: (event: AvatarBridgeEvent) => void): () => void;
   };
 }

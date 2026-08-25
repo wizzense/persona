@@ -569,6 +569,43 @@ function openModelBrowser() {
   openLocalTool("http://127.0.0.1:47836/", "model-browser.py");
 }
 
+/** Open Forge Studio — media-forge's web UI, served by a HOST process
+ *  (D:\media-forge, `python run.py` at 127.0.0.1:8200), not by a script inside
+ *  this app. Unlike the model browser it does not open the page itself on boot,
+ *  so this polls /health after spawning and opens the tab once it answers. */
+function openMediaForge() {
+  const url = "http://127.0.0.1:8200/";
+  const probe = require("node:http").get(url, () => {
+    probe.destroy();
+    void shell.openExternal(url);
+  });
+  probe.on("error", () => {
+    const { spawn } = require("node:child_process");
+    spawn("python", [path.join("D:\\media-forge", "run.py")], {
+      detached: true,
+      stdio: "ignore",
+      cwd: "D:\\media-forge",
+      windowsHide: true,
+    }).unref();
+    const deadline = Date.now() + 15000;
+    const poll = setInterval(() => {
+      const check = require("node:http").get(url, (resp) => {
+        if (resp.statusCode === 200) {
+          clearInterval(poll);
+          check.destroy();
+          void shell.openExternal(url);
+        }
+      });
+      check.on("error", () => {});
+      check.setTimeout(750, () => check.destroy());
+      if (Date.now() > deadline) clearInterval(poll);
+    }, 500);
+  });
+  probe.setTimeout(1500, () => probe.destroy());
+}
+
+
+
 /** Open AitherShell — the platform's real chat client. It already drives this avatar
  *  (speaking state + emotion animations via its desk-bridge), so talking to Aither
  *  there IS talking to the character on screen. Deliberately NOT a second chat UI. */
@@ -664,6 +701,52 @@ function removeAvatarSlot(slotId) {
   return true;
 }
 
+/** Per-avatar context menu (2026-08-25). The renderer raycasts the right-click itself
+ *  (the deck trigger cannot — it is window-level, and OrbitControls owns right-drag pan)
+ *  and names the slot; this builds the native menu for THAT avatar. Actions are scoped
+ *  to what the slot actually is: talk goes to AitherShell (the platform chat, which
+ *  already drives this avatar's speaking state and emotion animations over the same
+ *  bridge — that IS the A2A integration), agent tools open the Desk panel whose agents
+ *  section lists the same roster, and only a spawned slot offers removal. */
+function popupAvatarMenu(slotId) {
+  const isDefault = slotId === "slot0" || slotId === "default";
+  const info = isDefault ? null : avatarSlots.get(slotId);
+  if (!isDefault && !info) return;
+  const displayName = isDefault ? getActiveCharacter() || "Aither" : info.name;
+  const agent = isDefault ? "aither" : info.agent || null;
+
+  const sendToAvatar = (type, payload) => {
+    if (avatarWindow && !avatarWindow.isDestroyed()) {
+      avatarWindow.webContents.send("desk:event", { type, ...payload });
+    }
+  };
+
+  const template = [
+    { label: `${displayName}${agent ? " — " + agent : ""}`, enabled: false },
+    { type: "separator" },
+    { label: "Focus camera here", click: () => sendToAvatar("focus-avatar", { slotId }) },
+    { label: "Frame everyone", click: () => sendToAvatar("focus-avatar", { slotId: null }) },
+    { label: "Reset position & size", click: () => sendToAvatar("reset-avatar-layout", { slotId }) },
+    { type: "separator" },
+    { label: agent ? `Talk to ${agent}` : "Talk to Aither", click: () => openTalkWindow() },
+    { label: "Open agent tools", click: () => createDeckWindow() },
+  ];
+  if (!isDefault) {
+    template.push(
+      { type: "separator" },
+      { label: "Remove Avatar", click: () => removeAvatarSlot(slotId) },
+    );
+  }
+  if (avatarWindow && !avatarWindow.isDestroyed()) {
+    Menu.buildFromTemplate(template).popup({ window: avatarWindow });
+  }
+}
+
+ipcMain.on("desk:avatar-context-menu", (_event, slotId) => {
+  popupAvatarMenu(String(slotId || ""));
+});
+
+
 /** First "slotN" not already in avatarSlots — spawn_avatar/remove_avatar were MCP-only
  *  (an agent had to name a slot id itself); the menu needs to pick one for the owner. */
 function nextFreeSlotId() {
@@ -714,8 +797,8 @@ function buildSpawnAvatarMenu() {
   const groups = [];
   for (let start = 0; start < agents.length; start += CHUNK) {
     const slice = agents.slice(start, start + CHUNK);
-    const first = slice[0].slice(0, 10);
-    const last = slice[slice.length - 1].slice(0, 10);
+    const first = slice[0];
+    const last = slice[slice.length - 1];
     groups.push({
       label: slice.length > 1 ? `${first} … ${last}` : first,
       submenu: slice.map(item),
@@ -760,8 +843,8 @@ function buildCharacterMenu() {
   const groups = [];
   for (let start = 0; start < all.length; start += CHUNK) {
     const slice = all.slice(start, start + CHUNK);
-    const first = slice[0].slice(0, 10);
-    const last = slice[slice.length - 1].slice(0, 10);
+    const first = slice[0];
+    const last = slice[slice.length - 1];
     groups.push({
       label: slice.length > 1 ? `${first} … ${last}` : first,
       submenu: slice.map(item),
@@ -903,6 +986,7 @@ function refreshTrayMenu() {
       },
       { label: "Talk to Aither…", click: openTalkWindow },
       { label: "Browse models…", click: openModelBrowser },
+      { label: "Media Forge", click: openMediaForge },
       { type: "separator" },
       { label: "Preview listening", click: () => handleBridgeEvent(voiceState("listening")) },
       { label: "Preview speaking", click: () => handleBridgeEvent(voiceState("speaking")) },
