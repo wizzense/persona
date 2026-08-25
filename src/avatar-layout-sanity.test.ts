@@ -45,6 +45,20 @@ describe('avatar layout sanity', () => {
     expect(sane({ position: [POSITION_BOUND + 1, 0, 0], scale: 1 })).toBe(false);
   });
 
+  it('the bound is the VISIBLE stage, not merely short of the horizon', () => {
+    // 2026-08-25: the first bound (10) excluded the z=-2665 horizon artifact and
+    // STILL hid the avatar — a click-teleport persisted x=-8, which was legal to
+    // the sanitizer and just off-camera (full-body framing shows ~±2 units), so
+    // every character switch restored an invisible avatar. An entry the owner
+    // cannot see or grab is exactly as lost at 8 as at 2665. If a framing change
+    // ever widens the stage, raise POSITION_BOUND with it deliberately — this
+    // pin exists so the bound cannot drift wide of what the camera shows again.
+    expect(POSITION_BOUND).toBeLessThanOrEqual(2);
+    expect(sane({ position: [8, 0, 0], scale: 1 })).toBe(false);
+    expect(sane({ position: [0, 0, -8], scale: 1 })).toBe(false);
+    expect(sane({ position: [1.5, 0, -1.5], scale: 1 })).toBe(true);
+  });
+
   it('non-object roots sanitize to an empty layout, never a throw', () => {
     expect(sanitizeLayout(null)).toEqual({});
     expect(sanitizeLayout('x')).toEqual({});
