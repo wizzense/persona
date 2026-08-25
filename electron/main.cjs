@@ -925,7 +925,13 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.whenReady().then(async () => {
-    app.setAppUserModelId("com.xikhar.persona");
+    // Unpackaged runs (npx electron .) have no Start Menu shortcut registering
+    // the AUMID, so Windows shows the RAW id as every toast's header — the
+    // owner's decision-card notification read "com.xikhar.persona" instead of
+    // the app's name (screenshot, 2026-08-25). Dev uses the display name;
+    // packaged installs keep the registered id so their toast grouping and
+    // notification settings survive.
+    app.setAppUserModelId(app.isPackaged ? "com.xikhar.persona" : "Persona");
     app.dock?.hide();
     if (app.isPackaged) app.setAsDefaultProtocolClient(protocolScheme);
 
