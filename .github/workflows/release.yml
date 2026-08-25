@@ -79,14 +79,27 @@ jobs:
       - name: Lint and test
         run: npm run check
 
+      # Signing env is set ONLY when certificates exist. Setting CSC_LINK to an
+      # EMPTY string (the old `secrets.X || ''` expression) makes electron-builder
+      # treat "" as a certificate FILE — it resolves to the project dir and dies
+      # with "⨯ <projectDir> not a file" (measured 2026-08-25, both macOS jobs).
+      # Without certs the documented fallback is unsigned packages
+      # (RELEASING.md) — Gatekeeper will warn, installation still works.
+      - name: Configure signing (certificates present)
+        if: matrix.platform == 'macos' && secrets.MAC_CSC_LINK != ''
+        run: |
+          echo "CSC_LINK=${{ secrets.MAC_CSC_LINK }}" >> "$GITHUB_ENV"
+          echo "CSC_KEY_PASSWORD=${{ secrets.MAC_CSC_KEY_PASSWORD }}" >> "$GITHUB_ENV"
+          echo "APPLE_ID=${{ secrets.APPLE_ID }}" >> "$GITHUB_ENV"
+          echo "APPLE_APP_SPECIFIC_PASSWORD=${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}" >> "$GITHUB_ENV"
+          echo "APPLE_TEAM_ID=${{ secrets.APPLE_TEAM_ID }}" >> "$GITHUB_ENV"
+
+      - name: Disable signing auto-discovery (no certificates)
+        if: matrix.platform == 'macos' && secrets.MAC_CSC_LINK == ''
+        run: echo "CSC_IDENTITY_AUTO_DISCOVERY=false" >> "$GITHUB_ENV"
+
       - name: Build native installer
         run: ${{ matrix.command }}
-        env:
-          CSC_LINK: ${{ matrix.platform == 'macos' && secrets.MAC_CSC_LINK || '' }}
-          CSC_KEY_PASSWORD: ${{ matrix.platform == 'macos' && secrets.MAC_CSC_KEY_PASSWORD || '' }}
-          APPLE_ID: ${{ matrix.platform == 'macos' && secrets.APPLE_ID || '' }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ matrix.platform == 'macos' && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
-          APPLE_TEAM_ID: ${{ matrix.platform == 'macos' && secrets.APPLE_TEAM_ID || '' }}
           WIN_CSC_LINK: ${{ matrix.platform == 'windows' && secrets.WIN_CSC_LINK || '' }}
           WIN_CSC_KEY_PASSWORD: ${{ matrix.platform == 'windows' && secrets.WIN_CSC_KEY_PASSWORD || '' }}
 
