@@ -34,3 +34,40 @@ window.addEventListener(
   },
   true,
 );
+
+// D-2170: LEFT-drag rotates the model (OrbitControls) and RIGHT-drag pans it,
+// so neither button is free to move the WINDOW without breaking something
+// that already works. A dedicated top-edge drag strip exists but is only
+// 18px tall and easy to miss ("the avatar is trapped in a box" — reported
+// live after the strip-only fix, because dragging the body of the model does
+// nothing). MIDDLE-mouse-drag is unused by anything here, so it moves the
+// window from ANYWHERE on the avatar, no modifier key needed.
+let middleDragActive = false;
+window.addEventListener(
+  "mousedown",
+  (event) => {
+    if (event.button === 1) {
+      middleDragActive = true;
+      ipcRenderer.send("persona:drag-start", { x: event.screenX, y: event.screenY });
+      event.preventDefault();
+    }
+  },
+  true,
+);
+window.addEventListener(
+  "mousemove",
+  (event) => {
+    if (middleDragActive) ipcRenderer.send("persona:drag-move", { x: event.screenX, y: event.screenY });
+  },
+  true,
+);
+window.addEventListener(
+  "mouseup",
+  (event) => {
+    if (event.button === 1 && middleDragActive) {
+      middleDragActive = false;
+      ipcRenderer.send("persona:drag-end");
+    }
+  },
+  true,
+);

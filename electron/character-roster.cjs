@@ -5,6 +5,10 @@ const os = require("node:os");
 const path = require("node:path");
 
 const { filterCharacters, isHidden } = require("./content-rating.cjs");
+const {
+  packProvides,
+  packContentDir,
+} = require("./content-rating-loader.cjs");
 
 const ROOT = path.join(__dirname, "..");
 const ROSTER_DIR = path.join(ROOT, "characters");
@@ -16,23 +20,56 @@ const ASSET_DIRS = [
   path.join(ROOT, "dist", "assets"),
 ];
 
-/** Every character on disk, ratings ignored. Internal — callers that show a
- *  character to a human must use listCharacters() instead. */
-function listAllCharacters() {
-  let entries = [];
+/**
+ * Get pack characters if the persona:characters-mature capability is available.
+ * Returns a list of character names from the pack, or [] if unavailable.
+ */
+function getPackCharacters() {
+  if (!packProvides("persona:characters-mature")) {
+    return [];
+  }
+  const packDir = packContentDir("persona:characters-mature", "persona");
+  if (!packDir) {
+    return [];
+  }
   try {
-    entries = fs.readdirSync(ROSTER_DIR, { withFileTypes: true });
+    const charDir = path.join(packDir, "characters");
+    if (!fs.existsSync(charDir)) {
+      return [];
+    }
+    const entries = fs.readdirSync(charDir, { withFileTypes: true });
+    return entries
+      .filter(
+        (entry) =>
+          entry.isDirectory() &&
+          fs.existsSync(path.join(charDir, entry.name, "model.vrm")),
+      )
+      .map((entry) => entry.name);
   } catch {
     return [];
   }
-  return entries
-    .filter(
-      (entry) =>
-        entry.isDirectory() &&
-        fs.existsSync(path.join(ROSTER_DIR, entry.name, "model.vrm")),
-    )
-    .map((entry) => entry.name)
-    .sort();
+}
+
+/** Every character on disk (dev tree + pack), ratings ignored. Internal — callers that show a
+ *  character to a human must use listCharacters() instead. */
+function listAllCharacters() {
+  let devCharacters = [];
+  try {
+    const entries = fs.readdirSync(ROSTER_DIR, { withFileTypes: true });
+    devCharacters = entries
+      .filter(
+        (entry) =>
+          entry.isDirectory() &&
+          fs.existsSync(path.join(ROSTER_DIR, entry.name, "model.vrm")),
+      )
+      .map((entry) => entry.name);
+  } catch {
+    devCharacters = [];
+  }
+
+  const packCharacters = getPackCharacters();
+  const combined = [...devCharacters, ...packCharacters];
+  return Array.from(new Set(combined)).sort();
 }
 
 /** The roster as a human may see it: R18/R15 characters are dropped entirely
@@ -91,9 +128,22 @@ function getActiveCharacter() {
  *  at the point of display. */
 function installCharacter(name) {
   if (isHidden(name)) return false;
-  const source = path.join(ROSTER_DIR, name);
-  const model = path.join(source, "model.vrm");
+
+  // Try dev tree first, then pack
+  let source = path.join(ROSTER_DIR, name);
+  let model = path.join(source, "model.vrm");
+
+  if (!fs.existsSync(model)) {
+    // Try loading from pack
+    const packDir = packContentDir("persona:characters-mature", "persona");
+    if (packDir) {
+      source = path.join(packDir, "characters", name);
+      model = path.join(source, "model.vrm");
+    }
+  }
+
   if (!fs.existsSync(model)) return false;
+
   for (const assetDir of ASSET_DIRS) {
     fs.mkdirSync(path.join(assetDir, "animations"), { recursive: true });
     fs.copyFileSync(model, path.join(assetDir, "model.vrm"));
@@ -146,12 +196,57 @@ function enrollNewestDownload(preferredName = null) {
   return base;
 }
 
+/** Copy a character's model (and optional animation overrides) into asset trees
+ *  for a spawned slot (not the default slot). Returns the relative asset URL
+ *  to load (e.g. './assets/model-slot1.vrm') on success, or null on failure.
+ *
+ *  Unlike installCharacter(), this does NOT write ACTIVE_FILE or call
+ *  rememberCharacter() — those are roster-wide concepts for slot 0, not
+ *  per-slot. Refuses a hidden character (same gate as installCharacter). */
+function installCharacterToSlot(name, slotId) {
+  if (isHidden(name)) return null;
+
+  // Try dev tree first, then pack
+  let source = path.join(ROSTER_DIR, name);
+  let model = path.join(source, "model.vrm");
+
+  if (!fs.existsSync(model)) {
+    // Try loading from pack
+    const packDir = packContentDir("persona:characters-mature", "persona");
+    if (packDir) {
+      source = path.join(packDir, "characters", name);
+      model = path.join(source, "model.vrm");
+    }
+  }
+
+  if (!fs.existsSync(model)) return null;
+
+  const modelFilename = `model-${slotId}.vrm`;
+  for (const assetDir of ASSET_DIRS) {
+    fs.mkdirSync(path.join(assetDir, "animations"), { recursive: true });
+    fs.copyFileSync(model, path.join(assetDir, modelFilename));
+    const animations = path.join(source, "animations");
+    if (fs.existsSync(animations)) {
+      for (const file of fs.readdirSync(animations)) {
+        if (file.endsWith(".vrma")) {
+          fs.copyFileSync(
+            path.join(animations, file),
+            path.join(assetDir, "animations", file),
+          );
+        }
+      }
+    }
+  }
+  return `./assets/${modelFilename}`;
+}
+
 module.exports = {
   ROSTER_DIR,
   getRecentCharacters,
   enrollNewestDownload,
   getActiveCharacter,
   installCharacter,
+  installCharacterToSlot,
   listAllCharacters,
   listCharacters,
 };

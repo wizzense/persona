@@ -41,6 +41,8 @@ function createPersonaMcpServer({
   onAgent = null,
   listAgentAvatars = null,
   onExportPortrait = null,
+  onSpawnAvatar = null,
+  onRemoveAvatar = null,
 }) {
   const server = new McpServer(
     {
@@ -266,6 +268,76 @@ function createPersonaMcpServer({
         },
       },
       async () => textResult(JSON.stringify(await onExportPortrait())),
+    );
+  }
+
+  if (onSpawnAvatar != null) {
+    server.registerTool(
+      "spawn_avatar",
+      {
+        title: "Add a second avatar to the scene",
+        description:
+          "Add a SECOND (or further) avatar to the scene in a new slot, without disturbing the existing avatar(s). Unlike set_character, this does NOT reload the window or replace the default avatar — it adds a new model alongside what's already showing.",
+        inputSchema: {
+          slot_id: z
+            .string()
+            .min(1)
+            .max(32)
+            .regex(/^[a-z0-9_-]+$/)
+            .describe("A short alphanumeric identifier for this avatar slot (e.g., 'slot1', 'char-bob')."),
+          name: z
+            .string()
+            .min(1)
+            .max(64)
+            .describe("The roster character name, as returned by list_characters."),
+        },
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+      },
+      async ({ slot_id, name }) => {
+        const ok = await onSpawnAvatar(slot_id, name);
+        return textResult(
+          ok
+            ? `Avatar spawned in slot ${slot_id} with character ${name}.`
+            : `Failed to spawn avatar: slot_id may be reserved (use a custom id like 'slot1'), or character ${name} is not installed.`,
+        );
+      },
+    );
+  }
+
+  if (onRemoveAvatar != null) {
+    server.registerTool(
+      "remove_avatar",
+      {
+        title: "Remove a spawned avatar slot",
+        description:
+          "Remove a previously spawned avatar slot from the scene. Cannot remove the original/default slot.",
+        inputSchema: {
+          slot_id: z
+            .string()
+            .min(1)
+            .max(32)
+            .describe("The slot id of the avatar to remove (e.g., 'slot1')."),
+        },
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+      },
+      async ({ slot_id }) => {
+        const ok = await onRemoveAvatar(slot_id);
+        return textResult(
+          ok
+            ? `Avatar slot ${slot_id} removed.`
+            : `Failed to remove slot ${slot_id}: it may not exist, or it may be the default slot (which cannot be removed).`,
+        );
+      },
     );
   }
 
