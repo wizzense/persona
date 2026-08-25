@@ -1060,9 +1060,13 @@ if (!app.requestSingleInstanceLock()) {
         // Cap the burst: three individual notifications, then one rollup.
         const fresh = cards.filter((c) => !previouslyKnown.has(c.id));
         for (const card of fresh.slice(0, 3)) {
+          const where = card.tab || card.cwd || card.agent;
           const n = new Notification({
             title: card.title,
-            body: card.summary || "A decision card needs your answer.",
+            body:
+              (card.summary || "A decision card needs your answer.") +
+              (where && !card.title.includes(where) ? `
+${where}` : ""),
             silent: card.urgency !== "critical" && card.urgency !== "high",
           });
           n.on("click", () => decisionCards.openQueueWindow());

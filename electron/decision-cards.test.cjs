@@ -19,6 +19,21 @@ function writeCard(dir, id, extra = {}) {
   );
 }
 
+test("listOpen carries the card's ORIGIN (tab/cwd/agent) so a toast can name it", () => {
+  const dir = tmpStore();
+  writeCard(dir, "d-src", {
+    source: { tab_title: "my-tab", cwd: "C:\work", agent: "claude-code" },
+  });
+  const [card] = listOpen(dir);
+  assert.equal(card.tab, "my-tab");
+  assert.equal(card.cwd, "C:\work");
+  assert.equal(card.agent, "claude-code");
+  // absent source stays empty strings, never undefined — toast code concatenates
+  writeCard(dir, "d-bare", {});
+  const bare = listOpen(dir).find((c) => c.id === "d-bare");
+  assert.equal(bare.tab, "");
+});
+
 test("listOpen returns open cards oldest-first and skips closed/broken ones", () => {
   const dir = tmpStore();
   writeCard(dir, "d-old", { created_at: 100 });

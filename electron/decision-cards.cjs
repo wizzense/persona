@@ -83,12 +83,18 @@ function listOpen(dir = storeDir()) {
     }
     if (!raw || typeof raw !== "object" || raw.status !== "open") continue;
     if (typeof raw.id !== "string" || raw.id.length === 0) continue;
+    const source = raw.source && typeof raw.source === "object" ? raw.source : {};
     cards.push({
       id: raw.id,
       title: typeof raw.title === "string" ? raw.title : "Decision needed",
       summary: typeof raw.summary === "string" ? raw.summary : "",
       urgency: typeof raw.urgency === "string" ? raw.urgency : "normal",
       createdAt: Number(raw.created_at) || 0,
+      // WHERE the ask came from — a toast with no identity is noise the owner
+      // cannot act on when a dozen sessions are open (owner report 2026-08-25).
+      tab: typeof source.tab_title === "string" ? source.tab_title : "",
+      cwd: typeof source.cwd === "string" ? source.cwd : "",
+      agent: typeof source.agent === "string" ? source.agent : "",
     });
   }
   cards.sort((a, b) => a.createdAt - b.createdAt);
