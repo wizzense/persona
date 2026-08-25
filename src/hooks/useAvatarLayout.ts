@@ -5,14 +5,14 @@ export interface AvatarTransform {
   scale: number;
 }
 
-const STORAGE_KEY = 'persona.avatar-layout.v1';
+const STORAGE_KEY = 'desk.avatar-layout.v1';
 
 /** The farthest a stored/dragged avatar may sit from the origin, per axis. The scene's
  *  usable stage is a few units across; anything beyond this is not a placement, it is an
  *  accident. Measured 2026-08-25: slot0 was persisted at z=-2665 (a near-horizontal drag
  *  ray intersecting the ground plane out at the horizon), so every boot restored an
  *  avatar 2,600 units away — a perfectly healthy renderer showing NOTHING, no errors,
- *  which read as "Persona is broken".
+ *  which read as "Desk is broken".
  *
  *  10 was the first value and it was STILL a hole: full-body camera framing shows only
  *  about ±2 units of stage, so a click-teleport artifact at e.g. x=-8 (see

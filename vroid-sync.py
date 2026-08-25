@@ -1,4 +1,4 @@
-"""Sync VRoid Hub character models into Persona's roster — the licensed, programmatic path.
+"""Sync VRoid Hub character models into Desk's roster — the licensed, programmatic path.
 
 Uses the canonical AitherOS client (AitherOS/lib/integrations/vroid_hub.py). Every download
 goes through VRoid Hub's own download-license API, so only models whose creators permit use
@@ -24,7 +24,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-PERSONA_ROOT = Path(__file__).parent
+DESK_ROOT = Path(__file__).parent
 MONOREPO_LIB = Path(r"D:\AitherOS-Fresh\AitherOS")
 if MONOREPO_LIB.exists():
     sys.path.insert(0, str(MONOREPO_LIB))
@@ -131,7 +131,7 @@ def enroll(hub: VRoidHub, model: dict, *, switch: bool = True) -> str | None:
     if not model.get("is_downloadable", False):
         print(f"  SKIP {name} ({model_id}): creator has not enabled download")
         return None
-    dest = PERSONA_ROOT / "characters" / slug / "model.vrm"
+    dest = DESK_ROOT / "characters" / slug / "model.vrm"
     hub.download_vrm(model_id, dest)
     install_motions(hub, model_id, dest.parent)
     rating = rating_from_model(model)
@@ -149,7 +149,7 @@ def enroll(hub: VRoidHub, model: dict, *, switch: bool = True) -> str | None:
                 "-ExecutionPolicy",
                 "Bypass",
                 "-File",
-                str(PERSONA_ROOT / "switch-character.ps1"),
+                str(DESK_ROOT / "switch-character.ps1"),
                 slug,
             ],
             check=False,
@@ -210,7 +210,7 @@ def main() -> int:
                 if not d:
                     continue
                 name = d.get("name") or d.get("character", {}).get("name") or mid
-                if (PERSONA_ROOT / "characters" / slugify(name) / "model.vrm").exists():
+                if (DESK_ROOT / "characters" / slugify(name) / "model.vrm").exists():
                     continue
                 if not d.get("is_downloadable"):
                     nodl += 1

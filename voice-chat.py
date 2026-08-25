@@ -1,9 +1,9 @@
-"""Talk to the Persona avatar — speech in, agent thinks, avatar speaks with lip sync.
+"""Talk to the Desk avatar — speech in, agent thinks, avatar speaks with lip sync.
 
 The loop:  mic -> AitherVoice /voice/transcribe/base64 (faster-whisper)
                 -> genesis /chat  -> reply text
                 -> AitherVoice /voice/synthesize -> mp3
-                -> play locally while driving Persona's speaking state + audio levels.
+                -> play locally while driving Desk's speaking state + audio levels.
 
 TLS: AitherVoice is HTTPS behind the AitherNet internal CA. This trusts that CA properly
 (`AitherOS/config/certs/aithernet-ca-bundle.pem`, override with AITHER_CA_BUNDLE) — never
@@ -12,7 +12,7 @@ disable verification (CLAUDE.md ground truth).
 Usage:
     python voice-chat.py                      # push-to-talk: ENTER starts, ENTER stops
     python voice-chat.py --text "hello"       # one shot, no microphone needed
-    python voice-chat.py --no-avatar          # skip the Persona window entirely
+    python voice-chat.py --no-avatar          # skip the Desk window entirely
 """
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ PERSONA_EVENTS = os.environ.get("PERSONA_EVENTS_URL", "http://127.0.0.1:47831/ev
 CA_BUNDLE = os.environ.get(
     "AITHER_CA_BUNDLE", r"D:\AitherOS-Fresh\AitherOS\config\certs\aithernet-ca-bundle.pem"
 )
-SESSION_ID = os.environ.get("PERSONA_VOICE_SESSION", "persona-voice-chat")
+SESSION_ID = os.environ.get("DESK_VOICE_SESSION", "desk-voice-chat")
 SAMPLE_RATE = 16_000
 
 
@@ -59,7 +59,7 @@ def post_json(url: str, payload: dict, timeout: float, context: ssl.SSLContext |
         return json.loads(response.read())
 
 
-# ── Persona avatar (fire-and-forget; a missing avatar never blocks the conversation) ──
+# ── Desk avatar (fire-and-forget; a missing avatar never blocks the conversation) ──
 
 class Avatar:
     def __init__(self, enabled: bool = True):
@@ -188,7 +188,7 @@ def ask_agent_streaming(message: str) -> str:
 
 def play_audio(audio: bytes, fmt: str) -> Path:
     """Write the clip and hand it to the OS player, detached (never blocks the loop)."""
-    path = Path(tempfile.gettempdir()) / f"persona-reply.{fmt}"
+    path = Path(tempfile.gettempdir()) / f"desk-reply.{fmt}"
     path.write_bytes(audio)
     if sys.platform == "win32":
         subprocess.Popen(  # noqa: S603 - fixed argv, path is ours
@@ -233,7 +233,7 @@ def record_push_to_talk() -> bytes | None:
 
     if not frames:
         return None
-    path = Path(tempfile.gettempdir()) / "persona-mic.wav"
+    path = Path(tempfile.gettempdir()) / "desk-mic.wav"
     with wave.open(str(path), "wb") as out:
         out.setnchannels(1)
         out.setsampwidth(2)
@@ -261,9 +261,9 @@ def turn(text: str, avatar: Avatar, context: ssl.SSLContext, voice: str | None) 
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Talk to the Persona avatar.")
+    parser = argparse.ArgumentParser(description="Talk to the Desk avatar.")
     parser.add_argument("--text", help="one-shot message; skips the microphone")
-    parser.add_argument("--no-avatar", action="store_true", help="do not drive the Persona window")
+    parser.add_argument("--no-avatar", action="store_true", help="do not drive the Desk window")
     parser.add_argument("--voice", help="AitherVoice voice name (default: service default)")
     args = parser.parse_args()
 
@@ -274,7 +274,7 @@ def main() -> int:
         turn(args.text, avatar, context, args.voice)
         return 0
 
-    print("Persona voice chat — ENTER to talk, type 'quit' to exit.\n")
+    print("Desk voice chat — ENTER to talk, type 'quit' to exit.\n")
     avatar.animate("GREETING")
     while True:
         audio = record_push_to_talk()

@@ -19,7 +19,7 @@ def is_skip_dir(dirname):
 def main():
     repo_root = Path(__file__).parent.parent
     pgship_file = repo_root / ".pgship"
-    output_dir = repo_root / "dist" / "persona-pg"
+    output_dir = repo_root / "dist" / "desk-pg"
 
     # Fail if .pgship is missing
     if not pgship_file.exists():
@@ -77,13 +77,13 @@ def main():
     # scope for AitherOS ACG008, so an unverified bundle is unshippable.
     sys.path.insert(0, str(Path(__file__).parent))
     from pg_verify import verify_or_die
-    verify_or_die(output_dir, "persona")
+    verify_or_die(output_dir, "desk")
 
     # Write marker
     artifact_marker = output_dir / ".pg-artifact"
     timestamp = datetime.utcnow().isoformat() + "Z"
     with open(artifact_marker, "w") as f:
-        f.write(f"tree: persona\n")
+        f.write(f"tree: desk\n")
         f.write(f"build_timestamp: {timestamp}\n")
         f.write(f"files_shipped: {copied}\n")
         f.write(f"files_excluded: {skipped}\n")

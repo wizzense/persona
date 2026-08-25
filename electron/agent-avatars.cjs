@@ -25,7 +25,7 @@ const MAP_FILE = path.join(ROOT, ".agent-avatars.json");
  *  1. AGENT_ROSTER in awdk/adk/harnesses/agents.py — the "sovereign" platform agents
  *     (aither, aeon, plutus, viviane, ...) that route through Genesis /chat/stream and
  *     have no local pack of their own. Mirrored (still generated, because it's Python and
- *     Persona is Node — a cross-language read needs SOME artifact) by
+ *     Desk is Node — a cross-language read needs SOME artifact) by
  *     `python AitherOS/dev/tools/gen_persona_agent_roster.py` into agent-roster.generated.json.
  *  2. AitherOS/Library/packs/*​/{agent.yaml,brain_pack.yaml} — the REAL, larger, growing set
  *     of pack-defined agents (gargbot, saga, dgg, vera, chaos, jgames, ...) that the
@@ -41,7 +41,7 @@ const MAP_FILE = path.join(ROOT, ".agent-avatars.json");
  *  lyra-wiki, aitherium) — a "fixed" roster that was still a stub of the owner's actual
  *  fleet, just a bigger one. */
 const GENERATED_ROSTER_FILE = path.join(__dirname, "agent-roster.generated.json");
-// Overridable because Persona and the monorepo can live on different drives/paths per
+// Overridable because Desk and the monorepo can live on different drives/paths per
 // machine (this repo's own storage-topology doctrine: C:\AitherOS-Fresh is canonical,
 // D:\AitherOS-Fresh is not — a sibling module here, aithershell-export.cjs, still hardcodes
 // the stale D: path; not fixed here, out of scope for this change, flagged for follow-up).
@@ -123,7 +123,7 @@ function clearAgentAvatar(agent) {
 /** Agents to show in menus: the known set plus anything already assigned.
  *
  *  Re-scans live (loadKnownAgents(), not the module-level KNOWN_AGENTS constant) so a
- *  pack added to Library/packs/ while Persona is already running appears the next time
+ *  pack added to Library/packs/ while Desk is already running appears the next time
  *  the menu opens — no restart needed. The readdir + a couple of existsSync per directory
  *  is cheap enough (~80 packs) to redo on every menu build; this is not a hot path. */
 function listAgents() {

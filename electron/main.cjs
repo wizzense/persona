@@ -17,7 +17,7 @@ const {
 const decisionCards = require("./decision-cards.cjs");
 const { createBridgeServer, DEFAULT_PORT } = require("./bridge-server.cjs");
 const {
-  createPersonaMcpHandler,
+  createDeskMcpHandler,
   getAnimationEventName,
   ANIMATION_EVENT_NAMES,
 } = require("./mcp-server.cjs");
@@ -151,7 +151,7 @@ function buildSizeMenu() {
   ];
 }
 const startInBackground = process.argv.includes("--background");
-const protocolScheme = "persona";
+const protocolScheme = "desk";
 const debugEnabled = process.env.PERSONA_DEBUG === "1";
 
 let avatarWindow = null;
@@ -180,7 +180,7 @@ const avatarSlots = new Map(); // Map<slotId, { name, modelUrl }> — tracks spa
 app.setName("Persona");
 
 function debugLog(...values) {
-  if (debugEnabled) console.error("[persona]", ...values);
+  if (debugEnabled) console.error("[desk]", ...values);
 }
 
 function positionWindow(window) {
@@ -396,8 +396,8 @@ function createWindow() {
     ]).popup({ window: avatarWindow });
   };
   avatarWindow.webContents.on("context-menu", popupAvatarMenu);
-  ipcMain.removeAllListeners("persona:context-menu");
-  ipcMain.on("persona:context-menu", popupAvatarMenu);
+  ipcMain.removeAllListeners("desk:context-menu");
+  ipcMain.on("desk:context-menu", popupAvatarMenu);
 
   // D-2170: middle-mouse-drag window move (preload.cjs sends these). Tracks
   // the mouse's screen position at drag start against the window's own
@@ -405,15 +405,15 @@ function createWindow() {
   // move — works from anywhere on the avatar, doesn't touch left/right
   // click at all so OrbitControls and the context menu stay untouched.
   let dragOrigin = null;
-  ipcMain.removeAllListeners("persona:drag-start");
-  ipcMain.removeAllListeners("persona:drag-move");
-  ipcMain.removeAllListeners("persona:drag-end");
-  ipcMain.on("persona:drag-start", (_event, { x, y }) => {
+  ipcMain.removeAllListeners("desk:drag-start");
+  ipcMain.removeAllListeners("desk:drag-move");
+  ipcMain.removeAllListeners("desk:drag-end");
+  ipcMain.on("desk:drag-start", (_event, { x, y }) => {
     if (!avatarWindow) return;
     const [winX, winY] = avatarWindow.getPosition();
     dragOrigin = { mouseX: x, mouseY: y, winX, winY };
   });
-  ipcMain.on("persona:drag-move", (_event, { x, y }) => {
+  ipcMain.on("desk:drag-move", (_event, { x, y }) => {
     if (!dragOrigin || !avatarWindow) return;
     avatarWindow.setPosition(
       Math.round(dragOrigin.winX + (x - dragOrigin.mouseX)),
@@ -421,7 +421,7 @@ function createWindow() {
       false,
     );
   });
-  ipcMain.on("persona:drag-end", () => {
+  ipcMain.on("desk:drag-end", () => {
     dragOrigin = null;
   });
   void avatarWindow.loadURL(rendererUrl);
@@ -432,7 +432,7 @@ function flushPendingRendererEvents() {
   rendererLoadHookAttached = false;
   if (!avatarWindow || avatarWindow.isDestroyed() || avatarWindow.webContents.isLoading()) return;
   for (const event of pendingRendererEvents.values()) {
-    avatarWindow.webContents.send("persona:event", event);
+    avatarWindow.webContents.send("desk:event", event);
   }
   pendingRendererEvents.clear();
 }
@@ -458,7 +458,7 @@ function emitToRenderer(event) {
     ensureRendererLoadHook();
     return;
   }
-  avatarWindow.webContents.send("persona:event", event);
+  avatarWindow.webContents.send("desk:event", event);
   pendingRendererEvents.delete(event.type);
 }
 
@@ -549,7 +549,7 @@ function openModelBrowser() {
 }
 
 /** Open AitherShell — the platform's real chat client. It already drives this avatar
- *  (speaking state + emotion animations via its persona-bridge), so talking to Aither
+ *  (speaking state + emotion animations via its desk-bridge), so talking to Aither
  *  there IS talking to the character on screen. Deliberately NOT a second chat UI. */
 function openTalkWindow() {
   const { spawn } = require("node:child_process");
@@ -616,7 +616,7 @@ function spawnAvatarSlot(slotId, name, agent) {
   debugLog("avatar slot spawned", slotId, name, agent ? `(agent: ${agent})` : "");
   showOverlay();
   if (avatarWindow && !avatarWindow.isDestroyed()) {
-    avatarWindow.webContents.send("persona:event", {
+    avatarWindow.webContents.send("desk:event", {
       type: "spawn-avatar",
       slotId,
       modelUrl,
@@ -635,7 +635,7 @@ function removeAvatarSlot(slotId) {
   avatarSlots.delete(slotId);
   debugLog("avatar slot removed", slotId);
   if (avatarWindow && !avatarWindow.isDestroyed()) {
-    avatarWindow.webContents.send("persona:event", {
+    avatarWindow.webContents.send("desk:event", {
       type: "remove-avatar",
       slotId,
     });
@@ -760,7 +760,7 @@ function buildCharacterMenu() {
     {
       label: "Send this character to AitherShell",
       click: () => {
-        const name = getActiveCharacter() || "persona";
+        const name = getActiveCharacter() || "desk";
         showOverlay();
         exportToAitherShell(avatarWindow, name, handleBridgeEvent)
           .then((result) => debugLog("aithershell portrait written", result))
@@ -927,15 +927,15 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(async () => {
     // Unpackaged runs (npx electron .) have no Start Menu shortcut registering
     // the AUMID, so Windows shows the RAW id as every toast's header — the
-    // owner's decision-card notification read "com.xikhar.persona" instead of
+    // owner's decision-card notification read "com.xikhar.awdesk" instead of
     // the app's name (screenshot, 2026-08-25). Dev uses the display name;
     // packaged installs keep the registered id so their toast grouping and
     // notification settings survive.
-    app.setAppUserModelId(app.isPackaged ? "com.xikhar.persona" : "Persona");
+    app.setAppUserModelId(app.isPackaged ? "com.xikhar.awdesk" : "Desk");
     app.dock?.hide();
     if (app.isPackaged) app.setAsDefaultProtocolClient(protocolScheme);
 
-    ipcMain.handle("persona:get-snapshot", () => {
+    ipcMain.handle("desk:get-snapshot", () => {
       // The renderer pulls this once per mount — including after the window
       // reload applyCharacter() does. Spawned avatar slots live only in main's
       // memory, and until 2026-08-24 nothing re-sent them after a reload, so
@@ -947,7 +947,7 @@ if (!app.requestSingleInstanceLock()) {
       // The renderer de-dupes by slotId, so a second pull cannot double-spawn.
       if (avatarWindow && !avatarWindow.isDestroyed()) {
         for (const [slotId, info] of avatarSlots) {
-          avatarWindow.webContents.send("persona:event", {
+          avatarWindow.webContents.send("desk:event", {
             type: "spawn-avatar",
             slotId,
             modelUrl: info.modelUrl,
@@ -957,9 +957,9 @@ if (!app.requestSingleInstanceLock()) {
       }
       return latestEvent;
     });
-    ipcMain.on("persona:hide", () => void hideOverlay());
+    ipcMain.on("desk:hide", () => void hideOverlay());
 
-    const mcpHandler = createPersonaMcpHandler({
+    const mcpHandler = createDeskMcpHandler({
       onAnimation: (animation) => {
         let animationEvent;
         if (animation.startsWith("FILE:")) {
@@ -967,7 +967,7 @@ if (!app.requestSingleInstanceLock()) {
         } else {
           const eventName = getAnimationEventName(animation);
           // Report the miss instead of dropping it. Returning undefined here made
-          // play_animation answer "Persona is playing the X animation" for a clip that
+          // play_animation answer "Desk is playing the X animation" for a clip that
           // was never played, so a caller could not tell a typo from a working request —
           // the worst outcome, because it teaches them the feature works.
           if (eventName == null) return false;
@@ -992,7 +992,7 @@ if (!app.requestSingleInstanceLock()) {
       onAgent: (agent) => applyAgentAvatar(agent),
       listAgentAvatars: () => loadAgentAvatars(),
       onExportPortrait: async () => {
-        const name = getActiveCharacter() || "persona";
+        const name = getActiveCharacter() || "desk";
         showOverlay();
         return exportToAitherShell(avatarWindow, name, handleBridgeEvent);
       },
@@ -1017,7 +1017,7 @@ if (!app.requestSingleInstanceLock()) {
       await bridge.listen();
     } catch (error) {
       console.error(
-        "[persona] local integration server unavailable:",
+        "[desk] local integration server unavailable:",
         error instanceof Error ? error.message : String(error),
       );
       bridge = null;
@@ -1135,5 +1135,5 @@ app.on("before-quit", () => {
 });
 
 app.on("window-all-closed", () => {
-  // The tray, protocol handler, and adapter server keep Persona available.
+  // The tray, protocol handler, and adapter server keep Desk available.
 });

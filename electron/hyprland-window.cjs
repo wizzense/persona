@@ -4,7 +4,7 @@ const { execFile } = require("node:child_process");
 const { promisify } = require("node:util");
 
 const execFileAsync = promisify(execFile);
-const WINDOW_CLASS = "persona";
+const WINDOW_CLASS = "desk";
 
 function findHyprlandClient(clients, pid) {
   return clients.find(

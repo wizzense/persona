@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="./public/assets/avatar.png" alt="Persona avatar" width="144" />
+  <img src="./public/assets/avatar.png" alt="Desk avatar" width="144" />
 </p>
 
-<h1 align="center">Persona</h1>
+<h1 align="center">Desk</h1>
 
 <p align="center">
   The AitherOS desktop hub — a realtime character presence that bridges your
@@ -11,7 +11,7 @@
 
 ---
 
-Persona began as a desktop character for voice conversations. It has grown into
+Desk began as a desktop character for voice conversations. It has grown into
 the **hub that connects your physical desktop to everything else**, seamlessly,
 whether the backend is aitherium.com or your own local node:
 
@@ -40,11 +40,11 @@ Linux requires `pw-dump` and `pw-record` on `PATH`. Windows process-loopback
 requires Windows 10 build 20348 or newer. macOS asks once for System Audio
 Recording permission.
 
-Each listener is scoped to the supported application's playback process. Persona
+Each listener is scoped to the supported application's playback process. Desk
 does not capture the microphone, save audio, produce speech, transcribe content,
 or send audio over the network.
 
-## Try Persona locally
+## Try Desk locally
 
 Requirements:
 
@@ -60,7 +60,7 @@ npm install
 npm run demo
 ```
 
-`npm run demo` builds the current renderer and launches Persona with normal
+`npm run demo` builds the current renderer and launches Desk with normal
 automatic voice-output detection.
 
 For a background launch:
@@ -69,17 +69,17 @@ For a background launch:
 npm start -- --background
 ```
 
-## Connect Persona to Codex
+## Connect Desk to Codex
 
-With Persona running, register its local MCP server:
+With Desk running, register its local MCP server:
 
 ```bash
-codex mcp add persona --url http://127.0.0.1:47831/mcp
+codex mcp add desk --url http://127.0.0.1:47831/mcp
 ```
 
-New Codex sessions can then ask Persona to play an installed animation, show or
+New Codex sessions can then ask Desk to play an installed animation, show or
 hide its window, and report whether the local character and voice listener are
-active. Persona remains a separate desktop application; the MCP connection
+active. Desk remains a separate desktop application; the MCP connection
 only exposes its own visual controls.
 
 The window intentionally contains no controls:
@@ -89,7 +89,7 @@ The window intentionally contains no controls:
 - Right-drag to pan.
 - Use your window manager's move gesture to reposition the window.
 
-On Hyprland, Persona also applies floating, pinned, topmost, full-opacity,
+On Hyprland, Desk also applies floating, pinned, topmost, full-opacity,
 no-blur, no-shadow, and decoration-free properties. macOS uses an all-Spaces
 topmost window. Other desktops use the strongest supported Electron window
 hints.
@@ -116,7 +116,7 @@ asset release gate passes. See [Releasing](docs/RELEASING.md).
 ## Replace the character assets before publishing
 
 Character media is intentionally excluded from Git. Local test files must not
-be distributed. Persona's stable replacement slots are:
+be distributed. Desk's stable replacement slots are:
 
 ```text
 assets/
@@ -146,7 +146,7 @@ npm run native:build
 npm run native:test
 ```
 
-The native listener is required before running Persona from source on macOS or
+The native listener is required before running Desk from source on macOS or
 Windows. Linux captures activity through PipeWire and does not build a helper.
 
 More detail:
@@ -156,6 +156,6 @@ More detail:
 - [Release process](docs/RELEASING.md)
 - [Security policy](SECURITY.md)
 
-Persona application source is licensed under the [MIT License](LICENSE).
+Desk application source is licensed under the [MIT License](LICENSE).
 Bundled character assets are excluded from that license and remain test-only
 until replaced and documented.

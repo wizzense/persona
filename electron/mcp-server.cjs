@@ -19,7 +19,7 @@ const ANIMATION_EVENT_NAMES = {
 const ANIMATION_NAMES = Object.keys(ANIMATION_EVENT_NAMES);
 const WINDOW_ACTIONS = ["show", "hide", "toggle"];
 const SERVER_INSTRUCTIONS =
-  "Persona controls the installed local desktop character. Use play_animation when the user asks for a visual reaction or it clearly supports their request. Use control_window to show, hide, or toggle Persona. Persona never speaks or plays audio. get_status is read-only.";
+  "Desk controls the installed local desktop character. Use play_animation when the user asks for a visual reaction or it clearly supports their request. Use control_window to show, hide, or toggle Desk. Desk never speaks or plays audio. get_status is read-only.";
 
 function textResult(text) {
   return {
@@ -31,7 +31,7 @@ function getAnimationEventName(animation) {
   return ANIMATION_EVENT_NAMES[animation] ?? null;
 }
 
-function createPersonaMcpServer({
+function createDeskMcpServer({
   onAnimation,
   onWindowAction,
   getStatus,
@@ -46,7 +46,7 @@ function createPersonaMcpServer({
 }) {
   const server = new McpServer(
     {
-      name: "Persona",
+      name: "Desk",
       version,
     },
     {
@@ -65,9 +65,9 @@ function createPersonaMcpServer({
   server.registerTool(
     "play_animation",
     {
-      title: "Play Persona animation",
+      title: "Play Desk animation",
       description:
-        "Play one installed character animation once in the desktop window. This shows Persona and temporarily takes priority over voice-driven body motion.",
+        "Play one installed character animation once in the desktop window. This shows Desk and temporarily takes priority over voice-driven body motion.",
       inputSchema: {
         animation: animationSchema,
       },
@@ -97,16 +97,16 @@ function createPersonaMcpServer({
           isError: true,
         };
       }
-      return textResult(`Persona is playing the ${displayName} animation.`);
+      return textResult(`Desk is playing the ${displayName} animation.`);
     },
   );
 
   server.registerTool(
     "control_window",
     {
-      title: "Control Persona window",
+      title: "Control Desk window",
       description:
-        "Show, hide, or toggle the local Persona window. Hiding the window does not quit Persona.",
+        "Show, hide, or toggle the local Desk window. Hiding the window does not quit Desk.",
       inputSchema: {
         action: z.enum(WINDOW_ACTIONS).describe("The window action to perform."),
       },
@@ -119,16 +119,16 @@ function createPersonaMcpServer({
     },
     async ({ action }) => {
       const visible = await onWindowAction(action);
-      return textResult(`Persona's window is now ${visible ? "visible" : "hidden"}.`);
+      return textResult(`Desk's window is now ${visible ? "visible" : "hidden"}.`);
     },
   );
 
   server.registerTool(
     "get_status",
     {
-      title: "Get Persona status",
+      title: "Get Desk status",
       description:
-        "Read Persona's window visibility, voice state, and local listener status.",
+        "Read Desk's window visibility, voice state, and local listener status.",
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
@@ -143,7 +143,7 @@ function createPersonaMcpServer({
     server.registerTool(
       "list_characters",
       {
-        title: "List Persona characters",
+        title: "List Desk characters",
         description:
           "List the installed character roster and which character is active.",
         annotations: {
@@ -159,7 +159,7 @@ function createPersonaMcpServer({
     server.registerTool(
       "set_character",
       {
-        title: "Switch Persona character",
+        title: "Switch Desk character",
         description:
           "Switch the desktop window to an installed character from the roster and reload the avatar.",
         inputSchema: {
@@ -191,7 +191,7 @@ function createPersonaMcpServer({
     server.registerTool(
       "list_animations",
       {
-        title: "List Persona animations",
+        title: "List Desk animations",
         description:
           "List the animations play_animation can play: the built-in clips plus any installed " +
           "FILE:<filename.vrma> motion packs.",
@@ -231,7 +231,7 @@ function createPersonaMcpServer({
         const character = await onAgent(agent);
         return textResult(
           character
-            ? `Persona is now showing ${agent}'s avatar (${character}).`
+            ? `Desk is now showing ${agent}'s avatar (${character}).`
             : `No avatar is assigned to ${agent}. Assign one from the avatar menu (Characters > Agents) or with list_agent_avatars.`,
         );
       },
@@ -344,9 +344,9 @@ function createPersonaMcpServer({
   return server;
 }
 
-function createPersonaMcpHandler(controller) {
+function createDeskMcpHandler(controller) {
   return async (request, response, parsedBody) => {
-    const server = createPersonaMcpServer(controller);
+    const server = createDeskMcpServer(controller);
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,
@@ -380,7 +380,7 @@ module.exports = {
   MCP_PATH,
   SERVER_INSTRUCTIONS,
   WINDOW_ACTIONS,
-  createPersonaMcpHandler,
-  createPersonaMcpServer,
+  createDeskMcpHandler,
+  createDeskMcpServer,
   getAnimationEventName,
 };

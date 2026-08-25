@@ -1,12 +1,12 @@
 {
-  "name": "persona",
+  "name": "awdesk",
   "version": "0.1.0-beta.0",
   "description": "A realtime character presence for desktop voice experiences.",
   "author": {
     "name": "xikhar",
     "email": "xikhar@users.noreply.github.com"
   },
-  "desktopName": "persona.desktop",
+  "desktopName": "desk.desktop",
   "private": true,
   "license": "MIT",
   "homepage": "https://github.com/xikhar/persona#readme",
@@ -79,17 +79,17 @@
     "wait-on": "^9.0.3"
   },
   "build": {
-    "appId": "com.xikhar.persona",
-    "productName": "Persona",
+    "appId": "com.xikhar.awdesk",
+    "productName": "Desk",
     "asar": true,
     "directories": {
       "output": "release"
     },
     "protocols": [
       {
-        "name": "Persona",
+        "name": "Desk",
         "schemes": [
-          "persona"
+          "desk"
         ]
       }
     ],
@@ -103,10 +103,10 @@
     ],
     "linux": {
       "category": "Utility",
-      "executableName": "persona",
+      "executableName": "desk",
       "icon": "build/icon.png",
       "syncDesktopName": true,
-      "artifactName": "Persona-${version}-linux-${arch}.${ext}",
+      "artifactName": "Desk-${version}-linux-${arch}.${ext}",
       "target": [
         "AppImage",
         "deb"
@@ -116,16 +116,16 @@
       "target": [
         "nsis"
       ],
-      "artifactName": "Persona-${version}-windows-${arch}-setup.${ext}",
+      "artifactName": "Desk-${version}-windows-${arch}-setup.${ext}",
       "icon": "build/icon.png",
       "requestedExecutionLevel": "asInvoker",
       "signExts": [
-        "persona-audio-listener.exe"
+        "desk-audio-listener.exe"
       ],
       "extraResources": [
         {
-          "from": "native/bin/win32/persona-audio-listener.exe",
-          "to": "native/win32/persona-audio-listener.exe"
+          "from": "native/bin/win32/desk-audio-listener.exe",
+          "to": "native/win32/desk-audio-listener.exe"
         }
       ]
     },
@@ -134,14 +134,14 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Persona"
+      "shortcutName": "Desk"
     },
     "mac": {
       "target": [
         "dmg",
         "zip"
       ],
-      "artifactName": "Persona-${version}-macos-${arch}.${ext}",
+      "artifactName": "Desk-${version}-macos-${arch}.${ext}",
       "category": "public.app-category.utilities",
       "icon": "build/icon.png",
       "minimumSystemVersion": "14.2.0",
@@ -149,15 +149,15 @@
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
       "binaries": [
-        "Contents/Resources/native/darwin/persona-audio-listener"
+        "Contents/Resources/native/darwin/desk-audio-listener"
       ],
       "extendInfo": {
-        "NSAudioCaptureUsageDescription": "Persona listens to supported voice-app output levels to animate your character. Audio is processed in memory and is never stored."
+        "NSAudioCaptureUsageDescription": "Desk listens to supported voice-app output levels to animate your character. Audio is processed in memory and is never stored."
       },
       "extraResources": [
         {
-          "from": "native/bin/darwin/persona-audio-listener",
-          "to": "native/darwin/persona-audio-listener"
+          "from": "native/bin/darwin/desk-audio-listener",
+          "to": "native/darwin/desk-audio-listener"
         }
       ]
     }

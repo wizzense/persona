@@ -1,7 +1,7 @@
 "use strict";
 
 /**
- * Content pack runtime loader for Persona (Node.js/Electron).
+ * Content pack runtime loader for Desk (Node.js/Electron).
  *
  * Answers: "is capability X available right now?"
  *  = an installed pack provides it AND the adult gate is open

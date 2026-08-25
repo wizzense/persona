@@ -6,7 +6,7 @@ const { resolveNativeHelperPath } = require("../electron/native-process-audio-li
 
 function testNative(platform = process.platform) {
   if (!["darwin", "win32"].includes(platform)) {
-    console.log("Persona's Linux listener is covered by the Node test suite.");
+    console.log("Desk's Linux listener is covered by the Node test suite.");
     return;
   }
   const executable = resolveNativeHelperPath({

@@ -18,7 +18,7 @@
  *  iframed app windows (portal./relay./…) persists across restarts. One login, kept.
  *
  *  Verification is honest by construction: did-fail-load and a capturePage uniformity
- *  probe are appended to %TEMP%/persona-living-desktop.log on the one real window the
+ *  probe are appended to %TEMP%/desk-living-desktop.log on the one real window the
  *  owner opens. No extra diagnostic windows are ever spawned (owner-banned).
  */
 
@@ -28,7 +28,7 @@ const fs = require("node:fs");
 const { BrowserWindow, ipcMain, screen, session, shell } = require("electron");
 
 const BASE_URL = process.env.LIVING_DESKTOP_URL || "https://aitherium.com/";
-const LOG_FILE = path.join(os.tmpdir(), "persona-living-desktop.log");
+const LOG_FILE = path.join(os.tmpdir(), "desk-living-desktop.log");
 
 /** `?mode=overlay` is the Living OS's OWN first-party overlay mode (Veil
  *  `src/components/os/overlay-mode.ts` — the exact mode AitherConnect embeds): it skips

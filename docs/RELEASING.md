@@ -1,4 +1,4 @@
-# Releasing Persona
+# Releasing Desk
 
 GitHub releases are produced only from version tags. The expected repository is
 `https://github.com/xikhar/persona`; the workflow does not create or push to it.

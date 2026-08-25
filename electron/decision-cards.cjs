@@ -1,12 +1,12 @@
 "use strict";
 
 /**
- * decision-cards — Persona's window onto the decision-card plane.
+ * decision-cards — Desk's window onto the decision-card plane.
  *
- * Persona is the surface that is ALWAYS on the owner's screen, which makes it the
+ * Desk is the surface that is ALWAYS on the owner's screen, which makes it the
  * right carrier for "a card is waiting on you": tray badge, native notification,
  * and one click into the queue window. Until 2026-08-25 nothing joined the two —
- * cards piled up in ~/.aither/decisions while every Persona surface stayed silent.
+ * cards piled up in ~/.aither/decisions while every Desk surface stayed silent.
  *
  * READ side: the store directory directly. Same box, plain JSON files, and a
  * directory-signature fast path so polling costs two stats, not a full parse.
@@ -14,7 +14,7 @@
  * WRITE side: deliberately NOT here. Answering a card must also deliver the
  * answer into the raising session's steer mailbox; that logic lives in the awask
  * store and re-implementing it in JS would be a rival store that drifts
- * (the DCS001 class). Persona opens the queue window (`awask window`) and the
+ * (the DCS001 class). Desk opens the queue window (`awask window`) and the
  * owner answers there — one implementation, every surface.
  */
 
@@ -102,7 +102,7 @@ function listOpen(dir = storeDir()) {
 }
 
 /**
- * Open the shared queue window. Detached so Persona never holds the window's
+ * Open the shared queue window. Detached so Desk never holds the window's
  * lifetime, windowless spawn so nothing flashes (the gate-1t class).
  */
 function openQueueWindow() {

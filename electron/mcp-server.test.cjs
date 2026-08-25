@@ -11,11 +11,11 @@ const {
   ANIMATION_NAMES,
   SERVER_INSTRUCTIONS,
   WINDOW_ACTIONS,
-  createPersonaMcpHandler,
+  createDeskMcpHandler,
   getAnimationEventName,
 } = require("./mcp-server.cjs");
 
-test("Persona MCP exposes and executes the local character tools", async (context) => {
+test("Desk MCP exposes and executes the local character tools", async (context) => {
   const animations = [];
   const windowActions = [];
   let windowVisible = false;
@@ -31,7 +31,7 @@ test("Persona MCP exposes and executes the local character tools", async (contex
     monitoring: true,
     source: null,
   };
-  const mcpHandler = createPersonaMcpHandler({
+  const mcpHandler = createDeskMcpHandler({
     onAnimation: (animation) => animations.push(animation),
     onWindowAction: (action) => {
       windowActions.push(action);
@@ -48,7 +48,7 @@ test("Persona MCP exposes and executes the local character tools", async (contex
     mcpHandler,
   });
   const address = await bridge.listen();
-  const client = new Client({ name: "persona-test", version: "1.0.0" });
+  const client = new Client({ name: "desk-test", version: "1.0.0" });
   const transport = new StreamableHTTPClientTransport(
     new URL(`http://127.0.0.1:${address.port}/mcp`),
   );
@@ -109,19 +109,19 @@ test("Persona MCP exposes and executes the local character tools", async (contex
   });
 });
 
-test("Persona MCP maps semantic animation names to renderer events", () => {
+test("Desk MCP maps semantic animation names to renderer events", () => {
   assert.equal(getAnimationEventName("happy"), "HAPPY");
   assert.equal(getAnimationEventName("finger-gun"), "FINGER_GUN");
   assert.equal(getAnimationEventName("dance"), "DANCE");
   assert.equal(getAnimationEventName("celebrate"), null);
 });
 
-test("Persona MCP rejects unknown animation names before invoking the app", async (context) => {
+test("Desk MCP rejects unknown animation names before invoking the app", async (context) => {
   const animations = [];
   const bridge = createBridgeServer({
     port: 0,
     onEvent: () => {},
-    mcpHandler: createPersonaMcpHandler({
+    mcpHandler: createDeskMcpHandler({
       onAnimation: (animation) => animations.push(animation),
       onWindowAction: () => false,
       getStatus: () => ({
@@ -132,7 +132,7 @@ test("Persona MCP rejects unknown animation names before invoking the app", asyn
     }),
   });
   const address = await bridge.listen();
-  const client = new Client({ name: "persona-test", version: "1.0.0" });
+  const client = new Client({ name: "desk-test", version: "1.0.0" });
   const transport = new StreamableHTTPClientTransport(
     new URL(`http://127.0.0.1:${address.port}/mcp`),
   );
@@ -153,15 +153,15 @@ test("Persona MCP rejects unknown animation names before invoking the app", asyn
 
 /**
  * play_animation used to report success for a clip that was never played: main.cjs's
- * onAnimation returned undefined for an unknown name and the tool answered "Persona is
+ * onAnimation returned undefined for an unknown name and the tool answered "Desk is
  * playing the X animation" regardless. Measured live 2026-07-29 against a running
- * Persona — a junk name came back as success. A caller could not distinguish a typo from
+ * Desk — a junk name came back as success. A caller could not distinguish a typo from
  * a working request, so the mistake looked like a working feature.
  */
 test("play_animation reports an ERROR when the clip does not exist", async (context) => {
   const attempted = [];
   // Mirrors main.cjs: unknown clip -> false, known clip -> true.
-  const mcpHandler = createPersonaMcpHandler({
+  const mcpHandler = createDeskMcpHandler({
     onAnimation: (animation) => {
       attempted.push(animation);
       return getAnimationEventName(animation) != null || animation.startsWith("FILE:");
@@ -171,7 +171,7 @@ test("play_animation reports an ERROR when the clip does not exist", async (cont
   });
   const bridge = createBridgeServer({ port: 0, onEvent: () => {}, mcpHandler });
   const address = await bridge.listen();
-  const client = new Client({ name: "persona-test-anim", version: "1.0.0" });
+  const client = new Client({ name: "desk-test-anim", version: "1.0.0" });
   const transport = new StreamableHTTPClientTransport(
     new URL(`http://127.0.0.1:${address.port}/mcp`),
   );
@@ -214,14 +214,14 @@ test("play_animation reports an ERROR when the clip does not exist", async (cont
 });
 
 test("a void onAnimation stays backwards-compatible (only false is a refusal)", async (context) => {
-  const mcpHandler = createPersonaMcpHandler({
+  const mcpHandler = createDeskMcpHandler({
     onAnimation: () => undefined,
     onWindowAction: () => true,
     getStatus: () => ({ windowVisible: true, voiceState: null, listener: null }),
   });
   const bridge = createBridgeServer({ port: 0, onEvent: () => {}, mcpHandler });
   const address = await bridge.listen();
-  const client = new Client({ name: "persona-test-legacy", version: "1.0.0" });
+  const client = new Client({ name: "desk-test-legacy", version: "1.0.0" });
   const transport = new StreamableHTTPClientTransport(
     new URL(`http://127.0.0.1:${address.port}/mcp`),
   );
@@ -237,7 +237,7 @@ test("a void onAnimation stays backwards-compatible (only false is a refusal)", 
  * discover which packs were installed (D-1660 in the AitherOS ledger).
  */
 test("list_animations exposes the built-ins AND installed .vrma packs", async (context) => {
-  const mcpHandler = createPersonaMcpHandler({
+  const mcpHandler = createDeskMcpHandler({
     onAnimation: () => true,
     onWindowAction: () => true,
     getStatus: () => ({ windowVisible: true, voiceState: null, listener: null }),
@@ -245,7 +245,7 @@ test("list_animations exposes the built-ins AND installed .vrma packs", async (c
   });
   const bridge = createBridgeServer({ port: 0, onEvent: () => {}, mcpHandler });
   const address = await bridge.listen();
-  const client = new Client({ name: "persona-test-anims", version: "1.0.0" });
+  const client = new Client({ name: "desk-test-anims", version: "1.0.0" });
   const transport = new StreamableHTTPClientTransport(
     new URL(`http://127.0.0.1:${address.port}/mcp`),
   );
@@ -269,14 +269,14 @@ test("list_animations exposes the built-ins AND installed .vrma packs", async (c
 
 test("list_animations is NOT registered when no lister is supplied", async (context) => {
   // Optional capability: an embedder that cannot enumerate must not advertise the tool.
-  const mcpHandler = createPersonaMcpHandler({
+  const mcpHandler = createDeskMcpHandler({
     onAnimation: () => true,
     onWindowAction: () => true,
     getStatus: () => ({ windowVisible: true, voiceState: null, listener: null }),
   });
   const bridge = createBridgeServer({ port: 0, onEvent: () => {}, mcpHandler });
   const address = await bridge.listen();
-  const client = new Client({ name: "persona-test-noanims", version: "1.0.0" });
+  const client = new Client({ name: "desk-test-noanims", version: "1.0.0" });
   const transport = new StreamableHTTPClientTransport(
     new URL(`http://127.0.0.1:${address.port}/mcp`),
   );

@@ -60,7 +60,7 @@ function validateAssets({
   const actual = listRuntimeAssets(assetRoot);
   const mediaAbsent = actual.length === 0;
   if (JSON.stringify(manifestPaths) !== JSON.stringify(expected)) {
-    errors.push("Asset manifest paths do not match Persona's stable asset contract.");
+    errors.push("Asset manifest paths do not match Desk's stable asset contract.");
   }
   for (const asset of manifest.assets ?? []) {
     if (EXPECTED_ASSET_ROLES[asset.path] !== asset.role) {
@@ -68,7 +68,7 @@ function validateAssets({
     }
   }
   if ((!mediaAbsent || release) && JSON.stringify(actual) !== JSON.stringify(expected)) {
-    errors.push("Runtime asset files do not match Persona's stable asset contract.");
+    errors.push("Runtime asset files do not match Desk's stable asset contract.");
   }
 
   if (!mediaAbsent || release) {
@@ -110,8 +110,8 @@ if (require.main === module) {
   } else {
     console.log(
       release
-        ? "Persona assets are complete and marked for distribution."
-        : "Persona asset contract is valid (local character media may be absent).",
+        ? "Desk assets are complete and marked for distribution."
+        : "Desk asset contract is valid (local character media may be absent).",
     );
   }
 }

@@ -2,13 +2,13 @@
 
 const { contextBridge, ipcRenderer } = require("electron");
 
-contextBridge.exposeInMainWorld("personaBridge", {
-  getSnapshot: () => ipcRenderer.invoke("persona:get-snapshot"),
-  hide: () => ipcRenderer.send("persona:hide"),
+contextBridge.exposeInMainWorld("deskBridge", {
+  getSnapshot: () => ipcRenderer.invoke("desk:get-snapshot"),
+  hide: () => ipcRenderer.send("desk:hide"),
   subscribe: (listener) => {
     const handler = (_event, payload) => listener(payload);
-    ipcRenderer.on("persona:event", handler);
-    return () => ipcRenderer.off("persona:event", handler);
+    ipcRenderer.on("desk:event", handler);
+    return () => ipcRenderer.off("desk:event", handler);
   },
 });
 
@@ -30,7 +30,7 @@ window.addEventListener(
     const moved =
       Math.abs(event.screenX - rightDownAt.x) + Math.abs(event.screenY - rightDownAt.y);
     rightDownAt = null;
-    if (moved < 5) ipcRenderer.send("persona:context-menu");
+    if (moved < 5) ipcRenderer.send("desk:context-menu");
   },
   true,
 );
@@ -48,7 +48,7 @@ window.addEventListener(
   (event) => {
     if (event.button === 1) {
       middleDragActive = true;
-      ipcRenderer.send("persona:drag-start", { x: event.screenX, y: event.screenY });
+      ipcRenderer.send("desk:drag-start", { x: event.screenX, y: event.screenY });
       event.preventDefault();
     }
   },
@@ -57,7 +57,7 @@ window.addEventListener(
 window.addEventListener(
   "mousemove",
   (event) => {
-    if (middleDragActive) ipcRenderer.send("persona:drag-move", { x: event.screenX, y: event.screenY });
+    if (middleDragActive) ipcRenderer.send("desk:drag-move", { x: event.screenX, y: event.screenY });
   },
   true,
 );
@@ -66,7 +66,7 @@ window.addEventListener(
   (event) => {
     if (event.button === 1 && middleDragActive) {
       middleDragActive = false;
-      ipcRenderer.send("persona:drag-end");
+      ipcRenderer.send("desk:drag-end");
     }
   },
   true,

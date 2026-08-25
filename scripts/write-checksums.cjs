@@ -16,7 +16,7 @@ function releaseFiles(directory) {
 
 function writeChecksums(directory) {
   const files = releaseFiles(directory);
-  if (files.length === 0) throw new Error(`No Persona release files found in ${directory}`);
+  if (files.length === 0) throw new Error(`No Desk release files found in ${directory}`);
   const lines = files.map((filename) => {
     const contents = fs.readFileSync(path.join(directory, filename));
     const digest = nodeCrypto.createHash("sha256").update(contents).digest("hex");

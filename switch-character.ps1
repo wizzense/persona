@@ -1,4 +1,4 @@
-# Persona character switcher — swap the active VRM character from a local roster.
+# Desk character switcher — swap the active VRM character from a local roster.
 #
 # Roster layout (one dir per character):
 #   D:\persona\characters\<name>\model.vrm            (required)
@@ -6,7 +6,7 @@
 #
 # Usage:
 #   .\switch-character.ps1                # list roster + show active
-#   .\switch-character.ps1 <name>         # switch to <name> and restart Persona
+#   .\switch-character.ps1 <name>         # switch to <name> and restart Desk
 #   .\switch-character.ps1 -Add <name>    # enroll newest Downloads .vrm as <name>, then switch
 param(
     [string]$Name,
@@ -61,8 +61,8 @@ foreach ($assetDir in @("$root\public\assets", "$root\dist\assets")) {
 Set-Content $activeFile $Name
 
 Get-CimInstance Win32_Process -Filter "Name = 'electron.exe'" |
-    Where-Object { $_.CommandLine -match 'persona' } |
+    Where-Object { $_.CommandLine -match 'desk' } |
     ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force -Confirm:$false } catch {} }
 Start-Sleep -Seconds 1
 Start-Process -FilePath "npx.cmd" -ArgumentList "electron", "." -WorkingDirectory $root -WindowStyle Hidden
-Write-Host "Persona restarted as '$Name'."
+Write-Host "Desk restarted as '$Name'."

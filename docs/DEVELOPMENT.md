@@ -1,14 +1,14 @@
-# Developing Persona
+# Developing Desk
 
 ## Architecture
 
-Persona has four intentionally narrow layers:
+Desk has four intentionally narrow layers:
 
 1. Native listeners discover a supported voice process and calculate a
    normalized output level.
 2. The Electron main process owns lifecycle, window behavior, tray commands,
-   URL handling, the local adapter, and Persona's MCP controls.
-3. The sandboxed preload exposes only normalized Persona events.
+   URL handling, the local adapter, and Desk's MCP controls.
+3. The sandboxed preload exposes only normalized Desk events.
 4. React and Three.js render the model, blend VRMA motion, and drive VRM
    expressions.
 
@@ -23,7 +23,7 @@ shell execution.
 
 The existing loopback server routes `POST /mcp` into a fresh stateless
 Streamable HTTP transport for each request. This keeps the MCP layer
-request-response only: Persona does not need sessions, server-initiated
+request-response only: Desk does not need sessions, server-initiated
 notifications, or an additional listening port.
 
 When extending the server:

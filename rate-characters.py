@@ -1,4 +1,4 @@
-"""Rate the installed Persona roster so the adult-content gate can filter it.
+"""Rate the installed Desk roster so the adult-content gate can filter it.
 
 Characters enrolled from now on carry `characters/<slug>/character.json` written
 from VRoid Hub's own `age_limit` flags (vroid-sync.enroll). The roster that
@@ -37,8 +37,8 @@ for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
         _stream.reconfigure(encoding="utf-8", errors="replace")
 
-PERSONA_ROOT = Path(__file__).parent
-ROSTER = PERSONA_ROOT / "characters"
+DESK_ROOT = Path(__file__).parent
+ROSTER = DESK_ROOT / "characters"
 VALID_RATINGS = ("general", "r15", "r18")
 
 # Name markers. Deliberately narrow: a false R18 only hides one character from a
@@ -104,11 +104,11 @@ def hub_ratings() -> dict[str, str]:
     """
     try:
         sys.path.insert(0, r"D:\AitherOS-Fresh\AitherOS")
-        sys.path.insert(0, str(PERSONA_ROOT))
+        sys.path.insert(0, str(DESK_ROOT))
         from lib.integrations.vroid_hub import VRoidHub, VRoidHubError
 
         spec_util = __import__("importlib.util", fromlist=["spec_from_file_location"])
-        spec = spec_util.spec_from_file_location("vroid_sync", PERSONA_ROOT / "vroid-sync.py")
+        spec = spec_util.spec_from_file_location("vroid_sync", DESK_ROOT / "vroid-sync.py")
         vroid_sync = spec_util.module_from_spec(spec)
         spec.loader.exec_module(vroid_sync)
     except Exception as error:

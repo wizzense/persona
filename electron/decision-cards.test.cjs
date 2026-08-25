@@ -9,7 +9,7 @@ const test = require("node:test");
 const { signature, listOpen, watch } = require("./decision-cards.cjs");
 
 function tmpStore() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "persona-decisions-"));
+  return fs.mkdtempSync(path.join(os.tmpdir(), "desk-decisions-"));
 }
 
 function writeCard(dir, id, extra = {}) {
@@ -60,8 +60,8 @@ test("signature moves on create, write and delete — and never on a plain re-re
 });
 
 test("an unreadable store is 'unreadable', never mistaken for empty-and-fine", () => {
-  assert.equal(signature(path.join(os.tmpdir(), "persona-no-such-dir-xyz")), "unreadable");
-  assert.deepEqual(listOpen(path.join(os.tmpdir(), "persona-no-such-dir-xyz")), []);
+  assert.equal(signature(path.join(os.tmpdir(), "desk-no-such-dir-xyz")), "unreadable");
+  assert.deepEqual(listOpen(path.join(os.tmpdir(), "desk-no-such-dir-xyz")), []);
 });
 
 test("watch fires at start and on change, not on quiet polls", () => {

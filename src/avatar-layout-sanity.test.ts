@@ -5,7 +5,7 @@ import { POSITION_BOUND, sane, sanitizeLayout } from './hooks/useAvatarLayout';
 /**
  * The layout store faithfully persisted a horizon-drag accident (slot0 at
  * z=-2665, measured 2026-08-25) and every boot restored it: a healthy renderer
- * showing nothing, no errors — read by the owner as "Persona is broken".
+ * showing nothing, no errors — read by the owner as "Desk is broken".
  * These tests pin the recovery: an out-of-bounds/malformed entry is DROPPED
  * (default placement returns the avatar to view), a sane one survives.
  */

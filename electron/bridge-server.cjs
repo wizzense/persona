@@ -55,7 +55,7 @@ function originAllowed(origin) {
 }
 
 //: Web surfaces allowed to READ the decision queue over this loopback bridge.
-//: The Living Desktop that Persona hosts is the STATIC aitherium.com export,
+//: The Living Desktop that Desk hosts is the STATIC aitherium.com export,
 //: whose /api/decisions is a build-time stub — so without this route the
 //: desktop bell can never see a card on exactly the surface the owner watches
 //: (measured 2026-08-25: "No notifications" over a 673-card queue). Read-only,
@@ -153,7 +153,7 @@ function createBridgeServer({
       return;
     }
 
-    // Read-only decision queue for the web surfaces Persona hosts. Answering
+    // Read-only decision queue for the web surfaces Desk hosts. Answering
     // stays with the shared queue window / daemon — this bridge never mutates
     // the store, so a compromised page could at worst READ titles, not answer
     // an ask on the owner's behalf.

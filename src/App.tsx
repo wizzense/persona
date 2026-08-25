@@ -39,7 +39,7 @@ export function App() {
   const previousSpeaking = useRef(false);
 
   useEffect(() => {
-    const bridge = window.personaBridge;
+    const bridge = window.deskBridge;
     if (!bridge) return;
     void bridge.getSnapshot().then((event) => {
       if (event?.type === 'state') setVoice(event.state);

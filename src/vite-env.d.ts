@@ -43,7 +43,7 @@ type AvatarBridgeEvent =
   | { type: 'remove-avatar'; slotId: string };
 
 interface Window {
-  personaBridge?: {
+  deskBridge?: {
     getSnapshot(): Promise<AvatarBridgeEvent | null>;
     hide(): void;
     subscribe(listener: (event: AvatarBridgeEvent) => void): () => void;

@@ -9,7 +9,7 @@ const { discoverVoiceProcesses } = require("./process-discovery.cjs");
 const SESSION_IDLE_MS = 8_000;
 
 function helperExecutableName(platform) {
-  return platform === "win32" ? "persona-audio-listener.exe" : "persona-audio-listener";
+  return platform === "win32" ? "desk-audio-listener.exe" : "desk-audio-listener";
 }
 
 function resolveNativeHelperPath({

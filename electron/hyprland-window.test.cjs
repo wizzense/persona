@@ -10,8 +10,8 @@ const {
 
 test("findHyprlandClient matches the app class and process", () => {
   const clients = [
-    { class: "persona", pid: 42, address: "0xabc" },
-    { class: "persona", pid: 77, address: "0xdef" },
+    { class: "desk", pid: 42, address: "0xabc" },
+    { class: "desk", pid: 77, address: "0xdef" },
   ];
 
   assert.equal(findHyprlandClient(clients, 77)?.address, "0xdef");

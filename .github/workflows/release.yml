@@ -45,22 +45,22 @@ jobs:
           - name: Linux x64
             platform: linux
             runner: ubuntu-latest
-            artifact: persona-linux-x64
+            artifact: desk-linux-x64
             command: npm run dist:linux
           - name: Windows x64
             platform: windows
             runner: windows-latest
-            artifact: persona-windows-x64
+            artifact: desk-windows-x64
             command: npm run dist:windows
           - name: macOS arm64
             platform: macos
             runner: macos-15
-            artifact: persona-macos-arm64
+            artifact: desk-macos-arm64
             command: npm run dist:mac -- --arm64
           - name: macOS x64
             platform: macos
             runner: macos-15-intel
-            artifact: persona-macos-x64
+            artifact: desk-macos-x64
             command: npm run dist:mac -- --x64
     runs-on: ${{ matrix.runner }}
     steps:
@@ -119,7 +119,7 @@ jobs:
       - name: Download native installers
         uses: actions/download-artifact@v8
         with:
-          pattern: persona-*
+          pattern: desk-*
           path: release-artifacts
           merge-multiple: true
 

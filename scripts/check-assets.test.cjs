@@ -12,7 +12,7 @@ const {
 } = require("./check-assets.cjs");
 
 function createFixture(context) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "persona-assets-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "desk-assets-"));
   const assetRoot = path.join(root, "assets");
   fs.mkdirSync(assetRoot, { recursive: true });
   const manifestPath = path.join(assetRoot, "manifest.json");

@@ -187,7 +187,7 @@ int main(int argc, const char *argv[]) {
     if (tapDescription == nil) {
       return fail(@"Unable to configure the Core Audio process tap.");
     }
-    tapDescription.name = @"Persona voice output meter";
+    tapDescription.name = @"Desk voice output meter";
     [tapDescription setPrivate:YES];
 
     AudioObjectID tapID = kAudioObjectUnknown;
@@ -206,10 +206,10 @@ int main(int argc, const char *argv[]) {
     NSString *tapUID = [(__bridge NSString *)tapUIDRef copy];
     CFRelease(tapUIDRef);
 
-    NSString *aggregateUID = [NSString stringWithFormat:@"com.xikhar.persona.%@",
+    NSString *aggregateUID = [NSString stringWithFormat:@"com.xikhar.awdesk.%@",
                                                         NSUUID.UUID.UUIDString];
     NSDictionary *aggregateDescription = @{
-      @kAudioAggregateDeviceNameKey : @"Persona Output Meter",
+      @kAudioAggregateDeviceNameKey : @"Desk Output Meter",
       @kAudioAggregateDeviceUIDKey : aggregateUID,
       @kAudioAggregateDeviceIsPrivateKey : @YES,
       @kAudioAggregateDeviceTapAutoStartKey : @YES,

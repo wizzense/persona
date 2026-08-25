@@ -4,7 +4,7 @@
  *  a real, separate OS window. This is the actual fix for "janky, only one draggable" —
  *  not a patch on the in-canvas raycast-drag-vs-shared-OrbitControls fight, but removing
  *  that fight entirely: a detached avatar is moved with the OS's own window drag (the
- *  same top-edge drag-handle strip every Persona window already has) and resized with
+ *  same top-edge drag-handle strip every Desk window already has) and resized with
  *  the OS's own edge-resize, both categorically more reliable than 3D raycasting a
  *  pointer against a ground plane inside a camera that also owns rotate-drag. This is
  *  literally what "let me break them out into completely separate boxes" means. */
@@ -58,7 +58,7 @@ function openDetachedAvatar(slotId, modelUrl, title, { onMergeBack } = {}) {
     autoHideMenuBar: true,
     alwaysOnTop: true,
     skipTaskbar: true,
-    title: title || "Persona",
+    title: title || "Desk",
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,

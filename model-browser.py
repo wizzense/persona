@@ -1,9 +1,9 @@
-"""Persona model browser — search/browse VRoid Hub and add characters with one click.
+"""Desk model browser — search/browse VRoid Hub and add characters with one click.
 
 Local UI at http://127.0.0.1:47836 (loopback only). Sources: keyword search, staff picks,
 your hearted models, your uploads, and every model page in Edge history. Filters:
 downloadable-only, age rating. "Add" downloads the model + its personality motions into
-the roster (through the licensed download-license API); "Switch" hot-swaps Persona.
+the roster (through the licensed download-license API); "Switch" hot-swaps Desk.
 
 Run:  python model-browser.py   (opens the page)
 """
@@ -19,14 +19,14 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-PERSONA_ROOT = Path(__file__).parent
+DESK_ROOT = Path(__file__).parent
 sys.path.insert(0, r"D:\AitherOS-Fresh\AitherOS")
-sys.path.insert(0, str(PERSONA_ROOT))
+sys.path.insert(0, str(DESK_ROOT))
 
 from lib.integrations.vroid_hub import VRoidHub, VRoidHubError  # noqa: E402
 
 vs = __import__("importlib.util", fromlist=["spec_from_file_location"])
-_spec = vs.spec_from_file_location("vroid_sync", PERSONA_ROOT / "vroid-sync.py")
+_spec = vs.spec_from_file_location("vroid_sync", DESK_ROOT / "vroid-sync.py")
 vroid_sync = vs.module_from_spec(_spec)
 _spec.loader.exec_module(vroid_sync)
 
@@ -56,7 +56,7 @@ def adult_content_visible() -> bool:
 def character_rating(slug: str) -> str:
     """Recorded rating for an installed character, or 'unrated'."""
     try:
-        raw = (PERSONA_ROOT / "characters" / slug / "character.json").read_text(encoding="utf-8")
+        raw = (DESK_ROOT / "characters" / slug / "character.json").read_text(encoding="utf-8")
         return str(json.loads(raw).get("rating") or "").lower() or "unrated"
     except (OSError, ValueError):
         return "unrated"
@@ -93,7 +93,7 @@ def serialize(model: dict) -> dict:
         "hearts": model.get("heart_count", 0),
         "r18": bool((model.get("age_limit") or {}).get("is_r18")),
         "r15": bool((model.get("age_limit") or {}).get("is_r15")),
-        "in_roster": (PERSONA_ROOT / "characters" / slug / "model.vrm").exists(),
+        "in_roster": (DESK_ROOT / "characters" / slug / "model.vrm").exists(),
         "slug": slug,
         "booth_items": booth_items,
     }
@@ -144,7 +144,7 @@ def fetch_models(source: str, query: str, cursor: str | None = None) -> tuple[li
     return [], None
 
 
-def persona_switch(slug: str) -> bool:
+def desk_switch(slug: str) -> bool:
     body = json.dumps({
         "jsonrpc": "2.0", "id": 1, "method": "tools/call",
         "params": {"name": "set_character", "arguments": {"name": slug}},
@@ -162,16 +162,16 @@ def persona_switch(slug: str) -> bool:
 
 
 def active_character() -> str | None:
-    """The character Persona currently has installed (written by switch/set_character)."""
+    """The character Desk currently has installed (written by switch/set_character)."""
     try:
-        return (PERSONA_ROOT / ".active-character").read_text().strip() or None
+        return (DESK_ROOT / ".active-character").read_text().strip() or None
     except OSError:
         return None
 
 
 def get_roster() -> list[dict]:
     """Return list of installed characters with metadata."""
-    chars = PERSONA_ROOT / "characters"
+    chars = DESK_ROOT / "characters"
     active = active_character()
     adult_ok = adult_content_visible()
     roster = []
@@ -208,12 +208,12 @@ def rename_character(old_name: str, new_name: str) -> dict:
     """Rename a character directory. Returns {ok: bool, error?: str}."""
     if not validate_character_name(old_name) or not validate_character_name(new_name):
         return {"ok": False, "error": "Invalid character name (alphanumeric, dash, underscore, 1-64 chars)"}
-    old_path = (PERSONA_ROOT / "characters" / old_name).resolve()
-    new_path = (PERSONA_ROOT / "characters" / new_name).resolve()
+    old_path = (DESK_ROOT / "characters" / old_name).resolve()
+    new_path = (DESK_ROOT / "characters" / new_name).resolve()
     # Safety: ensure both resolve inside characters/
-    if not str(old_path).startswith(str((PERSONA_ROOT / "characters").resolve())):
+    if not str(old_path).startswith(str((DESK_ROOT / "characters").resolve())):
         return {"ok": False, "error": "Path traversal attempted"}
-    if not str(new_path).startswith(str((PERSONA_ROOT / "characters").resolve())):
+    if not str(new_path).startswith(str((DESK_ROOT / "characters").resolve())):
         return {"ok": False, "error": "Path traversal attempted"}
     if not old_path.exists():
         return {"ok": False, "error": "Character not found"}
@@ -230,9 +230,9 @@ def delete_character(name: str) -> dict:
     """Delete a character directory. Returns {ok: bool, error?: str}."""
     if not validate_character_name(name):
         return {"ok": False, "error": "Invalid character name"}
-    char_path = (PERSONA_ROOT / "characters" / name).resolve()
+    char_path = (DESK_ROOT / "characters" / name).resolve()
     # Safety: ensure it resolves inside characters/
-    if not str(char_path).startswith(str((PERSONA_ROOT / "characters").resolve())):
+    if not str(char_path).startswith(str((DESK_ROOT / "characters").resolve())):
         return {"ok": False, "error": "Path traversal attempted"}
     if not char_path.exists():
         return {"ok": False, "error": "Character not found"}
@@ -244,11 +244,11 @@ def delete_character(name: str) -> dict:
 
 
 def play_animation(name: str, animation: str) -> dict:
-    """Call persona MCP to play an animation. Returns {ok: bool, error?: str}."""
+    """Call desk MCP to play an animation. Returns {ok: bool, error?: str}."""
     if not validate_character_name(name) or not re.match(r"^[\w-]+$", animation):
         return {"ok": False, "error": "Invalid name or animation"}
-    char_path = (PERSONA_ROOT / "characters" / name / "animations" / f"{animation}.vrma").resolve()
-    if not str(char_path).startswith(str((PERSONA_ROOT / "characters").resolve())):
+    char_path = (DESK_ROOT / "characters" / name / "animations" / f"{animation}.vrma").resolve()
+    if not str(char_path).startswith(str((DESK_ROOT / "characters").resolve())):
         return {"ok": False, "error": "Path traversal attempted"}
     if not char_path.exists():
         return {"ok": False, "error": "Animation not found"}
@@ -265,7 +265,7 @@ def play_animation(name: str, animation: str) -> dict:
         with urllib.request.urlopen(request, timeout=10) as response:
             return {"ok": b"success" in response.read()}
     except OSError:
-        return {"ok": False, "error": "Persona not running"}
+        return {"ok": False, "error": "Desk not running"}
 
 
 def add_animation(name: str, filename: str, data: bytes) -> dict:
@@ -274,10 +274,10 @@ def add_animation(name: str, filename: str, data: bytes) -> dict:
         return {"ok": False, "error": "Invalid character name"}
     if not re.match(r"^[\w-]+\.vrma$", filename):
         return {"ok": False, "error": "Invalid filename (must be *.vrma)"}
-    char_path = (PERSONA_ROOT / "characters" / name).resolve()
+    char_path = (DESK_ROOT / "characters" / name).resolve()
     anim_path = (char_path / "animations" / filename).resolve()
     # Safety: ensure paths resolve inside characters/
-    if not str(char_path).startswith(str((PERSONA_ROOT / "characters").resolve())):
+    if not str(char_path).startswith(str((DESK_ROOT / "characters").resolve())):
         return {"ok": False, "error": "Path traversal attempted"}
     if not str(anim_path).startswith(str(char_path)):
         return {"ok": False, "error": "Path traversal attempted"}
@@ -293,7 +293,7 @@ def add_animation(name: str, filename: str, data: bytes) -> dict:
     mirrored = False
     if name == active_character():
         try:
-            live = PERSONA_ROOT / "dist" / "assets" / "animations"
+            live = DESK_ROOT / "dist" / "assets" / "animations"
             live.mkdir(parents=True, exist_ok=True)
             (live / filename).write_bytes(data)
             mirrored = True
@@ -302,7 +302,7 @@ def add_animation(name: str, filename: str, data: bytes) -> dict:
     return {"ok": True, "live": mirrored}
 
 
-PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Persona model browser</title>
+PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Desk model browser</title>
 <style>
 body{margin:0;font-family:system-ui;background:#111;color:#eee}
 header{position:sticky;top:0;background:#1b1b1b;padding:10px 14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;box-shadow:0 2px 8px #0008}
@@ -341,7 +341,7 @@ label{display:flex;gap:5px;align-items:center;font-size:13px;color:#bbb}
 .modal-buttons button{flex:1;padding:10px}
 </style></head><body>
 <header>
- <b>Persona models</b>
+ <b>Desk models</b>
  <span class="tab active" data-s="search">Search</span>
  <span class="tab" data-s="characters">Characters</span>
  <span class="tab" data-s="staff_picks">Staff picks</span>
@@ -399,7 +399,7 @@ async function page(){
     ${m.r18?'<span class="badge r18">R18</span>':''}${m.in_roster?'<span class="badge have">in roster</span>':''}
     <span class="badge">♥ ${m.hearts}</span></div>
    ${boothHTML}
-   <button ${m.downloadable?'':'disabled'} onclick="add('${m.id}',this)">${m.in_roster?'Re-add':'Add to Persona'}</button>
+   <button ${m.downloadable?'':'disabled'} onclick="add('${m.id}',this)">${m.in_roster?'Re-add':'Add to Desk'}</button>
    <button ${m.in_roster?'':'disabled'} onclick="swi('${m.slug}',this)">Switch</button></div>`;
   g.appendChild(c);
  }
@@ -446,10 +446,10 @@ async function add(id,btn){btn.textContent='adding…';btn.disabled=true;
  else{btn.textContent='refused';S.textContent=j.error||'license refused (check app usage settings)';}}
 async function swi(slug,btn){btn.textContent='switching…';
  const r=await fetch('/api/switch',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({slug})});
- btn.textContent=(await r.json()).ok?'active ✓':'persona not running';}
+ btn.textContent=(await r.json()).ok?'active ✓':'desk not running';}
 async function switchChar(name,btn){btn.textContent='switching…';
  const r=await fetch('/api/switch',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({slug:name})});
- btn.textContent=(await r.json()).ok?'active ✓':'persona not running';}
+ btn.textContent=(await r.json()).ok?'active ✓':'desk not running';}
 async function playAnim(name,anim,btn){btn.textContent='▶ playing…';
  const r=await fetch('/api/play',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({name,animation:anim})});
  const j=await r.json();
@@ -539,7 +539,7 @@ class Handler(BaseHTTPRequestHandler):
             if not adult_content_visible() and character_rating(slug) in ADULT_RATINGS:
                 self._json({"ok": False, "error": "not available"}, 403)
                 return
-            self._json({"ok": persona_switch(slug)})
+            self._json({"ok": desk_switch(slug)})
         elif self.path == "/api/rename":
             with lock:
                 result = rename_character(payload.get("name", ""), payload.get("new_name", ""))
@@ -569,7 +569,7 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
-    print(f"Persona model browser: http://127.0.0.1:{PORT}")
+    print(f"Desk model browser: http://127.0.0.1:{PORT}")
     try:
         threading.Thread(target=lambda: webbrowser.open(f"http://127.0.0.1:{PORT}"), daemon=True).start()
     except Exception:

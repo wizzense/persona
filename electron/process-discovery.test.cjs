@@ -50,14 +50,14 @@ test("supports a custom target application pattern without accepting invalid reg
   assert.equal(configuredPattern({ PERSONA_TARGET_PROCESS_PATTERN: "[" }).test("Codex"), true);
 });
 
-test("does not confuse Persona's project path with the Codex application", () => {
+test("does not confuse Desk's project path with the Codex application", () => {
   const selected = selectVoiceProcessTree(
     [
       {
         pid: 40,
         parentId: 1,
-        name: "persona",
-        command: "/home/user/Projects/persona/release/persona",
+        name: "desk",
+        command: "/home/user/Projects/desk/release/desk",
       },
     ],
     { ownProcessId: 999 },

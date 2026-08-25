@@ -28,21 +28,21 @@ function macosCompilerArguments() {
     "-fobjc-arc",
     "-O2",
     "-mmacosx-version-min=14.2",
-    "native/macos/PersonaAudioListener.mm",
+    "native/macos/DeskAudioListener.mm",
     "-framework",
     "Foundation",
     "-framework",
     "CoreAudio",
     "-o",
-    "native/bin/darwin/persona-audio-listener",
+    "native/bin/darwin/desk-audio-listener",
   ];
 }
 
 function windowsBuildCommand(developerShell) {
   const compiler = [
     "cl.exe /nologo /std:c++20 /EHsc /O2 /DUNICODE /D_UNICODE",
-    "native\\windows\\PersonaAudioListener.cpp",
-    "/Fe:native\\bin\\win32\\persona-audio-listener.exe",
+    "native\\windows\\DeskAudioListener.cpp",
+    "/Fe:native\\bin\\win32\\desk-audio-listener.exe",
   ].join(" ");
   return `call "${developerShell}" -no_logo -arch=x64 -host_arch=x64 && ${compiler}`;
 }
@@ -69,7 +69,7 @@ function buildNative(platform = process.platform) {
     const outputDirectory = path.join(PROJECT_ROOT, "native", "bin", "darwin");
     fs.mkdirSync(outputDirectory, { recursive: true });
     run("xcrun", macosCompilerArguments());
-    return path.join(outputDirectory, "persona-audio-listener");
+    return path.join(outputDirectory, "desk-audio-listener");
   }
   if (platform === "win32") {
     const outputDirectory = path.join(PROJECT_ROOT, "native", "bin", "win32");
@@ -92,9 +92,9 @@ function buildNative(platform = process.platform) {
     }
     const developerShell = path.join(installationPath, "Common7", "Tools", "VsDevCmd.bat");
     runWindowsBuildCommand(windowsBuildCommand(developerShell));
-    return path.join(outputDirectory, "persona-audio-listener.exe");
+    return path.join(outputDirectory, "desk-audio-listener.exe");
   }
-  console.log("Persona uses PipeWire commands directly on Linux; no native helper build is needed.");
+  console.log("Desk uses PipeWire commands directly on Linux; no native helper build is needed.");
   return null;
 }
 

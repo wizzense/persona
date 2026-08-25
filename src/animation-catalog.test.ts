@@ -8,7 +8,7 @@ import {
   parseFileAnimation,
 } from './animation-catalog';
 
-describe('Persona animation contract', () => {
+describe('Desk animation contract', () => {
   it('uses every stable replacement slot exactly once in the catalog', () => {
     expect(Object.values(ANIMATION_CATALOG).sort()).toEqual([
       'dance.vrma',

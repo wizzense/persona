@@ -8,7 +8,7 @@ reporting rather than a public issue.
 
 ## Data boundary
 
-Persona's automatic listeners calculate a numeric output level in memory. They
+Desk's automatic listeners calculate a numeric output level in memory. They
 do not capture the microphone, write audio to disk, transcribe it, or send it
 over the network.
 

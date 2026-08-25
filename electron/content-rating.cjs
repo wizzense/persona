@@ -1,9 +1,9 @@
 "use strict";
 
 /**
- * Per-character content rating + the adult-content gate for the Persona roster.
+ * Per-character content rating + the adult-content gate for the Desk roster.
  *
- * Persona is loopback-only and cannot reach the fleet, so it reads the gate from
+ * Desk is loopback-only and cannot reach the fleet, so it reads the gate from
  * the mirror the platform writes on every toggle:
  *
  *     ~/.aither/adult_content.json   ->  {"visible": true|false, ...}

@@ -41,7 +41,7 @@ test("resolves development and packaged helper locations on both native platform
       isPackaged: true,
       resourcesPath: "C:\\resources",
     }),
-    "C:\\resources\\native\\win32\\persona-audio-listener.exe",
+    "C:\\resources\\native\\win32\\desk-audio-listener.exe",
   );
   assert.equal(
     resolveNativeHelperPath({
@@ -49,7 +49,7 @@ test("resolves development and packaged helper locations on both native platform
       projectRoot: "C:\\project",
       isPackaged: false,
     }),
-    "C:\\project\\native\\bin\\win32\\persona-audio-listener.exe",
+    "C:\\project\\native\\bin\\win32\\desk-audio-listener.exe",
   );
   assert.equal(
     resolveNativeHelperPath({
@@ -57,7 +57,7 @@ test("resolves development and packaged helper locations on both native platform
       projectRoot: "/project",
       isPackaged: false,
     }),
-    "/project/native/bin/darwin/persona-audio-listener",
+    "/project/native/bin/darwin/desk-audio-listener",
   );
 });
 

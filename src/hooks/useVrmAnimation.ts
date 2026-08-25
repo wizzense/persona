@@ -136,7 +136,7 @@ export function useVrmAnimation(vrm: VRM | null) {
         current.current = action;
         currentType.current = type;
       } catch (error) {
-        console.warn('[persona] animation load failed', error);
+        console.warn('[desk] animation load failed', error);
         if (generation === requestGeneration.current && playback === 'once') {
           onComplete?.();
         }
