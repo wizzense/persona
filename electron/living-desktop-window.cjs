@@ -167,6 +167,74 @@ async function hasSessionCookie() {
   }
 }
 
+// ── Automatic session link (owner-approved 2026-08-25) ─────────────────────────────
+// The owner runs the FLEET on this box and the vault holds the platform's portal
+// session token (AITHER_PORTAL_TOKEN — the token portal login mints). Injecting it as
+// aither_auth_token into this partition makes the overlay shell render signed-in with
+// no login click, and it refreshes every time the overlay opens. The token is
+// materialized with the sanctioned vault reader (--to-file, never stdout) into a temp
+// file read and deleted here — the value never reaches a transcript, a log, or an env
+// var.
+const PORTAL_TOKEN_FILE = path.join(os.tmpdir(), "desk-portal-token");
+// The vault reader executes in the DISTRO (WSL) and refuses Windows-style --to-file
+// targets ("C:/... is a relative directory named C:") — hand it the same physical
+// file via its /mnt/c spelling; main reads and deletes it by the Windows path.
+const PORTAL_TOKEN_FILE_DISTRO =
+  "/mnt/c/" + PORTAL_TOKEN_FILE.replace(/\\/g, "/").replace(/^[A-Za-z]:\//, "");
+const VAULT_READER = "C:\\AitherOS-Fresh\\AitherOS\\dev\\tools\\aither_secret.py";
+async function syncPortalSessionCookie() {
+  if (await hasSessionCookie()) return;
+  // Cap the reader wait: opening the overlay must never stall on a slow/hung
+  // vault — the window just renders signed-out and the next open retries.
+  await new Promise((resolve) => {
+    const { spawn } = require("node:child_process");
+    const child = spawn(
+      "python",
+      [VAULT_READER, "AITHER_PORTAL_TOKEN", "--to-file", PORTAL_TOKEN_FILE_DISTRO],
+      { stdio: "ignore", windowsHide: true },
+    );
+    const cap = setTimeout(() => {
+      log("portal token reader exceeded 5s — opening signed-out, will retry next open");
+      try {
+        child.kill();
+      } catch {
+        /* already gone */
+      }
+      resolve();
+    }, 5000);
+    child.on("exit", () => {
+      clearTimeout(cap);
+      resolve();
+    });
+    child.on("error", () => {
+      clearTimeout(cap);
+      resolve();
+    });
+  });
+  try {
+    const token = fs.readFileSync(PORTAL_TOKEN_FILE, "utf-8").trim();
+    fs.unlinkSync(PORTAL_TOKEN_FILE);
+    if (!token) return;
+    await session.fromPartition(PARTITION).cookies.set({
+      url: "https://aitherium.com",
+      name: "aither_auth_token",
+      value: token,
+      domain: ".aitherium.com",
+      path: "/",
+      secure: true,
+      httpOnly: true,
+    });
+    log("portal session token injected into overlay partition (from vault)");
+  } catch (err) {
+    log(`portal token sync failed: ${err}`);
+    try {
+      fs.unlinkSync(PORTAL_TOKEN_FILE);
+    } catch {
+      /* already gone */
+    }
+  }
+}
+
 let signInPoll = null;
 function beginSignIn() {
   if (!isOpen()) showLivingDesktop();
@@ -289,9 +357,26 @@ function createWindow() {
     if (isMainFrame) log(`did-fail-load ${failedUrl}: ${code} ${desc}`);
   });
   win.webContents.on("did-finish-load", () => {
+    // Local-node probing consent (owner-approved 2026-08-25): the shell's detector
+    // (Veil local-node-optin.ts) only probes loopback after an explicit opt-in, and
+    // this overlay partition starts with none — so the owner's own shell "detects no
+    // local services" while the fleet runs on the same box. Desk is the owner's own
+    // installed app on the owner's own machine: opening the Living Desktop FROM Desk
+    // is the explicit act, so grant it here per load. (The probes still need the
+    // adk/awnode loopback ports to be UP; granting only removes the consent gate, it
+    // cannot invent a service.)
+    win.webContents
+      .executeJavaScript(
+        "try{localStorage.setItem('aither-local-node-probe-optin','1')}catch(e){}; true;",
+      )
+      .catch(() => {});
     setTimeout(() => {
       if (!win.isDestroyed()) void probeRendered(win);
     }, 4000);
+    // Push the Desk snapshot once the shell has booted its listeners.
+    setTimeout(() => {
+      if (!win.isDestroyed()) pushDeskState();
+    }, 2000);
   });
 
   // Frameless window needs a way out that doesn't depend on the page: Esc hides it.
@@ -308,10 +393,15 @@ function createWindow() {
 
   const target = urlFor(transparentMode);
   log(`opening ${target} (transparent=${transparentMode}, ghost=${ghostMode})`);
-  void win.loadURL(target);
-  void hasSessionCookie().then((signedIn) =>
-    log(signedIn ? "session cookie present — shell will see the signed-in account" : "NO session cookie — shell renders signed-out; use Sign in from the Living Desktop menu"),
-  );
+  // Link the session BEFORE the first paint so the shell never flashes signed-out.
+  void (async () => {
+    await syncPortalSessionCookie();
+    if (win.isDestroyed()) return;
+    await win.loadURL(target);
+    void hasSessionCookie().then((signedIn) =>
+      log(signedIn ? "session cookie present — shell will see the signed-in account" : "NO session cookie — shell renders signed-out; use Sign in from the Living Desktop menu"),
+    );
+  })();
   startGhostLoop();
   return win;
 }
@@ -398,6 +488,23 @@ function buildLivingDesktopMenu() {
   ];
 }
 
+// ── Desk -> Living OS state channel ──────────────────────────────────────────────
+// main.cjs registers a snapshot provider (decision cards, avatar slots, agents,
+// relay feed); the overlay receives the latest snapshot on every load and whenever
+// main calls pushDeskState(). The page-side listener is the Veil OS
+// (overlay-host/os-client listens for { __aither: 'desk-state' } postMessages —
+// the same family as the os-regions protocol the preload already relays).
+let deskStateProvider = null;
+function setDeskStateProvider(fn) {
+  deskStateProvider = fn;
+}
+function pushDeskState() {
+  if (!isOpen() || typeof deskStateProvider !== "function") return;
+  const snapshot = deskStateProvider();
+  if (!snapshot) return;
+  desktopWin.webContents.send("living-desktop:desk-state", snapshot);
+}
+
 module.exports = {
   openLivingDesktop: showLivingDesktop, // kept for older callers
   showLivingDesktop,
@@ -405,6 +512,8 @@ module.exports = {
   toggleLivingDesktop,
   setSolidBackground,
   buildLivingDesktopMenu,
+  setDeskStateProvider,
+  pushDeskState,
   isOpen,
   LOG_FILE,
 };

@@ -120,6 +120,9 @@ interface PlacedAvatarProps {
   transform: AvatarTransform;
   onDrag: (position: [number, number, number]) => void;
   onScale: (scale: number) => void;
+  /** Clean LEFT-CLICK (no drag) on the avatar: the contextual "bring this one
+   *  front and center" action — also the recovery move when an avatar got lost. */
+  onFocus?: (slotId: string) => void;
   avatarProps: Omit<AvatarProps, 'onReady'>;
   onReady: (scene: THREE.Object3D) => void;
 }
@@ -150,12 +153,15 @@ function resumeOrbit(orbit: { enabled?: boolean } | null) {
  *  position is committed to persisted layout state ONCE, on pointerup. All live values
  *  (y, scale) are read through refs so a re-render mid-drag can never strand the drag on
  *  a stale closure. */
-function PlacedAvatar({ slotId, transform, onDrag, onScale, avatarProps, onReady }: PlacedAvatarProps) {
+function PlacedAvatar({ slotId, transform, onDrag, onScale, onFocus, avatarProps, onReady }: PlacedAvatarProps) {
   const getThreeState = useThree((state) => state.get);
   const groupRef = useRef<THREE.Group>(null);
   const transformRef = useRef(transform);
   transformRef.current = transform;
   const draggingRef = useRef(false);
+  // Where the left button went down, so pointerup can tell a CLICK (focus the
+  // avatar) from a DRAG (move/rotate) — the same 5-6px band the drag hook uses.
+  const clickStartRef = useRef<{ x: number; y: number } | null>(null);
 
   // Committed transform -> group, EXCEPT while a drag owns the group imperatively.
   useLayoutEffect(() => {
@@ -167,13 +173,12 @@ function PlacedAvatar({ slotId, transform, onDrag, onScale, avatarProps, onReady
   }, [transform]);
 
   const { beginDrag } = useAvatarDrag(
-    () => transformRef.current.position[1],
     (nx, nz) => {
       const group = groupRef.current;
       if (group) group.position.set(nx, transformRef.current.position[1], nz);
     },
-    // The gesture's anchor: where the avatar IS when the pointer goes down, so the
-    // drag applies deltas to it instead of teleporting to the cursor's ground hit.
+    // Where the avatar IS when the pointer goes down: the drag's start, so the
+    // screen-space delta applies on top of the real position, never a jump.
     () => ({
       x: groupRef.current?.position.x ?? transformRef.current.position[0],
       z: groupRef.current?.position.z ?? transformRef.current.position[2],
@@ -218,6 +223,13 @@ function PlacedAvatar({ slotId, transform, onDrag, onScale, avatarProps, onReady
               if (event.button === 2) canvasTarget.dataset.rightOnAvatar = slotId;
               else delete canvasTarget.dataset.rightOnAvatar;
             }
+            if (event.button === 0) {
+              clickStartRef.current = {
+                x: event.nativeEvent.clientX,
+                y: event.nativeEvent.clientY,
+              };
+            }
+            if (event.button !== 0) return; // left button only -- right-click stays the context menu
             if (event.button !== 0) return; // left button only -- right-click stays the context menu
             // Plain left-drag must keep rotating the camera — that is the gesture
             // everyone already has (avatar-move claimed bare left-drag once and the
@@ -251,6 +263,19 @@ function PlacedAvatar({ slotId, transform, onDrag, onScale, avatarProps, onReady
           onWheel={(event) => {
             event.stopPropagation();
             onScale(clampScale(transformRef.current.scale - event.nativeEvent.deltaY * 0.001));
+          }}
+          onPointerUp={(event) => {
+            // Click vs drag: a left-click that never left the 6px band is the
+            // contextual FOCUS action (center this avatar), whatever the drag
+            // mode. A drag's pointerup either misses this handler (window-level
+            // listener owns it) or travels >6px and falls through.
+            if (event.button !== 0 || !clickStartRef.current) return;
+            const travelled = Math.hypot(
+              event.nativeEvent.clientX - clickStartRef.current.x,
+              event.nativeEvent.clientY - clickStartRef.current.y,
+            );
+            clickStartRef.current = null;
+            if (travelled < 6) onFocus?.(slotId);
           }}
           onContextMenu={(event) => {
             // OrbitControls preventDefault()s contextmenu (right-drag pans), which kills
@@ -332,23 +357,31 @@ export function Scene(props: SceneProps) {
   // to the state it mutates; App's own subscription handles the spawn/remove half and
   // both listeners coexist (the preload subscribe returns its own unsubscribe).
   const [focusUuid, setFocusUuid] = useState<string | null>(null);
+  // One focus entry point for both surfaces: the context menu's "Focus camera here"
+  // (main -> desk:event) and the left-CLICK on an avatar (PlacedAvatar onFocus).
+  const focusSlot = useCallback(
+    (slotId: string | null) => {
+      if (!slotId) {
+        setFocusUuid(null);
+      } else if (slotId === 'slot0') {
+        setFocusUuid(avatarScene?.uuid ?? null);
+      } else {
+        setFocusUuid(extraScenes[slotId]?.uuid ?? null);
+      }
+    },
+    [avatarScene, extraScenes],
+  );
   useEffect(() => {
     const bridge = window.deskBridge;
     if (!bridge) return;
     return bridge.subscribe((event) => {
       if (event.type === 'focus-avatar') {
-        if (!event.slotId) {
-          setFocusUuid(null);
-        } else if (event.slotId === 'slot0') {
-          setFocusUuid(avatarScene?.uuid ?? null);
-        } else {
-          setFocusUuid(extraScenes[event.slotId]?.uuid ?? null);
-        }
+        focusSlot(event.slotId);
       } else if (event.type === 'reset-avatar-layout') {
         clearSlot(event.slotId);
       }
     });
-  }, [avatarScene, extraScenes, clearSlot]);
+  }, [focusSlot, clearSlot]);
 
   return (
     <Canvas
@@ -388,6 +421,7 @@ export function Scene(props: SceneProps) {
         transform={getTransform('slot0')}
         onDrag={(position) => setPosition('slot0', position)}
         onScale={(scale) => setScale('slot0', scale)}
+        onFocus={focusSlot}
         avatarProps={props}
         onReady={handleAvatarReady}
       />
@@ -410,6 +444,7 @@ export function Scene(props: SceneProps) {
             transform={getTransform(slot.slotId)}
             onDrag={(position) => setPosition(slot.slotId, position)}
             onScale={(scale) => setScale(slot.slotId, scale)}
+            onFocus={focusSlot}
             avatarProps={avatarProps}
             onReady={(scene) => handleExtraReady(slot.slotId, scene)}
           />

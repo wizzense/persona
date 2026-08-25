@@ -21,3 +21,12 @@ window.addEventListener("message", (event) => {
     dock: data.dock && typeof data.dock === "object" ? data.dock : null,
   });
 });
+
+// Desk -> Living OS state channel (2026-08-25): main pushes the Desk snapshot
+// (decision cards, avatar slots, agents, relay feed) and this forwards it into the
+// page as a postMessage the Veil shell can listen for — the same family as the
+// os-regions protocol above, so the shell treats the overlay as a connected host
+// rather than a dumb window.
+ipcRenderer.on("living-desktop:desk-state", (_event, payload) => {
+  window.postMessage(Object.assign({ __aither: "desk-state" }, payload), "*");
+});
