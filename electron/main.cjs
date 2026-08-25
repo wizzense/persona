@@ -279,7 +279,7 @@ function createWindow() {
     autoHideMenuBar: true,
     alwaysOnTop: true,
     skipTaskbar: true,
-    title: "Persona",
+    title: "Desk",
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
@@ -385,7 +385,7 @@ function createWindow() {
         click: () => handleBridgeEvent({ type: "animation", animation: "DANCE" }),
       },
       { type: "separator" },
-      { label: "Hide Persona", click: () => void hideOverlay() },
+      { label: "Hide Desk", click: () => void hideOverlay() },
       {
         label: "Quit",
         click: () => {
@@ -854,8 +854,8 @@ function refreshTrayMenu() {
   enforceActiveCharacterRating();
   tray?.setContextMenu(
     Menu.buildFromTemplate([
-      { label: "Show Persona", click: () => showOverlay({ focus: true }) },
-      { label: "Hide Persona", click: () => void hideOverlay() },
+      { label: "Show Desk", click: () => showOverlay({ focus: true }) },
+      { label: "Hide Desk", click: () => void hideOverlay() },
       { type: "separator" },
       { label: "Characters", submenu: buildCharacterMenu() },
       { label: "Window Size", submenu: buildSizeMenu() },
@@ -905,7 +905,7 @@ function createTray() {
   const iconPath = path.join(__dirname, "..", "build", "icon.png");
   const icon = nativeImage.createFromPath(iconPath).resize({ width: 20, height: 20 });
   tray = new Tray(icon);
-  tray.setToolTip("Persona");
+  tray.setToolTip("Desk");
   refreshTrayMenu();
   tray.on("click", toggleOverlay);
 }
@@ -1037,8 +1037,8 @@ if (!app.requestSingleInstanceLock()) {
         refreshTrayMenu();
         tray?.setToolTip(
           cards.length > 0
-            ? `Persona — ${cards.length} decision${cards.length === 1 ? "" : "s"} waiting`
-            : "Persona",
+            ? `Desk — ${cards.length} decision${cards.length === 1 ? "" : "s"} waiting`
+            : "Desk",
         );
         if (!Notification.isSupported()) return;
         if (!decisionsSeenOnce) {

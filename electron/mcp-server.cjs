@@ -180,7 +180,7 @@ function createPersonaMcpServer({
         const ok = await onCharacter(name);
         return textResult(
           ok
-            ? `Persona switched to the ${name} character.`
+            ? `Desk switched to the ${name} character.`
             : `No character named ${name} is installed. Use list_characters to see the roster.`,
         );
       },
