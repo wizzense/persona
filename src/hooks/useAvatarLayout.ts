@@ -12,8 +12,17 @@ const STORAGE_KEY = 'persona.avatar-layout.v1';
  *  accident. Measured 2026-08-25: slot0 was persisted at z=-2665 (a near-horizontal drag
  *  ray intersecting the ground plane out at the horizon), so every boot restored an
  *  avatar 2,600 units away — a perfectly healthy renderer showing NOTHING, no errors,
- *  which read as "Persona is broken". */
-export const POSITION_BOUND = 10;
+ *  which read as "Persona is broken".
+ *
+ *  10 was the first value and it was STILL a hole: full-body camera framing shows only
+ *  about ±2 units of stage, so a click-teleport artifact at e.g. x=-8 (see
+ *  useAvatarDrag's delta rework) was LEGAL to the sanitizer and invisible to the owner
+ *  — every character switch reloaded the window and faithfully restored an avatar just
+ *  off-camera, which read as "changing avatars breaks it AGAIN" after every other leg
+ *  of this saga was already fixed. The bound must be the VISIBLE stage, not a number
+ *  that merely excludes the horizon: an entry the owner cannot see or grab is exactly
+ *  as lost at x=8 as at z=-2665. */
+export const POSITION_BOUND = 2;
 const SCALE_MIN = 0.05;
 const SCALE_MAX = 10;
 

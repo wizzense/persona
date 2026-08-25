@@ -175,6 +175,15 @@ function PlacedAvatar({ slotId, transform, onDrag, onScale, avatarProps, onReady
       scale={transform.scale}
       onPointerDown={(event) => {
         if (event.button !== 0) return; // left button only -- right-click stays the context menu
+        // Plain left-drag on the MODEL must keep rotating the camera — that is the
+        // gesture everyone already has ("can't click to rotate/swivel anymore",
+        // reported 2026-08-25 the moment avatar-move claimed bare left-drag: the
+        // avatar's body is exactly where a person grabs to swivel it). One button
+        // cannot serve two intents on the same pixels, so MOVE is the modified
+        // gesture: Shift+left-drag repositions the avatar; a plain drag falls
+        // through (no stopPropagation) to OrbitControls and rotates as it always
+        // did.
+        if (!event.nativeEvent.shiftKey) return;
         event.stopPropagation();
         const { controls } = getThreeState();
         const orbit = controls as { enabled?: boolean } | null;
