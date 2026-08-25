@@ -160,6 +160,12 @@ function PlacedAvatar({ slotId, transform, onDrag, onScale, avatarProps, onReady
       const group = groupRef.current;
       if (group) group.position.set(nx, transformRef.current.position[1], nz);
     },
+    // The gesture's anchor: where the avatar IS when the pointer goes down, so the
+    // drag applies deltas to it instead of teleporting to the cursor's ground hit.
+    () => ({
+      x: groupRef.current?.position.x ?? transformRef.current.position[0],
+      z: groupRef.current?.position.z ?? transformRef.current.position[2],
+    }),
   );
 
   return (

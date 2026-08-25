@@ -23,7 +23,11 @@ import { POSITION_BOUND as DRAG_BOUND } from './useAvatarLayout';
  * a ref) instead of a captured number so a re-render mid-drag can never leave the drag
  * raycasting against a stale plane height.
  */
-export function useAvatarDrag(getY: () => number, onMove: (x: number, z: number) => void) {
+export function useAvatarDrag(
+  getY: () => number,
+  onMove: (x: number, z: number) => void,
+  getStart: () => { x: number; z: number },
+) {
   const { camera, gl } = useThree();
   const raycaster = useMemo(() => new THREE.Raycaster(), []);
   const plane = useMemo(() => new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), []);
@@ -31,37 +35,57 @@ export function useAvatarDrag(getY: () => number, onMove: (x: number, z: number)
   const ndc = useMemo(() => new THREE.Vector2(), []);
   const draggingRef = useRef(false);
 
-  const raycastTo = useCallback(
-    (clientX: number, clientY: number) => {
+  const raycastGround = useCallback(
+    (clientX: number, clientY: number): { x: number; z: number } | null => {
       const rect = gl.domElement.getBoundingClientRect();
       ndc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
       ndc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
       plane.constant = -getY(); // live height, never a captured one
       raycaster.setFromCamera(ndc, camera);
-      if (raycaster.ray.intersectPlane(plane, point)) {
-        // A near-horizontal camera makes this ray almost parallel to the ground
-        // plane, so a pointer just above the horizon intersects it THOUSANDS of
-        // units away — measured 2026-08-25, one such drag persisted slot0 at
-        // z=-2665 and the avatar "vanished" on every boot after. Clamp the drag
-        // to the stage; the layout store additionally refuses to load an
-        // out-of-bounds entry, so the two guards fail independently.
-        const clamp = (v: number) => Math.max(-DRAG_BOUND, Math.min(DRAG_BOUND, v));
-        onMove(clamp(point.x), clamp(point.z));
-      }
+      if (!raycaster.ray.intersectPlane(plane, point)) return null;
+      return { x: point.x, z: point.z };
     },
-    [camera, getY, gl, ndc, onMove, plane, point, raycaster],
+    [camera, getY, gl, ndc, plane, point, raycaster],
   );
 
   /** Call from onPointerDown with the native event's clientX/clientY. `onEnd` fires
    *  exactly once, on pointerup, wherever it happens -- re-enable orbit AND commit the
-   *  final position to persisted state there. */
+   *  final position to persisted state there.
+   *
+   *  DELTA-BASED, never jump-to-cursor. The first version called onMove with the
+   *  pointer-down ray hit itself, which TELEPORTED the avatar on a bare CLICK: the
+   *  pointer sits on the model's chest, the ground ray lands wherever the near-
+   *  horizontal camera sends it (meters away, off the visible stage even inside the
+   *  ±BOUND clamp), and the avatar "vanishes when I just click it" — reported live
+   *  2026-08-25, third distinct leg of the disappearing-avatar saga. Now: the ray
+   *  hit at pointer-down is only the ANCHOR; movement applies (hit − anchor) to the
+   *  avatar's own start position, and nothing moves until the pointer has actually
+   *  travelled ≥5px — so a click, by construction, moves nothing at all. */
   const beginDrag = useCallback(
     (clientX: number, clientY: number, onEnd: () => void) => {
       if (draggingRef.current) return;
       draggingRef.current = true;
-      raycastTo(clientX, clientY);
+      const anchor = raycastGround(clientX, clientY);
+      const start = getStart();
+      const startClientX = clientX;
+      const startClientY = clientY;
+      let activated = false;
+      const clamp = (v: number) => Math.max(-DRAG_BOUND, Math.min(DRAG_BOUND, v));
 
-      const handleMove = (event: PointerEvent) => raycastTo(event.clientX, event.clientY);
+      const handleMove = (event: PointerEvent) => {
+        if (!anchor) return; // ray missed the stage at pointer-down: gesture is inert
+        if (!activated) {
+          const travelled = Math.hypot(
+            event.clientX - startClientX,
+            event.clientY - startClientY,
+          );
+          if (travelled < 5) return; // click-sized wiggle: not a drag
+          activated = true;
+        }
+        const hit = raycastGround(event.clientX, event.clientY);
+        if (!hit) return;
+        onMove(clamp(start.x + hit.x - anchor.x), clamp(start.z + hit.z - anchor.z));
+      };
       const handleUp = () => {
         draggingRef.current = false;
         window.removeEventListener('pointermove', handleMove);
@@ -71,7 +95,7 @@ export function useAvatarDrag(getY: () => number, onMove: (x: number, z: number)
       window.addEventListener('pointermove', handleMove);
       window.addEventListener('pointerup', handleUp);
     },
-    [raycastTo],
+    [getStart, onMove, raycastGround],
   );
 
   return { beginDrag, isDragging: () => draggingRef.current };
