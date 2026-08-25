@@ -54,6 +54,27 @@ function originAllowed(origin) {
   return origin == null || TRUSTED_ORIGIN.test(origin);
 }
 
+//: Web surfaces allowed to READ the decision queue over this loopback bridge.
+//: The Living Desktop that Persona hosts is the STATIC aitherium.com export,
+//: whose /api/decisions is a build-time stub — so without this route the
+//: desktop bell can never see a card on exactly the surface the owner watches
+//: (measured 2026-08-25: "No notifications" over a 673-card queue). Read-only,
+//: loopback interface only (hostAllowed), and the response is CORS-readable
+//: ONLY by these origins — any other site's fetch gets no ACAO header and the
+//: browser withholds the body.
+const DECISIONS_READ_ORIGINS = new Set([
+  "https://aitherium.com",
+  "https://www.aitherium.com",
+  "https://portal.aitherium.com",
+  "https://veil.aitherium.com",
+]);
+
+function decisionsReadOriginAllowed(origin) {
+  // Local surfaces (the overlay's own file:// -> null origin, dev servers)
+  // keep the same trust the rest of the bridge gives them.
+  return originAllowed(origin) || DECISIONS_READ_ORIGINS.has(origin);
+}
+
 function hostAllowed(hostHeader) {
   if (typeof hostHeader !== "string" || hostHeader.length === 0) return false;
   try {
@@ -115,6 +136,7 @@ function createBridgeServer({
   port = DEFAULT_PORT,
   onEvent,
   mcpHandler = null,
+  decisionsProvider = null,
 }) {
   let lastStateEvent = null;
   const server = http.createServer((request, response) => {
@@ -128,6 +150,49 @@ function createBridgeServer({
     if (request.method === "GET" && request.url === "/health") {
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify({ ok: true, lastState: lastStateEvent?.state ?? null }));
+      return;
+    }
+
+    // Read-only decision queue for the web surfaces Persona hosts. Answering
+    // stays with the shared queue window / daemon — this bridge never mutates
+    // the store, so a compromised page could at worst READ titles, not answer
+    // an ask on the owner's behalf.
+    if (request.url === "/decisions") {
+      if (!decisionsReadOriginAllowed(origin)) {
+        response.writeHead(403);
+        response.end();
+        return;
+      }
+      const cors = origin
+        ? { "access-control-allow-origin": origin, vary: "Origin" }
+        : {};
+      if (request.method === "OPTIONS") {
+        response.writeHead(204, {
+          ...cors,
+          "access-control-allow-methods": "GET, OPTIONS",
+          "access-control-allow-headers": "content-type",
+        });
+        response.end();
+        return;
+      }
+      if (request.method !== "GET") {
+        response.writeHead(405, { allow: "GET, OPTIONS" });
+        response.end();
+        return;
+      }
+      if (decisionsProvider == null) {
+        response.writeHead(404);
+        response.end();
+        return;
+      }
+      let decisions;
+      try {
+        decisions = decisionsProvider();
+      } catch {
+        decisions = [];
+      }
+      response.writeHead(200, { ...cors, "content-type": "application/json" });
+      response.end(JSON.stringify({ decisions, count: decisions.length }));
       return;
     }
 
@@ -223,6 +288,7 @@ module.exports = {
   ANIMATIONS,
   DEFAULT_PORT,
   createBridgeServer,
+  decisionsReadOriginAllowed,
   hostAllowed,
   isVoiceState,
   normalizeEvent,

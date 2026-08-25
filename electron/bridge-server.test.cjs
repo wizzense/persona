@@ -5,6 +5,7 @@ const http = require("node:http");
 const test = require("node:test");
 const {
   createBridgeServer,
+  decisionsReadOriginAllowed,
   hostAllowed,
   normalizeEvent,
   originAllowed,
@@ -191,4 +192,75 @@ test("bridge routes only valid local JSON requests to MCP", async (context) => {
   assert.equal(JSON.parse(invalidJson.body).error.code, -32700);
   assert.equal(oversized.status, 413);
   assert.deepEqual(bodies, [{ jsonrpc: "2.0" }]);
+});
+
+test("decision reads: hosted web surfaces may read, strangers may not", () => {
+  assert.equal(decisionsReadOriginAllowed("https://aitherium.com"), true);
+  assert.equal(decisionsReadOriginAllowed("https://portal.aitherium.com"), true);
+  assert.equal(decisionsReadOriginAllowed("http://127.0.0.1:5173"), true); // local dev keeps bridge trust
+  assert.equal(decisionsReadOriginAllowed(undefined), true); // overlay's own null origin
+  assert.equal(decisionsReadOriginAllowed("https://evil.example"), false);
+  assert.equal(decisionsReadOriginAllowed("https://aitherium.com.evil.example"), false);
+});
+
+test("bridge serves the decision queue read-only to an allowed origin", async (context) => {
+  const cards = [{ id: "d-1", title: "A real ask", urgency: "high", createdAt: 1 }];
+  const bridge = createBridgeServer({
+    port: 0,
+    onEvent: () => {},
+    decisionsProvider: () => cards,
+  });
+  const address = await bridge.listen();
+  context.after(() => bridge.close());
+
+  const ok = await requestServer(address, {
+    path: "/decisions",
+    headers: { origin: "https://aitherium.com" },
+  });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.headers["access-control-allow-origin"], "https://aitherium.com");
+  assert.deepEqual(JSON.parse(ok.body), { decisions: cards, count: 1 });
+
+  const denied = await requestServer(address, {
+    path: "/decisions",
+    headers: { origin: "https://evil.example" },
+  });
+  assert.equal(denied.status, 403);
+
+  const mutated = await requestServer(address, {
+    path: "/decisions",
+    method: "POST",
+    headers: { origin: "https://aitherium.com" },
+    body: "{}",
+  });
+  assert.equal(mutated.status, 405, "the bridge must never accept a decision WRITE");
+});
+
+test("a throwing decisions provider answers an empty queue, never a 500", async (context) => {
+  const bridge = createBridgeServer({
+    port: 0,
+    onEvent: () => {},
+    decisionsProvider: () => {
+      throw new Error("store unreadable");
+    },
+  });
+  const address = await bridge.listen();
+  context.after(() => bridge.close());
+  const res = await requestServer(address, {
+    path: "/decisions",
+    headers: { origin: "https://aitherium.com" },
+  });
+  assert.equal(res.status, 200);
+  assert.deepEqual(JSON.parse(res.body), { decisions: [], count: 0 });
+});
+
+test("without a provider the route is absent (404), not an empty success", async (context) => {
+  const bridge = createBridgeServer({ port: 0, onEvent: () => {} });
+  const address = await bridge.listen();
+  context.after(() => bridge.close());
+  const res = await requestServer(address, {
+    path: "/decisions",
+    headers: { origin: "https://aitherium.com" },
+  });
+  assert.equal(res.status, 404);
 });
