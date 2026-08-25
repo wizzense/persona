@@ -168,53 +168,75 @@ function PlacedAvatar({ slotId, transform, onDrag, onScale, avatarProps, onReady
     }),
   );
 
+  // ALL pointer interaction (grab, scale, wheel) lives on ONE invisible proxy box,
+  // never on the group itself. R3F raycasts its whole interaction list on every
+  // pointermove whenever any object carries move/over/out handlers -- and a
+  // VRM-bearing group in that list makes every pointermove recurse tens of
+  // thousands of triangles: the measured "laggy when moving it around"
+  // (2026-08-25). A box that approximates the body is one raycast per move; the
+  // VRM stays OUT of the interaction layer entirely. The proxy mounts only once
+  // the VRM reports ready, preserving the "no grab cursor = still loading" tell.
+  // opacity-0 material rather than visible=false so the proxy is unambiguously
+  // raycastable on every three.js version.
+  const [ready, setReady] = useState(false);
+  const handleReady = useCallback(
+    (scene: THREE.Object3D) => {
+      setReady(true);
+      onReady(scene);
+    },
+    [onReady],
+  );
+
   return (
     <group
       ref={groupRef}
       position={transform.position}
       scale={transform.scale}
-      onPointerDown={(event) => {
-        if (event.button !== 0) return; // left button only -- right-click stays the context menu
-        // Plain left-drag on the MODEL must keep rotating the camera — that is the
-        // gesture everyone already has ("can't click to rotate/swivel anymore",
-        // reported 2026-08-25 the moment avatar-move claimed bare left-drag: the
-        // avatar's body is exactly where a person grabs to swivel it). One button
-        // cannot serve two intents on the same pixels, so MOVE is the modified
-        // gesture: Shift+left-drag repositions the avatar; a plain drag falls
-        // through (no stopPropagation) to OrbitControls and rotates as it always
-        // did.
-        if (!event.nativeEvent.shiftKey) return;
-        event.stopPropagation();
-        const { controls } = getThreeState();
-        const orbit = controls as { enabled?: boolean } | null;
-        suspendOrbit(orbit);
-        draggingRef.current = true;
-        beginDrag(event.nativeEvent.clientX, event.nativeEvent.clientY, () => {
-          draggingRef.current = false;
-          resumeOrbit(orbit);
-          const group = groupRef.current;
-          if (group) {
-            // Single commit: persists the final spot (localStorage-backed) without a
-            // re-render storm during the gesture.
-            onDrag([group.position.x, transformRef.current.position[1], group.position.z]);
-          }
-        });
-      }}
-      // Cursor feedback doubles as the "is this one ready yet?" tell: a VRM still
-      // loading has no meshes to hover, so no grab cursor -- visibly not-ready instead
-      // of silently ignoring the drag (the "the added one won't drag" report).
-      onPointerOver={() => {
-        document.body.style.cursor = 'grab';
-      }}
-      onPointerOut={() => {
-        document.body.style.cursor = '';
-      }}
-      onWheel={(event) => {
-        event.stopPropagation();
-        onScale(clampScale(transformRef.current.scale - event.nativeEvent.deltaY * 0.001));
-      }}
     >
-      <Avatar {...avatarProps} onReady={onReady} />
+      {ready ? (
+        <mesh
+          position={[0, 1.05, 0]}
+          onPointerDown={(event) => {
+            if (event.button !== 0) return; // left button only -- right-click stays the context menu
+            // Plain left-drag must keep rotating the camera — that is the gesture
+            // everyone already has (avatar-move claimed bare left-drag once and the
+            // owner could no longer swivel; reported 2026-08-25). One button cannot
+            // serve two intents on the same pixels, so MOVE is the modified gesture:
+            // Shift+left-drag repositions the avatar; a plain drag falls through (no
+            // stopPropagation) to OrbitControls and rotates as it always did.
+            if (!event.nativeEvent.shiftKey) return;
+            event.stopPropagation();
+            const { controls } = getThreeState();
+            const orbit = controls as { enabled?: boolean } | null;
+            suspendOrbit(orbit);
+            draggingRef.current = true;
+            beginDrag(event.nativeEvent.clientX, event.nativeEvent.clientY, () => {
+              draggingRef.current = false;
+              resumeOrbit(orbit);
+              const group = groupRef.current;
+              if (group) {
+                // Single commit: persists the final spot (localStorage-backed)
+                // without a re-render storm during the gesture.
+                onDrag([group.position.x, transformRef.current.position[1], group.position.z]);
+              }
+            });
+          }}
+          onPointerOver={() => {
+            document.body.style.cursor = 'grab';
+          }}
+          onPointerOut={() => {
+            document.body.style.cursor = '';
+          }}
+          onWheel={(event) => {
+            event.stopPropagation();
+            onScale(clampScale(transformRef.current.scale - event.nativeEvent.deltaY * 0.001));
+          }}
+        >
+          <boxGeometry args={[1.8, 2.1, 1.0]} />
+          <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+        </mesh>
+      ) : null}
+      <Avatar {...avatarProps} onReady={handleReady} />
     </group>
   );
 }
