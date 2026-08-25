@@ -38,7 +38,9 @@ type AvatarBridgeEvent =
       requestId?: number;
     }
   | { type: 'listener-status'; status: AudioListenerStatus }
-  | { type: 'bridge-status'; connected: boolean };
+  | { type: 'bridge-status'; connected: boolean }
+  | { type: 'spawn-avatar'; slotId: string; modelUrl: string }
+  | { type: 'remove-avatar'; slotId: string };
 
 interface Window {
   personaBridge?: {
