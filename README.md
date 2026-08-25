@@ -5,13 +5,28 @@
 <h1 align="center">Persona</h1>
 
 <p align="center">
-  A realtime character presence for desktop voice experiences.
+  The AitherOS desktop hub — a realtime character presence that bridges your
+  desktop to the whole Aitherium world.
 </p>
 
 ---
 
-Persona is a cross-platform desktop character that gives voice conversations
-an expressive visual identity alongside your work.
+Persona began as a desktop character for voice conversations. It has grown into
+the **hub that connects your physical desktop to everything else**, seamlessly,
+whether the backend is aitherium.com or your own local node:
+
+- **Avatar presence** — VRM characters with lip-sync, reacting to any app's
+  voice output (the original core, still here).
+- **Living Desktop host** — one tray switch between the Living Desktop,
+  Desktop Anywhere, the AitherShell cockpit, and GobboNet, rendered over your
+  real desktop (ghost mode) or in their own windows.
+- **Agent embodiment** — the local MCP server (`:47831`) lets any agent drive
+  the avatar, and the bridge server relays voice/animation events from native
+  listeners.
+- **Decision cards** — the tray tracks the open decision-card queue
+  (`~/.aither/decisions`), raises a native notification when an agent needs
+  you, and one click opens the shared answer window (see
+  `electron/decision-cards.cjs`).
 
 ## Platform support
 

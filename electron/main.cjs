@@ -9,10 +9,12 @@ const {
   ipcMain,
   Menu,
   nativeImage,
+  Notification,
   screen,
   shell,
   Tray,
 } = require("electron");
+const decisionCards = require("./decision-cards.cjs");
 const { createBridgeServer, DEFAULT_PORT } = require("./bridge-server.cjs");
 const {
   createPersonaMcpHandler,
@@ -160,6 +162,12 @@ let latestListenerStatus = null;
 let latestVoiceState = null;
 let audioListener = null;
 let tray = null;
+// Decision-card plane (see decision-cards.cjs): the open queue drives the tray
+// label/tooltip, and new arrivals raise a native notification.
+let openDecisions = [];
+let knownDecisionIds = new Set();
+let decisionsSeenOnce = false;
+let decisionWatchStop = null;
 let hyprlandConfigured = false;
 let hyprlandConfiguring = false;
 let hyprlandConfigurationTimer = null;
@@ -351,6 +359,13 @@ function createWindow() {
       { label: "Remove Avatar", submenu: buildRemoveAvatarMenu() },
       { label: "Detach to own window", submenu: buildDetachAvatarMenu() },
       { label: "Living Desktop", submenu: buildLivingDesktopMenu() },
+      {
+        label:
+          openDecisions.length > 0
+            ? `Decision cards (${openDecisions.length} waiting)…`
+            : "Decision cards…",
+        click: () => decisionCards.openQueueWindow(),
+      },
       { label: "Talk to Aither…", click: openTalkWindow },
       { label: "Browse models…", click: openModelBrowser },
       { type: "separator" },
@@ -820,6 +835,13 @@ function refreshTrayMenu() {
       { label: "Remove Avatar", submenu: buildRemoveAvatarMenu() },
       { label: "Detach to own window", submenu: buildDetachAvatarMenu() },
       { label: "Living Desktop", submenu: buildLivingDesktopMenu() },
+      {
+        label:
+          openDecisions.length > 0
+            ? `Decision cards (${openDecisions.length} waiting)…`
+            : "Decision cards…",
+        click: () => decisionCards.openQueueWindow(),
+      },
       { label: "Talk to Aither…", click: openTalkWindow },
       { label: "Browse models…", click: openModelBrowser },
       { type: "separator" },
@@ -954,6 +976,61 @@ if (!app.requestSingleInstanceLock()) {
     }
 
     createTray();
+
+    // Watch the decision-card store: tray label + tooltip track the open queue,
+    // and a genuinely new card raises a native notification whose click opens
+    // the shared queue window. The first observation is summarised as ONE
+    // notification, never a burst — a backlog is a fact, not an alarm per row.
+    decisionWatchStop = decisionCards.watch({
+      onChange: (cards) => {
+        const previouslyKnown = knownDecisionIds;
+        openDecisions = cards;
+        knownDecisionIds = new Set(cards.map((c) => c.id));
+        refreshTrayMenu();
+        tray?.setToolTip(
+          cards.length > 0
+            ? `Persona — ${cards.length} decision${cards.length === 1 ? "" : "s"} waiting`
+            : "Persona",
+        );
+        if (!Notification.isSupported()) return;
+        if (!decisionsSeenOnce) {
+          decisionsSeenOnce = true;
+          if (cards.length > 0) {
+            const summary = new Notification({
+              title:
+                cards.length === 1
+                  ? "1 decision card is waiting on you"
+                  : `${cards.length} decision cards are waiting on you`,
+              body: cards[0].title,
+              silent: true,
+            });
+            summary.on("click", () => decisionCards.openQueueWindow());
+            summary.show();
+          }
+          return;
+        }
+        // Cap the burst: three individual notifications, then one rollup.
+        const fresh = cards.filter((c) => !previouslyKnown.has(c.id));
+        for (const card of fresh.slice(0, 3)) {
+          const n = new Notification({
+            title: card.title,
+            body: card.summary || "A decision card needs your answer.",
+            silent: card.urgency !== "critical" && card.urgency !== "high",
+          });
+          n.on("click", () => decisionCards.openQueueWindow());
+          n.show();
+        }
+        if (fresh.length > 3) {
+          const rollup = new Notification({
+            title: `${fresh.length - 3} more decision cards arrived`,
+            silent: true,
+          });
+          rollup.on("click", () => decisionCards.openQueueWindow());
+          rollup.show();
+        }
+      },
+    });
+
     globalShortcut.register("CommandOrControl+Shift+A", toggleOverlay);
     globalShortcut.register("CommandOrControl+Shift+=", () => growWindow());
     globalShortcut.register("CommandOrControl+Shift+-", () => shrinkWindow());
@@ -999,6 +1076,7 @@ app.on("activate", () => showOverlay({ focus: true }));
 app.on("before-quit", () => {
   isQuitting = true;
   clearTimeout(hyprlandConfigurationTimer);
+  decisionWatchStop?.();
   audioListener?.stop();
   globalShortcut.unregisterAll();
   void bridge?.close().catch((error) => debugLog("integration server close failed", error));
