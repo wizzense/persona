@@ -41,6 +41,9 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      - name: Validate workflow files (W001 zombie-YAML, W002 empty-signing-env)
+        run: node scripts/check-workflows.cjs
+
       - name: Test JavaScript and renderer behavior
         run: npm test
 
