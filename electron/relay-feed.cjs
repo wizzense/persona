@@ -85,13 +85,33 @@ function relayRequest(method, urlPath, body) {
       },
     );
     req.on("error", () => resolve({ status: 0, body: "" }));
+    // A hard timeout: the relay's RBAC can stall on Identity resolution
+    // (measured 2.5s, D-1596 instrumentation) and a hung socket otherwise
+    // eats the user's message with no answer at all.
+    req.setTimeout(15000, () => req.destroy(new Error("relay request timed out")));
     req.end(payload);
   });
+}
+
+/** The relay's refusal REASON, extracted from its JSON body when present. */
+function refusalDetail(body) {
+  if (typeof body !== "string" || !body) return "";
+  try {
+    const parsed = JSON.parse(body);
+    if (parsed && typeof parsed.detail === "string" && parsed.detail) {
+      return parsed.detail.slice(0, 160);
+    }
+    if (parsed && typeof parsed.message === "string" && parsed.message) {
+      return parsed.message.slice(0, 160);
+    }
+  } catch {}
+  return body.slice(0, 160);
 }
 
 let joinState = "pending"; // "pending" | "joined" | "failed"
 let joinPromise = null;
 let joinedBearer = null;
+let lastJoinDetail = ""; // the relay's OWN refusal reason from the last join
 function ensureJoined(requestFn = relayRequest) {
   // The bearer ROTATES on device-flow refresh: a new bearer is a new
   // identity and must join again. Compare before trusting the cache.
@@ -110,7 +130,12 @@ function ensureJoined(requestFn = relayRequest) {
     const ok = r.status >= 200 && r.status < 300 && r.body.includes("is_agent");
     if (ok) joinedBearer = bearer();
     joinState = ok ? "joined" : "failed";
-    if (!ok) joinPromise = null;
+    if (!ok) {
+      lastJoinDetail = r.status === 0
+        ? "the relay did not answer (it may be restarting)"
+        : `join refused: HTTP ${r.status}${refusalDetail(r.body) ? ` — ${refusalDetail(r.body)}` : ""}`;
+      joinPromise = null;
+    }
     return ok;
   })();
   return joinPromise;
@@ -254,36 +279,77 @@ async function fetchThread(channel, messageId, execFn = spawn) {
   }
 }
 
-/** Post a message to a channel as the owner. False when the relay refused. */
+/**
+ * Post a message to a channel as the owner. Returns {ok: true} on success,
+ * {ok: false, detail} when the relay refused — the DETAIL is the relay's own
+ * refusal reason, so the cockpit shows WHY instead of a flat "refused".
+ * A single transient transport blip (status 0 — TLS reset, restart window)
+ * is retried once; a real 4xx is reported honestly, never auto-retried.
+ */
 async function post(channel = RELAY_CHANNEL, text, requestFn = relayRequest) {
-  if (typeof text !== "string" || !text.trim()) return false;
+  if (typeof text !== "string" || !text.trim()) return { ok: false, detail: "empty message" };
   // Join first (lazy, once per bearer): #agents is agent-only and an
   // unjoined identity is silently 403'd.
-  if (!(await ensureJoined(requestFn))) return false;
+  if (!(await ensureJoined(requestFn))) {
+    return { ok: false, detail: lastJoinDetail || "could not join the relay identity" };
+  }
   const q = channel.replace("#", "%23");
-  const r = await requestFn("POST", `/v1/channels/${q}/messages`, {
+  const payload = {
     channel,
     nick: RELAY_NICK,
     content: text.trim().slice(0, 1500),
-  });
-  return r.status >= 200 && r.status < 300;
+  };
+  let r = await requestFn("POST", `/v1/channels/${q}/messages`, payload);
+  if (r.status === 0) {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    r = await requestFn("POST", `/v1/channels/${q}/messages`, payload);
+  }
+  if (r.status >= 200 && r.status < 300) return { ok: true, detail: "" };
+  return {
+    ok: false,
+    detail: r.status === 0
+      ? "the relay did not answer (it may be restarting)"
+      : `relay HTTP ${r.status}${refusalDetail(r.body) ? ` — ${refusalDetail(r.body)}` : ""}`,
+  };
 }
 
 /** Reply into a message's thread — the per-agent direct chat send path. */
 async function postThreadReply(channel, messageId, text, requestFn = relayRequest) {
-  if (typeof messageId !== "string" || !messageId) return false;
-  if (typeof text !== "string" || !text.trim()) return false;
-  if (!(await ensureJoined(requestFn))) return false;
+  if (typeof messageId !== "string" || !messageId) {
+    return { ok: false, detail: "missing message id" };
+  }
+  if (typeof text !== "string" || !text.trim()) return { ok: false, detail: "empty reply" };
+  if (!(await ensureJoined(requestFn))) {
+    return { ok: false, detail: lastJoinDetail || "could not join the relay identity" };
+  }
   const q = channel.replace("#", "%23");
-  const r = await requestFn("POST",
-    `/v1/channels/${q}/messages/${encodeURIComponent(messageId)}/thread`,
-    {
-      channel,
-      nick: RELAY_NICK,
-      content: text.trim().slice(0, 1500),
-    },
-  );
-  return r.status >= 200 && r.status < 300;
+  const payload = {
+    channel,
+    nick: RELAY_NICK,
+    content: text.trim().slice(0, 1500),
+  };
+  let r = await requestFn("POST",
+    `/v1/channels/${q}/messages/${encodeURIComponent(messageId)}/thread`, payload);
+  if (r.status === 0) {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    r = await requestFn("POST",
+      `/v1/channels/${q}/messages/${encodeURIComponent(messageId)}/thread`, payload);
+  }
+  if (r.status >= 200 && r.status < 300) return { ok: true, detail: "" };
+  return {
+    ok: false,
+    detail: r.status === 0
+      ? "the relay did not answer (it may be restarting)"
+      : `relay HTTP ${r.status}${refusalDetail(r.body) ? ` — ${refusalDetail(r.body)}` : ""}`,
+  };
+}
+
+/** Test-only: clear the per-bearer join cache so a test can force a re-join. */
+function _resetJoinForTests() {
+  joinState = "pending";
+  joinPromise = null;
+  joinedBearer = null;
+  lastJoinDetail = "";
 }
 
 module.exports = {
@@ -291,6 +357,7 @@ module.exports = {
   fetchThread,
   post,
   postThreadReply,
+  _resetJoinForTests,
   RELAY_URL,
   RELAY_CHANNEL,
 };

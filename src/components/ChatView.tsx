@@ -119,8 +119,8 @@ export function ChatView() {
           JSON.stringify({ channel: state.relayChannel, messageId: anchorId, text }),
         )
         .then((ok) => {
-          if (!ok) {
-            fail('Not sent — the relay refused the reply.');
+          if (ok !== true) {
+            fail(typeof ok === 'string' && ok ? `Not sent — ${ok}` : 'Not sent — the relay refused the reply.');
             return;
           }
           window.setTimeout(() => {
@@ -136,8 +136,8 @@ export function ChatView() {
       void deck
         .action('relay-post', payload)
         .then((ok) => {
-          if (!ok) {
-            fail('Not sent — the relay refused the post.');
+          if (ok !== true) {
+            fail(typeof ok === 'string' && ok ? `Not sent — ${ok}` : 'Not sent — the relay refused the post.');
             return;
           }
           // Belt and braces: main refreshes the feed and now pushes it to this

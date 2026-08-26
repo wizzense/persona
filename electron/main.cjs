@@ -1375,10 +1375,12 @@ if (!app.requestSingleInstanceLock()) {
           // AWAIT and report the real result: the fire-and-forget version
           // returned true while the relay 403'd the post (agent-only channel,
           // unjoined identity) -- the chat window then believed the message
-          // sent. False must reach the renderer.
+          // sent. False must reach the renderer. A failure returns the
+          // relay's OWN refusal reason (a string) so the chat window shows
+          // WHY, not just "refused".
           const sent = await postToRelay(RELAY_CHANNEL, arg);
-          if (sent) void refreshRelayFeed();
-          return sent;
+          if (sent && sent.ok) void refreshRelayFeed();
+          return sent && sent.ok ? true : (sent && sent.detail) || "the relay refused";
         }
         // The per-avatar DIRECT chat send path: the conversation with a
         // spawned agent is the THREAD under its message (the relay's
@@ -1400,8 +1402,8 @@ if (!app.requestSingleInstanceLock()) {
             parsed.messageId,
             parsed.text,
           );
-          if (replied) void refreshRelayFeed();
-          return replied;
+          if (replied && replied.ok) void refreshRelayFeed();
+          return replied && replied.ok ? true : (replied && replied.detail) || "the relay refused";
         }
         case "spawn-agent": {
           if (typeof arg !== "string" || arg.length === 0) return false;
