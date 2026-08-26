@@ -85,6 +85,12 @@ if (require.main === module) {
         console.error(`VOICE UNAVAILABLE: ${snap.status.error || "service error"}`);
         process.exit(1);
       }
+      // A note fallback means the source did not parse — and one that
+      // opens with "ERROR:" is a failed probe, not a valid answer.
+      if (snap.status?.note?.startsWith("ERROR:")) {
+        console.error(`VOICE UNAVAILABLE: ${snap.status.note}`);
+        process.exit(1);
+      }
       const voices = snap.voices;
       const count = Array.isArray(voices?.voices) ? voices.voices.length
         : Array.isArray(voices) ? voices.length

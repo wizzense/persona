@@ -66,11 +66,14 @@ if (require.main === module) {
         console.error(`DESKTOP UNAVAILABLE: ${snap.reason}`);
         process.exit(1);
       }
-      const winBlocked = snap.window?.available === false;
-      const ctxBlocked = snap.context?.available === false;
+      const winBlocked = snap.window?.available === false
+        || snap.window?.note?.startsWith("ERROR:");
+      const ctxBlocked = snap.context?.available === false
+        || snap.context?.note?.startsWith("ERROR:");
       if (winBlocked || ctxBlocked) {
         const why = (winBlocked && snap.window.message) || (ctxBlocked && snap.context.message)
           || (winBlocked && snap.window.reason) || (ctxBlocked && snap.context.reason)
+          || (winBlocked && snap.window.note) || (ctxBlocked && snap.context.note)
           || "platform";
         console.error(`DESKTOP UNAVAILABLE: ${why}`);
         process.exit(1);

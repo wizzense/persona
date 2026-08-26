@@ -79,6 +79,10 @@ if (require.main === module) {
         console.error(`VISION UNAVAILABLE: ${snap.status.error}`);
         process.exit(1);
       }
+      if (snap.status?.note?.startsWith("ERROR:")) {
+        console.error(`VISION UNAVAILABLE: ${snap.status.note}`);
+        process.exit(1);
+      }
       const keys = typeof snap.status === "object" ? Object.keys(snap.status).length : "?";
       console.log(`VISION OK: ${keys} status key(s)`);
       process.exit(0);

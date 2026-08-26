@@ -108,6 +108,10 @@ if (require.main === module) {
         console.error(`CONNECT UNAVAILABLE: ${snap.reason}`);
         process.exit(1);
       }
+      if (snap.workspace?.note?.startsWith("ERROR:")) {
+        console.error(`CONNECT UNAVAILABLE: ${snap.workspace.note}`);
+        process.exit(1);
+      }
       const ws = typeof snap.workspace === "object" ? Object.keys(snap.workspace).length : "?";
       const tt = snap.terminals.total;
       const suffix = snap.terminals.note ? ` — ${snap.terminals.note}` : "";
