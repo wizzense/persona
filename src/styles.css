@@ -628,7 +628,15 @@ body {
   flex-direction: column;
   gap: 6px;
   padding: 10px 12px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(122, 162, 255, 0.35) transparent;
 }
+.chat-list::-webkit-scrollbar { width: 6px; }
+.chat-list::-webkit-scrollbar-thumb {
+  background: rgba(122, 162, 255, 0.35);
+  border-radius: 3px;
+}
+.chat-list::-webkit-scrollbar-track { background: transparent; }
 .chat-row {
   display: flex;
   flex-direction: column;
