@@ -79,28 +79,19 @@ jobs:
       - name: Lint and test
         run: npm run check
 
+      # NO signing env here, deliberately. Any DEFINED CSC_LINK /
+      # CSC_KEY_PASSWORD — including one set to the empty string from an
+      # absent secret — switches electron-builder onto the explicit-signing
+      # path, and it then resolves the empty cert path to the project dir
+      # and dies with "⨯ <projectDir> not a file" (measured twice on
+      # 2026-08-25, macOS jobs; even CSC_IDENTITY_AUTO_DISCOVERY=false does
+      # not rescue a defined-but-empty CSC_LINK). With no signing env at
+      # all, the builder finds no identity on the runner and skips signing —
+      # the documented unsigned-packages fallback (RELEASING.md). When
+      # certificates are added, bring back an env block that sets CSC_LINK
+      # etc. ONLY from real secrets.
       - name: Build native installer
         run: ${{ matrix.command }}
-        env:
-          # Signing: this fork has no MAC_CSC_LINK secret, so CSC_LINK is
-          # empty — and with identity auto-discovery ON, electron-builder 26
-          # treated "" as a certificate FILE and died with "<projectDir> not
-          # a file" (measured 2026-08-25, both macOS jobs; Linux + Windows
-          # packaged fine). Auto-discovery OFF skips signing entirely — the
-          # documented unsigned-packages fallback (RELEASING.md). When
-          # certificates are added, CSC_LINK is set and signing proceeds.
-          # NOTE 2026-08-25: a previous edit dropped the `env:` key while
-          # leaving these lines — GitHub's workflow parser then produced
-          # 0-job "failure" runs on every push with the workflow registered
-          # under its file path. Keep `env:` on the step.
-          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
-          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
-          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
 
       - name: Upload installers
         uses: actions/upload-artifact@v7
