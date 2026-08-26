@@ -40,6 +40,11 @@ export function ChatView() {
   // When the agent has no feed message yet, posts go out as @agent mentions.
   const [chatTarget, setChatTarget] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
+  // Send failures are VISIBLE now -- main returns the real post result
+  // (the relay 403s an unjoined identity on #agents), and the old
+  // fire-and-forget version let the chat window believe every message
+  // sent (2026-08-25).
+  const [sendError, setSendError] = useState<string | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -94,22 +99,53 @@ export function ChatView() {
   const send = () => {
     const text = draft.trim();
     if (!text) return;
-    setDraft('');
     const deck = bridgeDeck();
-    if (!deck) return;
+    if (!deck) {
+      setSendError('Desk bridge unavailable — reopen the chat window.');
+      return;
+    }
+    setDraft('');
+    setSendError(null);
+    // Restore the draft on failure so a refused message is not silently eaten.
+    const fail = (message: string) => {
+      setDraft(text);
+      setSendError(message);
+    };
     if (thread && thread.anchorId) {
       const anchorId = thread.anchorId;
-      void deck.action(
-        'relay-thread-reply',
-        JSON.stringify({ channel: state.relayChannel, messageId: anchorId, text }),
-      );
-      window.setTimeout(() => {
-        void deck.relayThread(anchorId).then((rows) => setThread({ anchorId, rows })).catch(() => {});
-      }, 800);
-    } else if (chatTarget) {
-      void deck.action('relay-post', `@${chatTarget} ${text}`);
+      void deck
+        .action(
+          'relay-thread-reply',
+          JSON.stringify({ channel: state.relayChannel, messageId: anchorId, text }),
+        )
+        .then((ok) => {
+          if (!ok) {
+            fail('Not sent — the relay refused the reply.');
+            return;
+          }
+          window.setTimeout(() => {
+            void deck
+              .relayThread(anchorId)
+              .then((rows) => setThread({ anchorId, rows }))
+              .catch(() => {});
+          }, 800);
+        })
+        .catch(() => fail('Not sent — the relay is unreachable.'));
     } else {
-      void deck.action('relay-post', text);
+      const payload = chatTarget ? `@${chatTarget} ${text}` : text;
+      void deck
+        .action('relay-post', payload)
+        .then((ok) => {
+          if (!ok) {
+            fail('Not sent — the relay refused the post.');
+            return;
+          }
+          // Belt and braces: main refreshes the feed and now pushes it to this
+          // window too, but pull once more so the sent message shows even if
+          // the push is missed.
+          window.setTimeout(() => pull(), 900);
+        })
+        .catch(() => fail('Not sent — the relay is unreachable.'));
     }
   };
 
@@ -152,18 +188,25 @@ export function ChatView() {
             {thread ? 'No replies in this thread yet.' : 'The room is quiet — say something.'}
           </p>
         ) : (
-          rows.map((row, index) => (
-            <button
-              className={`chat-row${thread ? ' chat-row-static' : ''}`}
-              key={`${row.id}-${index}`}
-              onClick={() => !thread && openThread(row)}
-              title={thread ? undefined : 'Open this conversation'}
-            >
-              <span className="chat-author">{row.author || 'unknown'}</span>
-              <span className="chat-age">{formatAge(row.at, nowMs)}</span>
-              <p className="chat-text">{row.text}</p>
-            </button>
-          ))
+          rows.map((row, index) => {
+            // The desk posts as the owner identity — own messages align right
+            // as bubbles so a just-sent message is unmistakably visible.
+            const own = row.author === 'david';
+            return (
+              <button
+                className={`chat-row${thread ? ' chat-row-static' : ''}${own ? ' chat-own' : ''}`}
+                key={`${row.id}-${index}`}
+                onClick={() => !thread && openThread(row)}
+                title={thread ? undefined : 'Open this conversation'}
+              >
+                <span className="chat-meta">
+                  <span className="chat-author">{row.author || 'unknown'}</span>
+                  <span className="chat-age">{formatAge(row.at, nowMs)}</span>
+                </span>
+                <span className="chat-bubble">{row.text}</span>
+              </button>
+            );
+          })
         )}
       </div>
       <footer className="chat-compose">
@@ -171,12 +214,23 @@ export function ChatView() {
           className="chat-input"
           placeholder={thread ? 'Reply in thread…' : `Post to ${state.relayChannel}…`}
           value={draft}
-          onChange={(event) => setDraft(event.target.value)}
+          onChange={(event) => {
+            setDraft(event.target.value);
+            if (sendError) setSendError(null);
+          }}
           onKeyDown={(event) => {
             if (event.key === 'Enter') send();
           }}
         />
         <button className="chat-send" onClick={send}>Send</button>
+        {sendError && (
+          <p
+            className="chat-send-error"
+            style={{ color: '#ff7a7a', fontSize: 11, margin: 0 }}
+          >
+            {sendError}
+          </p>
+        )}
       </footer>
     </main>
   );

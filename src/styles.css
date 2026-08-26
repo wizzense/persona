@@ -584,3 +584,173 @@ body {
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+
+/* ── the chat window (?chat=1) — a dedicated chat surface, not the deck ──── */
+.chat-view {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--deck-bg, rgba(15, 18, 28, 0.97));
+  color: var(--deck-text, #e8ecf6);
+  font-family: inherit;
+  border: 1px solid var(--deck-edge, rgba(255, 255, 255, 0.10));
+  border-radius: 12px;
+  overflow: hidden;
+}
+.chat-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--deck-edge, rgba(255, 255, 255, 0.08));
+}
+.chat-head-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  font-size: 14px;
+}
+.chat-back {
+  background: transparent;
+  border: 1px solid var(--deck-edge, rgba(255, 255, 255, 0.08));
+  color: var(--deck-soft, #aab3c9);
+  border-radius: 6px;
+  padding: 3px 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.chat-list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+}
+.chat-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  max-width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  padding: 2px 0;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+.chat-row-static { cursor: default; }
+.chat-own { align-items: flex-end; }
+.chat-meta {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 0 4px;
+}
+.chat-author {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--deck-accent, #7aa2ff);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 160px;
+}
+.chat-age { font-size: 10px; color: var(--deck-muted, #6b7690); }
+.chat-bubble {
+  background: var(--deck-panel, rgba(30, 36, 54, 0.92));
+  border: 1px solid var(--deck-edge, rgba(255, 255, 255, 0.08));
+  border-radius: 4px 12px 12px 12px;
+  padding: 7px 11px;
+  max-width: 88%;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--deck-text, #e8ecf6);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.chat-own .chat-bubble {
+  background: rgba(122, 162, 255, 0.16);
+  border-color: rgba(122, 162, 255, 0.35);
+  border-radius: 12px 4px 12px 12px;
+}
+.chat-own .chat-author { color: #9db8ff; }
+.chat-row:hover .chat-bubble { border-color: rgba(122, 162, 255, 0.45); }
+.chat-empty {
+  color: var(--deck-muted, #6b7690);
+  font-size: 13px;
+  text-align: center;
+  margin-top: 40px;
+}
+.chat-compose {
+  display: flex;
+  gap: 8px;
+  padding: 12px;
+  border-top: 1px solid var(--deck-edge, rgba(255, 255, 255, 0.08));
+  align-items: center;
+  flex-wrap: wrap;
+}
+.chat-input {
+  flex: 1;
+  background: var(--deck-panel, rgba(30, 36, 54, 0.92));
+  border: 1px solid var(--deck-edge, rgba(255, 255, 255, 0.10));
+  border-radius: 18px;
+  color: var(--deck-text, #e8ecf6);
+  padding: 9px 14px;
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+}
+.chat-input:focus { border-color: rgba(122, 162, 255, 0.55); }
+.chat-send {
+  background: var(--deck-accent, #7aa2ff);
+  color: var(--deck-accent-fg, #0d1120);
+  border: none;
+  border-radius: 18px;
+  padding: 9px 16px;
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+}
+.chat-send:hover { filter: brightness(1.1); }
+.chat-send-error {
+  flex-basis: 100%;
+  padding: 0 4px;
+}
+
+/* chat window: the header IS the drag region; the controls opt out so they
+   stay clickable (the app-region-drag swallow-right-click lesson) */
+.chat-head {
+  -webkit-app-region: drag;
+}
+.chat-head .chat-target,
+.chat-head .chat-ctl {
+  -webkit-app-region: no-drag;
+}
+.chat-target {
+  background: var(--deck-panel, rgba(30, 36, 54, 0.92));
+  border: 1px solid var(--deck-edge, rgba(255, 255, 255, 0.08));
+  border-radius: 6px;
+  color: var(--deck-text, #e8ecf6);
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 6px;
+  max-width: 130px;
+}
+.chat-ctl {
+  background: transparent;
+  border: 1px solid var(--deck-edge, rgba(255, 255, 255, 0.08));
+  border-radius: 6px;
+  color: var(--deck-soft, #aab3c9);
+  width: 26px;
+  height: 24px;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+.chat-ctl:hover { background: var(--bead-hover, rgba(52, 60, 88, 0.85)); }
+.chat-ctl-close:hover { background: #b33636; color: #fff; }

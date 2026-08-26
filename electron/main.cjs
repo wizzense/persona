@@ -165,6 +165,7 @@ const debugEnabled = process.env.DESK_DEBUG === "1";
 
 let avatarWindow = null;
 let deckWindow = null;
+let chatWindow = null;
 let bridge = null;
 let isQuitting = false;
 let latestEvent = null;
@@ -406,14 +407,18 @@ function createWindow() {
   ipcMain.removeAllListeners("desk:drag-start");
   ipcMain.removeAllListeners("desk:drag-move");
   ipcMain.removeAllListeners("desk:drag-end");
-  ipcMain.on("desk:drag-start", (_event, { x, y }) => {
-    if (!avatarWindow) return;
-    const [winX, winY] = avatarWindow.getPosition();
-    dragOrigin = { mouseX: x, mouseY: y, winX, winY };
+  ipcMain.on("desk:drag-start", (event, { x, y }) => {
+    // The window that SENT the drag — the preload runs in the avatar,
+    // deck AND chat windows, and moving the avatar from the chat window
+    // was the measured "you can't even move it" bug (2026-08-25).
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win) return;
+    const [winX, winY] = win.getPosition();
+    dragOrigin = { mouseX: x, mouseY: y, winX, winY, win };
   });
   ipcMain.on("desk:drag-move", (_event, { x, y }) => {
-    if (!dragOrigin || !avatarWindow) return;
-    avatarWindow.setPosition(
+    if (!dragOrigin || dragOrigin.win.isDestroyed()) return;
+    dragOrigin.win.setPosition(
       Math.round(dragOrigin.winX + (x - dragOrigin.mouseX)),
       Math.round(dragOrigin.winY + (y - dragOrigin.mouseY)),
       false,
@@ -421,6 +426,18 @@ function createWindow() {
   });
   ipcMain.on("desk:drag-end", () => {
     dragOrigin = null;
+  });
+
+  // Sender-scoped window controls: any window (deck, chat) can minimize or
+  // close ITSELF — the chat window shipped frameless with no way out,
+  // which read as half-done (2026-08-25).
+  ipcMain.on("desk:window-minimize", (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (win) win.minimize();
+  });
+  ipcMain.on("desk:window-close", (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (win) win.close();
   });
   // NOTE: rendererUrl is a FUNCTION — call it. Passing the function itself to
   // loadURL throws "Error processing argument at index 0, conversion failure"
@@ -984,10 +1001,17 @@ function deckState() {
   };
 }
 
-/** Push fresh state to the deck panel (slot changes, decision arrivals). */
+/** Push fresh state to every window rendering the deck feed. */
 function sendDeckState() {
-  if (!deckWindow || deckWindow.isDestroyed()) return;
-  deckWindow.webContents.send("desk:event", { type: "deck-state", ...deckState() });
+  const event = { type: "deck-state", ...deckState() };
+  if (deckWindow && !deckWindow.isDestroyed()) {
+    deckWindow.webContents.send("desk:event", event);
+  }
+  // The chat window renders the SAME feed; without this push a sent
+  // message never appears in the list the sender is looking at.
+  if (chatWindow && !chatWindow.isDestroyed()) {
+    chatWindow.webContents.send("desk:event", event);
+  }
 }
 
 // Feed the Living Desktop overlay the same snapshot the deck panel consumes, so the
@@ -1089,6 +1113,53 @@ function createDeckWindow() {
   return deckWindow;
 }
 
+function createChatWindow() {
+  // The chat bead window (2026-08-25): the company-room relay + direct
+  // threads in a DEDICATED chat surface — not the deck, not a terminal.
+  if (chatWindow && !chatWindow.isDestroyed()) {
+    chatWindow.show();
+    chatWindow.focus();
+    return chatWindow;
+  }
+  const workArea = screen.getPrimaryDisplay().workArea;
+  const base =
+    avatarWindow && !avatarWindow.isDestroyed() ? avatarWindow.getBounds() : null;
+  const width = 420;
+  const height = 640;
+  let x = base ? base.x - width - 10 : workArea.x + 60;
+  let y = base ? base.y : workArea.y + 80;
+  if (x < workArea.x) {
+    x = Math.min(workArea.x + workArea.width - width - 8,
+      base ? base.x + base.width + 10 : x);
+  }
+  y = Math.max(workArea.y + 8, Math.min(y, workArea.y + workArea.height - height - 8));
+  chatWindow = new BrowserWindow({
+    x, y, width, height, minWidth: 340, minHeight: 420,
+    show: false, frame: false, transparent: true, alwaysOnTop: true,
+    skipTaskbar: false, title: "Desk chat",
+    webPreferences: {
+      preload: path.join(__dirname, "preload.cjs"),
+      contextIsolation: true, nodeIntegration: false, sandbox: true,
+    },
+  });
+  chatWindow.setAlwaysOnTop(true, "floating");
+  chatWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  const chatUrl =
+    rendererUrl() + (rendererUrl().includes("?") ? "&" : "?") + "chat=1";
+  chatWindow.webContents.on("will-navigate", (event, targetUrl) => {
+    if (!isAllowedRendererNavigation(targetUrl, chatUrl)) event.preventDefault();
+  });
+  chatWindow.once("ready-to-show", () => {
+    chatWindow.show();
+    chatWindow.focus();
+  });
+  chatWindow.on("closed", () => {
+    chatWindow = null;
+  });
+  void chatWindow.loadURL(chatUrl);
+  return chatWindow;
+}
+
 function createTray() {
   const iconPath = path.join(__dirname, "..", "build", "icon.png");
   const icon = nativeImage.createFromPath(iconPath).resize({ width: 20, height: 20 });
@@ -1183,7 +1254,7 @@ if (!app.requestSingleInstanceLock()) {
     // (the thread = the conversation with that agent). [] on any failure.
     ipcMain.handle("desk:relay-thread", (_event, messageId) =>
       fetchRelayThread(RELAY_CHANNEL, typeof messageId === "string" ? messageId : ""));
-    ipcMain.handle("desk:deck-action", (_event, name, arg) => {
+    ipcMain.handle("desk:deck-action", async (_event, name, arg) => {
       switch (name) {
         case "models":
           openModelBrowser();
@@ -1211,6 +1282,9 @@ if (!app.requestSingleInstanceLock()) {
           void shell.openExternal(arg);
           return true;
         }
+        case "chat":
+          createChatWindow();
+          return true;
         case "talk":
           openTalkWindow();
           return true;
@@ -1284,8 +1358,13 @@ if (!app.requestSingleInstanceLock()) {
           return true;
         case "relay-post": {
           if (typeof arg !== "string" || arg.length === 0) return false;
-          void postToRelay(RELAY_CHANNEL, arg).then(() => void refreshRelayFeed());
-          return true;
+          // AWAIT and report the real result: the fire-and-forget version
+          // returned true while the relay 403'd the post (agent-only channel,
+          // unjoined identity) -- the chat window then believed the message
+          // sent. False must reach the renderer.
+          const sent = await postToRelay(RELAY_CHANNEL, arg);
+          if (sent) void refreshRelayFeed();
+          return sent;
         }
         // The per-avatar DIRECT chat send path: the conversation with a
         // spawned agent is the THREAD under its message (the relay's
@@ -1302,12 +1381,13 @@ if (!app.requestSingleInstanceLock()) {
           }
           if (!parsed || typeof parsed.messageId !== "string") return false;
           if (typeof parsed.text !== "string" || !parsed.text.trim()) return false;
-          void postRelayThreadReply(
+          const replied = await postRelayThreadReply(
             parsed.channel || RELAY_CHANNEL,
             parsed.messageId,
             parsed.text,
-          ).then(() => void refreshRelayFeed());
-          return true;
+          );
+          if (replied) void refreshRelayFeed();
+          return replied;
         }
         case "spawn-agent": {
           if (typeof arg !== "string" || arg.length === 0) return false;

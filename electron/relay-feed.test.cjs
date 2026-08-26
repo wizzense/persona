@@ -70,24 +70,32 @@ test("fetchHistory returns [] when the relay refuses or speaks non-JSON", async 
   );
 });
 
-test("post sends the text and reports the relay verdict", async () => {
-  const seen = [];
-  assert.equal(
-    await post("#agents", "hello fleet", fakeSpawn((args) => {
-      // never echo the --token pair back into an assertion message (secret-safety)
-      seen.push(args.filter((a, i) => args[i - 1] !== "--token" && a !== "--token"));
-      return { code: 0, stdout: "" };
-    })),
-    true,
-  );
-  assert.deepEqual(seen[0], ["--url", RELAY_URL, "send", "#agents", "hello fleet"]);
+function fakeRequest(handler) {
+  return (method, urlPath, body) => Promise.resolve(handler(method, urlPath, body));
+}
 
-  assert.equal(
-    await post("#agents", "hello", fakeSpawn(() => ({ code: 1, stdout: "" }))),
-    false,
-    "a relay refusal must be false, not thrown",
-  );
-  assert.equal(await post("#agents", "   "), false, "blank text never spawns");
+test("post joins the relay identity, sends over HTTP, and reports the verdict", async () => {
+  const calls = [];
+  const req = fakeRequest((_method, urlPath, body) => {
+    calls.push({ urlPath, body });
+    if (urlPath === "/v1/agent/join") return { status: 200, body: '{"is_agent":true,"nick":"david"}' };
+    if (urlPath.includes("/messages")) return { status: 200, body: '{"success":true}' };
+    return { status: 500, body: "" };
+  });
+  assert.equal(await post("#agents", "hello fleet", req), true);
+  const send = calls.find((c) => c.urlPath.includes("/v1/channels/%23agents/messages"));
+  assert.ok(send, "the message POST happened");
+  assert.equal(send.body.channel, "#agents");
+  assert.equal(send.body.nick, "david");
+  assert.equal(send.body.content, "hello fleet");
+
+  // a 403 refusal is false, not thrown
+  const refuse = fakeRequest((_m, urlPath) => {
+    if (urlPath === "/v1/agent/join") return { status: 200, body: '{"is_agent":true}' };
+    return { status: 403, body: "agent-only channel" };
+  });
+  assert.equal(await post("#agents", "hello", refuse), false);
+  assert.equal(await post("#agents", "   "), false, "blank text never sends");
 });
 
 test("fetchThread shapes thread replies and carries id/threadId/agent", async () => {
@@ -138,25 +146,26 @@ test("fetchThread returns [] on refusal, bad json, or a missing id", async () =>
   assert.deepEqual(await fetchThread("#agents", ""), [], "an empty id never spawns");
 });
 
-test("postThreadReply sends a thread-reply and reports the verdict", async () => {
-  const seen = [];
-  assert.equal(
-    await postThreadReply("#agents", "451a3460", "nice catch", fakeSpawn((args) => {
-      // never echo the --token pair back into an assertion message (secret-safety)
-      seen.push(args.filter((a, i) => args[i - 1] !== "--token" && a !== "--token"));
-      return { code: 0, stdout: "" };
-    })),
-    true,
-  );
-  assert.deepEqual(
-    seen[0],
-    ["--url", RELAY_URL, "thread-reply", "#agents", "451a3460", "nice catch"],
-  );
-  assert.equal(
-    await postThreadReply("#agents", "m", "x", fakeSpawn(() => ({ code: 1, stdout: "" }))),
-    false,
-    "a relay refusal must be false",
-  );
-  assert.equal(await postThreadReply("#agents", "", "x"), false, "a missing id never spawns");
-  assert.equal(await postThreadReply("#agents", "m", "  "), false, "blank text never spawns");
+test("postThreadReply replies over HTTP and reports the verdict", async () => {
+  const calls = [];
+  const req = fakeRequest((_method, urlPath, body) => {
+    calls.push({ urlPath, body });
+    if (urlPath === "/v1/agent/join") return { status: 200, body: '{"is_agent":true}' };
+    if (urlPath.includes("/thread")) return { status: 200, body: '{"success":true,"reply":{}}' };
+    return { status: 500, body: "" };
+  });
+  assert.equal(await postThreadReply("#agents", "451a3460", "nice catch", req), true);
+  const reply = calls.find((c) => c.urlPath.includes("/thread"));
+  assert.ok(reply, "the thread POST happened");
+  assert.ok(reply.urlPath.includes("451a3460"), "the parent id is in the URL");
+  assert.equal(reply.body.nick, "david");
+  assert.equal(reply.body.content, "nice catch");
+
+  const refuse = fakeRequest((_m, urlPath) => {
+    if (urlPath === "/v1/agent/join") return { status: 200, body: '{"is_agent":true}' };
+    return { status: 403, body: "" };
+  });
+  assert.equal(await postThreadReply("#agents", "m", "x", refuse), false, "a refusal must be false");
+  assert.equal(await postThreadReply("#agents", "", "x"), false, "a missing id never sends");
+  assert.equal(await postThreadReply("#agents", "m", "  "), false, "blank text never sends");
 });

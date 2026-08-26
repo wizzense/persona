@@ -22,10 +22,99 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { spawn, execFileSync } = require("node:child_process");
+const https = require("node:https");
 
 const RELAY_URL = "https://127.0.0.1:8205";
 const RELAY_CHANNEL = "#agents";
 const HISTORY_LIMIT = 12;
+const RELAY_NICK = "david";
+// RELAY_NICK is the OWNER identity, derived server-side from
+// fleet_trust.json by link_relay_identity.py. The relay's write paths
+// (/v1/agent/join, /v1/channels/*/messages, thread replies) REQUIRE
+// req.nick to equal the authenticated identity's name for a non-ACTA
+// bearer -- a session alias like david+<sid> is refused there (403
+// "Requested nick does not match authenticated identity", measured
+// 2026-08-25). The awrelay CLI cannot reach an agent-only room at all,
+// so posts go DIRECT to the HTTP API -- the same recipe the
+// link_relay_identity.py proof uses.
+
+// The AitherNet CA chain, same file the python services trust
+// (lib/security/TLSConfig.py -> Library/Data/tls/ca-chain.pem).
+function relayCa() {
+  const candidates = [];
+  if (process.env.AITHEROS_ROOT) {
+    candidates.push(path.join(process.env.AITHEROS_ROOT, "Library", "Data", "tls", "ca-chain.pem"));
+  }
+  candidates.push(
+    "C:\\AitherOS-Data\\Library\\Data\\tls\\ca-chain.pem",
+    "C:\\AitherOS-Fresh\\AitherOS\\Library\\Data\\tls\\ca-chain.pem",
+  );
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p)) return { ca: fs.readFileSync(p) };
+    } catch {}
+  }
+  return {};
+}
+
+function relayRequest(method, urlPath, body) {
+  return new Promise((resolve) => {
+    const token = bearer();
+    if (!token) {
+      resolve({ status: 0, body: "" });
+      return;
+    }
+    const payload = JSON.stringify(body);
+    const req = https.request(
+      {
+        hostname: "127.0.0.1",
+        port: 8205,
+        path: urlPath,
+        method,
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+          "Content-Length": Buffer.byteLength(payload),
+        },
+        ...relayCa(),
+      },
+      (res) => {
+        let data = "";
+        res.on("data", (chunk) => { data += chunk; });
+        res.on("end", () => resolve({ status: res.statusCode || 0, body: data }));
+      },
+    );
+    req.on("error", () => resolve({ status: 0, body: "" }));
+    req.end(payload);
+  });
+}
+
+let joinState = "pending"; // "pending" | "joined" | "failed"
+let joinPromise = null;
+let joinedBearer = null;
+function ensureJoined(requestFn = relayRequest) {
+  // The bearer ROTATES on device-flow refresh: a new bearer is a new
+  // identity and must join again. Compare before trusting the cache.
+  if (joinState === "joined" && joinedBearer !== bearer()) {
+    joinState = "pending";
+    joinPromise = null;
+  }
+  if (joinPromise) return joinPromise;
+  if (joinState === "joined") return Promise.resolve(true);
+  joinState = "pending";
+  joinPromise = (async () => {
+    const r = await requestFn("POST", "/v1/agent/join", {
+      nick: RELAY_NICK,
+      channel: RELAY_CHANNEL,
+    });
+    const ok = r.status >= 200 && r.status < 300 && r.body.includes("is_agent");
+    if (ok) joinedBearer = bearer();
+    joinState = ok ? "joined" : "failed";
+    if (!ok) joinPromise = null;
+    return ok;
+  })();
+  return joinPromise;
+}
 
 function bearer() {
   try {
@@ -166,21 +255,35 @@ async function fetchThread(channel, messageId, execFn = spawn) {
 }
 
 /** Post a message to a channel as the owner. False when the relay refused. */
-async function post(channel = RELAY_CHANNEL, text, execFn = spawn) {
+async function post(channel = RELAY_CHANNEL, text, requestFn = relayRequest) {
   if (typeof text !== "string" || !text.trim()) return false;
-  const { code } = await runAwrelay(["send", channel, text.trim().slice(0, 1500)], execFn);
-  return code === 0;
+  // Join first (lazy, once per bearer): #agents is agent-only and an
+  // unjoined identity is silently 403'd.
+  if (!(await ensureJoined(requestFn))) return false;
+  const q = channel.replace("#", "%23");
+  const r = await requestFn("POST", `/v1/channels/${q}/messages`, {
+    channel,
+    nick: RELAY_NICK,
+    content: text.trim().slice(0, 1500),
+  });
+  return r.status >= 200 && r.status < 300;
 }
 
 /** Reply into a message's thread — the per-agent direct chat send path. */
-async function postThreadReply(channel, messageId, text, execFn = spawn) {
+async function postThreadReply(channel, messageId, text, requestFn = relayRequest) {
   if (typeof messageId !== "string" || !messageId) return false;
   if (typeof text !== "string" || !text.trim()) return false;
-  const { code } = await runAwrelay(
-    ["thread-reply", channel, messageId, text.trim().slice(0, 1500)],
-    execFn,
+  if (!(await ensureJoined(requestFn))) return false;
+  const q = channel.replace("#", "%23");
+  const r = await requestFn("POST",
+    `/v1/channels/${q}/messages/${encodeURIComponent(messageId)}/thread`,
+    {
+      channel,
+      nick: RELAY_NICK,
+      content: text.trim().slice(0, 1500),
+    },
   );
-  return code === 0;
+  return r.status >= 200 && r.status < 300;
 }
 
 module.exports = {

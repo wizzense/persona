@@ -5,6 +5,8 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("deskBridge", {
   getSnapshot: () => ipcRenderer.invoke("desk:get-snapshot"),
   hide: () => ipcRenderer.send("desk:hide"),
+  minimize: () => ipcRenderer.send("desk:window-minimize"),
+  close: () => ipcRenderer.send("desk:window-close"),
   // Per-avatar context menu (2026-08-25): the renderer raycasts the click itself and
   // names the slot it hit; main builds the native Menu. The window-level deck trigger
   // below is suppressed for avatar hits via a dataset flag the renderer sets on the
