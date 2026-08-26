@@ -36,6 +36,9 @@ function bridgeSubscribe(listener: (event: Record<string, unknown>) => void): ()
 export function ChatView() {
   const [state, setState] = useState<DeckState>(EMPTY_DECK_STATE);
   const [thread, setThread] = useState<{ anchorId: string; rows: RelayRow[] } | null>(null);
+  // Who the composer is addressing: null = the room, "agent" = a direct thread.
+  // When the agent has no feed message yet, posts go out as @agent mentions.
+  const [chatTarget, setChatTarget] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [nowMs, setNowMs] = useState(() => Date.now());
   const listRef = useRef<HTMLDivElement>(null);
@@ -70,13 +73,31 @@ export function ChatView() {
       .catch(() => {});
   };
 
+  /** Pick a conversation: the room, or the direct thread under the chosen
+   *  agent's most recent room message (no per-agent channels exist — the
+   *  thread IS the conversation, same doctrine as the deck's chat pane). */
+  const pickTarget = (agent: string | null) => {
+    setChatTarget(agent);
+    if (!agent) {
+      setThread(null);
+      return;
+    }
+    const latest = [...state.relay].reverse().find((row) => row.author === agent);
+    if (latest) {
+      openThread(latest);
+    } else {
+      // No feed message yet: compose @agent mentions into the room.
+      setThread({ anchorId: '', rows: [] });
+    }
+  };
+
   const send = () => {
     const text = draft.trim();
     if (!text) return;
     setDraft('');
     const deck = bridgeDeck();
     if (!deck) return;
-    if (thread) {
+    if (thread && thread.anchorId) {
       const anchorId = thread.anchorId;
       void deck.action(
         'relay-thread-reply',
@@ -85,24 +106,45 @@ export function ChatView() {
       window.setTimeout(() => {
         void deck.relayThread(anchorId).then((rows) => setThread({ anchorId, rows })).catch(() => {});
       }, 800);
+    } else if (chatTarget) {
+      void deck.action('relay-post', `@${chatTarget} ${text}`);
     } else {
       void deck.action('relay-post', text);
     }
   };
 
   const rows = thread ? thread.rows : state.relay;
+  const title = thread && thread.anchorId
+    ? `Direct chat — ${chatTarget ?? 'thread'}`
+    : chatTarget
+      ? `${chatTarget} — direct`
+      : `${state.relayChannel} — the company room`;
 
   return (
     <main className="chat-view">
       <header className="chat-head">
-        <span className="chat-head-title">
-          {thread ? 'Direct chat' : `${state.relayChannel} — the company room`}
-        </span>
-        {thread ? (
-          <button className="chat-back" onClick={() => setThread(null)} title="Back to the room">
-            ← room
-          </button>
-        ) : null}
+        <span className="chat-head-title" title={title}>{title}</span>
+        <select
+          className="chat-target"
+          value={chatTarget ?? ''}
+          onChange={(event) => pickTarget(event.target.value || null)}
+          title="Who you are talking to"
+        >
+          <option value="">{state.relayChannel} (room)</option>
+          {state.agents.map((agent) => (
+            <option key={agent} value={agent}>{agent}</option>
+          ))}
+        </select>
+        <button
+          className="chat-ctl"
+          onClick={() => window.deskBridge?.minimize()}
+          title="Minimize"
+        >─</button>
+        <button
+          className="chat-ctl chat-ctl-close"
+          onClick={() => window.deskBridge?.close()}
+          title="Close"
+        >×</button>
       </header>
       <div className="chat-list" ref={listRef}>
         {rows.length === 0 ? (
