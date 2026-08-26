@@ -544,6 +544,161 @@ function DecisionRow({
   );
 }
 
+/**
+ * System awareness (#9): one panel over the five snapshot sources main
+ * serves (system / voice / vision / desktop / connect). Every source fails
+ * soft by contract — an unavailable backend renders its reason, never a
+ * broken panel.
+ */
+type SnapshotSource = Record<string, unknown> | null | undefined;
+interface AwarenessState {
+  ok: boolean;
+  system?: SnapshotSource;
+  agents?: SnapshotSource;
+  status?: SnapshotSource;
+  window?: SnapshotSource;
+  context?: SnapshotSource;
+  workspace?: SnapshotSource;
+  terminals?: { total?: number; note?: string } | null;
+  reason?: string;
+}
+
+function noteOf(src: SnapshotSource): string {
+  if (!src || typeof src !== 'object') return '';
+  const note = (src as Record<string, unknown>).note;
+  return typeof note === 'string' ? note : '';
+}
+
+function SystemSection() {
+  const [awareness, setAwareness] = useState<Record<string, AwarenessState | undefined>>({});
+  const [busy, setBusy] = useState(false);
+
+  const runAwareness = useCallback(() => {
+    const bridge = window.deskBridge as unknown as {
+      system?: {
+        snapshot?: () => Promise<AwarenessState>;
+        voice?: () => Promise<AwarenessState>;
+        vision?: () => Promise<AwarenessState>;
+        desktop?: () => Promise<AwarenessState>;
+        connect?: () => Promise<AwarenessState>;
+      };
+    } | undefined;
+    if (!bridge?.system) return;
+    setBusy(true);
+    const guard = (name: string) => (res: AwarenessState | undefined) => {
+      setAwareness((prev) => ({ ...prev, [name]: res ?? { ok: false, reason: 'unreachable' } }));
+    };
+    void bridge.system.snapshot?.().then(guard('system')).finally(() => setBusy(false));
+    void bridge.system.voice?.().then(guard('voice'));
+    void bridge.system.vision?.().then(guard('vision'));
+    void bridge.system.desktop?.().then(guard('desktop'));
+    void bridge.system.connect?.().then(guard('connect'));
+  }, []);
+
+  useEffect(() => {
+    runAwareness();
+  }, [runAwareness]);
+
+  const sys = awareness.system;
+  const voice = awareness.voice;
+  const vision = awareness.vision;
+  const desktop = awareness.desktop;
+  const connect = awareness.connect;
+
+  const systemObj = sys?.system as { services?: unknown[] } | null | undefined;
+  const agentsObj = sys?.agents as { activities?: unknown[] } | null | undefined;
+  const serviceCount = Array.isArray(systemObj?.services)
+    ? systemObj.services.length
+    : systemObj && typeof systemObj === 'object' && !noteOf(systemObj)
+      ? Object.keys(systemObj).length
+      : '?';
+  const agentsCount = Array.isArray(agentsObj?.activities)
+    ? agentsObj.activities.length
+    : agentsObj && typeof agentsObj === 'object' && !noteOf(agentsObj)
+      ? Object.keys(agentsObj).length
+      : '?';
+
+  const voiceLine = (() => {
+    if (!voice?.ok) return `unreachable — ${voice?.reason ?? ''}`;
+    const status = voice.status as { status?: string; error?: string } | null | undefined;
+    if (status?.status === 'error') return `down — ${status.error ?? 'service error'}`;
+    const note = noteOf(voice.status as SnapshotSource);
+    if (note) return note;
+    return 'up';
+  })();
+
+  const visionLine = (() => {
+    if (!vision?.ok) return `unreachable — ${vision?.reason ?? ''}`;
+    const error = (vision.status as { error?: string } | null | undefined)?.error;
+    if (error) return `down — ${error}`;
+    const note = noteOf(vision.status as SnapshotSource);
+    if (note) return note;
+    return 'up';
+  })();
+
+  const desktopLine = (() => {
+    if (!desktop?.ok) return `unreachable — ${desktop?.reason ?? ''}`;
+    const win = desktop.window as
+      | { available?: boolean; process?: string; title?: string; message?: string; reason?: string }
+      | null | undefined;
+    if (win?.available === false) {
+      return `unavailable — ${win.message ?? win.reason ?? 'platform'}`;
+    }
+    const winNote = noteOf(desktop.window as SnapshotSource);
+    if (winNote) return winNote;
+    if (win?.process) return `${win.process}${win.title ? ` — ${win.title}` : ''}`;
+    return 'no window data';
+  })();
+
+  const connectLine = (() => {
+    if (!connect?.ok) return `unreachable — ${connect?.reason ?? ''}`;
+    const ws = connect.workspace as { profile?: string | null } | null | undefined;
+    const wsNote = noteOf(connect.workspace as SnapshotSource);
+    if (wsNote) return wsNote;
+    const profile = ws?.profile ?? 'no active workspace profile';
+    const tt = connect.terminals?.total ?? 0;
+    const ttNote = connect.terminals?.note;
+    return `${profile} · ${tt} terminal session(s)${ttNote ? ` — ${ttNote}` : ''}`;
+  })();
+
+  return (
+    <section className="deck-section" aria-label="System awareness">
+      <h2 className="deck-section-head">
+        <span className="deck-section-icon"><MonitorIcon /></span>
+        System awareness
+        <button
+          className="deck-chip"
+          title="Refresh every awareness source"
+          onClick={() => runAwareness()}
+          disabled={busy}
+        >
+          {busy ? '…' : 'Refresh'}
+        </button>
+      </h2>
+      <div className="deck-row deck-row-static">
+        <span className="deck-row-label">System</span>
+        <span className="deck-row-label">{serviceCount} service key(s) · {agentsCount} agent activity key(s)</span>
+      </div>
+      <div className="deck-row deck-row-static">
+        <span className="deck-row-label">Voice</span>
+        <span className="deck-row-label">{voiceLine}</span>
+      </div>
+      <div className="deck-row deck-row-static">
+        <span className="deck-row-label">Vision</span>
+        <span className="deck-row-label">{visionLine}</span>
+      </div>
+      <div className="deck-row deck-row-static">
+        <span className="deck-row-label">Desktop</span>
+        <span className="deck-row-label">{desktopLine}</span>
+      </div>
+      <div className="deck-row deck-row-static">
+        <span className="deck-row-label">Workspace</span>
+        <span className="deck-row-label">{connectLine}</span>
+      </div>
+    </section>
+  );
+}
+
 export function Deck() {
   const [state, setState] = useState<DeckState>(EMPTY_DECK_STATE);
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -754,6 +909,8 @@ export function Deck() {
             <span className="deck-row-label">Show the notification area in Living Desktop</span>
           </button>
         </section>
+
+        <SystemSection />
 
         <section className="deck-section" aria-label="Avatars">
           <h2 className="deck-section-head">

@@ -24,6 +24,14 @@ const {
   RELAY_CHANNEL,
 } = require("./relay-feed.cjs");
 const marketClient = require("./market-client.cjs");
+// Full system awareness (#9): the five snapshot clients the deck's System
+// section renders. Each fails soft (ok:true + per-source ERROR notes) — a
+// down gateway is a rendered state, never a broken panel.
+const { systemSnapshot } = require("./system-client.cjs");
+const { voiceSnapshot } = require("./voice-client.cjs");
+const { visionSnapshot } = require("./vision-client.cjs");
+const { desktopSnapshot } = require("./browser-client.cjs");
+const { connectSnapshot } = require("./connect-client.cjs");
 const { createBridgeServer, DEFAULT_PORT } = require("./bridge-server.cjs");
 const {
   createDeskMcpHandler,
@@ -1254,6 +1262,12 @@ if (!app.requestSingleInstanceLock()) {
     // (the thread = the conversation with that agent). [] on any failure.
     ipcMain.handle("desk:relay-thread", (_event, messageId) =>
       fetchRelayThread(RELAY_CHANNEL, typeof messageId === "string" ? messageId : ""));
+    // System awareness snapshots (#9) — read-only, fail-soft by contract.
+    ipcMain.handle("desk:system-snapshot", () => systemSnapshot());
+    ipcMain.handle("desk:voice-snapshot", () => voiceSnapshot());
+    ipcMain.handle("desk:vision-snapshot", () => visionSnapshot());
+    ipcMain.handle("desk:desktop-snapshot", () => desktopSnapshot());
+    ipcMain.handle("desk:connect-snapshot", () => connectSnapshot());
     ipcMain.handle("desk:deck-action", async (_event, name, arg) => {
       switch (name) {
         case "models":

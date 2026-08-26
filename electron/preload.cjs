@@ -33,6 +33,15 @@ contextBridge.exposeInMainWorld("deskBridge", {
     // Per-avatar direct chat: the thread under an agent's message.
     relayThread: (messageId) => ipcRenderer.invoke("desk:relay-thread", messageId ?? ""),
   },
+  // Full system awareness (#9): the five snapshot sources the System section
+  // renders. Read-only; every one fails soft to ok:true + ERROR notes.
+  system: {
+    snapshot: () => ipcRenderer.invoke("desk:system-snapshot"),
+    voice: () => ipcRenderer.invoke("desk:voice-snapshot"),
+    vision: () => ipcRenderer.invoke("desk:vision-snapshot"),
+    desktop: () => ipcRenderer.invoke("desk:desktop-snapshot"),
+    connect: () => ipcRenderer.invoke("desk:connect-snapshot"),
+  },
 });
 
 // The camera controls preventDefault() on contextmenu (right-drag pans), which suppresses
