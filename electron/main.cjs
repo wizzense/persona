@@ -400,7 +400,7 @@ function createWindow() {
   // only pops on release. The renderer's camera controls preventDefault() the
   // contextmenu event, so the preload relays it over IPC — keep the native
   // handler too as a fallback. All the old submenus (decisions, talk, models,
-  // living desktop, avatar slots, size) are now deck sections, one click deep
+  // Aitheros Online, avatar slots, size) are now deck sections, one click deep
   // instead of three.
   avatarWindow.webContents.on("context-menu", () => createDeckWindow());
   ipcMain.removeAllListeners("desk:context-menu");
@@ -885,7 +885,7 @@ function buildAgentMenu() {
 /** Switch the window to whichever character an agent owns. Returns the character or null.
  *
  * OPT-IN as of 2026-08-25 (DESK_AGENT_AVATAR_SWITCH=1 enables). Every agent
- * surface (awsh turns, the decision-card fanout, Living OS, Awconnect) calls
+ * surface (awsh turns, the decision-card fanout, Aitheros Online, Awconnect) calls
  * set_agent as ambient telemetry, and each call re-installed that agent's
  * mapped character and RELOADED the window — so with several shells running,
  * the owner's manually chosen avatar was overwritten within seconds, over and
@@ -920,7 +920,7 @@ function refreshTrayMenu() {
   enforceActiveCharacterRating();
   // SLIMMED 2026-08-25 (owner redesign: "move away from nested menus"). The
   // deck panel (right-click the avatar, or "Open the Desk panel") carries the
-  // decision cards, models, talk, living desktop, avatar slots and size
+  // decision cards, models, talk, Aitheros Online, avatar slots and size
   // controls — each is now ONE click from the deck instead of a three-deep
   // submenu. Characters stays as the single deliberate exception: a 70+
   // character roster needs a picker with more than a row of chips, and that
@@ -939,7 +939,7 @@ function refreshTrayMenu() {
       { label: "Talk to Aither…", click: openTalkWindow },
       { label: "Browse models…", click: openModelBrowser },
       { label: "Media Forge", click: openMediaForge },
-      { label: "Living Desktop", submenu: buildLivingDesktopMenu() },
+      { label: "Aitheros Online", submenu: buildLivingDesktopMenu() },
       { type: "separator" },
       { label: "Characters", submenu: buildCharacterMenu() },
       { label: "Window Size", submenu: buildSizeMenu() },
@@ -1022,7 +1022,7 @@ function sendDeckState() {
   }
 }
 
-// Feed the Living Desktop overlay the same snapshot the deck panel consumes, so the
+// Feed the Aitheros Online overlay the same snapshot the deck panel consumes, so the
 // shell can render decision cards / slots / agents — the Veil side listens for
 // { __aither: 'desk-state' } postMessages (relayed by living-desktop-preload.cjs).
 // Polled lightly: deckState() is cheap and the overlay is a separate renderer, so
@@ -1473,7 +1473,7 @@ if (!app.requestSingleInstanceLock()) {
       port: Number(process.env.DESK_BRIDGE_PORT || DEFAULT_PORT),
       onEvent: handleBridgeEvent,
       mcpHandler,
-      // The Living Desktop overlay renders the STATIC site, whose
+      // The Aitheros Online overlay renders the STATIC site, whose
       // /api/decisions is a build stub — this loopback read is how its bell
       // sees the queue at all. Read-only; answering stays in the queue window.
       decisionsProvider: () => decisionCards.listOpen(),

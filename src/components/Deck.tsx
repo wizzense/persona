@@ -902,11 +902,11 @@ export function Deck() {
           )}
           <button
             className="deck-row"
-            title="Opens Living Desktop with the notification area"
+            title="Opens Aitheros Online with the notification area"
             onClick={() => runAction('living-desktop')}
           >
             <span className="deck-row-icon"><MonitorIcon /></span>
-            <span className="deck-row-label">Show the notification area in Living Desktop</span>
+            <span className="deck-row-label">Show the notification area in Aitheros Online</span>
           </button>
         </section>
 

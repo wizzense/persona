@@ -1,14 +1,14 @@
 "use strict";
 
 /**
- * browser-client — living-desktop awareness: aitherbrowser/aitherdesktop
+ * browser-client — Aitheros Online awareness: aitherbrowser/aitherdesktop
  * over the shared gateway-mcp transport (owner 2026-08-25: "full FULL
  * SYSTEM AWARENESS"). This is the desk's answer to "what is the user
  * looking at right now":
  *
  *   - get_active_window       — the focused window (process + title)
  *   - browser_context         — structured agent-friendly content from the
- *                               active browser tab (the living desktop)
+ *                               active browser tab (Aitheros Online)
  *   - browser_context_history — what pages the user has visited
  *
  * Fails soft like every desk client: a dead gateway yields ok:true with
@@ -34,7 +34,7 @@ async function browserHistory(limit = 10, call = callTool) {
   return parseMaybeJson(text) ?? { note: text.slice(0, 300) };
 }
 
-/** One living-desktop snapshot: the focused window + the active tab. */
+/** One Aitheros Online snapshot: the focused window + the active tab. */
 async function desktopSnapshot(call = callTool) {
   try {
     const [windowText, contextText] = await Promise.all([

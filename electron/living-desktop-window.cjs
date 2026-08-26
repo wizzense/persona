@@ -1,6 +1,6 @@
 "use strict";
 
-/** The AitherOS Living Desktop as a REAL desktop overlay — not a browser tab.
+/** The Aitheros Online surface as a REAL desktop overlay — not a browser tab.
  *
  *  History, so nobody rebuilds the failures:
  *  - Attempt 1 loaded https://portal.aitherium.com in a framed BrowserWindow and rendered
@@ -8,10 +8,10 @@
  *    login redirect renders nothing.
  *  - Attempt 2 punted to shell.openExternal — explicitly rejected by the owner ("I don't
  *    want it opening a browser window, I want a desktop overlay").
- *  - This version loads the PUBLIC Living OS shell at https://aitherium.com/?mode=overlay
+ *  - This version loads the PUBLIC Aitheros Online shell at https://aitherium.com/?mode=overlay
  *    (the GitHub Pages static export — renders with NO session, and `mode=overlay` is
  *    the shell's own first-party transparent mode, the exact one AitherConnect embeds
- *    in-browser) into a full-work-area frameless transparent window, so the Living OS
+ *    in-browser) into a full-work-area frameless transparent window, so the Aitheros Online
  *    chrome floats over the real Windows desktop.
  *
  *  Session: partition "persist:living-desktop" — any login done inside the shell's own
@@ -30,7 +30,7 @@ const { BrowserWindow, ipcMain, screen, session, shell } = require("electron");
 const BASE_URL = process.env.LIVING_DESKTOP_URL || "https://aitherium.com/";
 const LOG_FILE = path.join(os.tmpdir(), "desk-living-desktop.log");
 
-/** `?mode=overlay` is the Living OS's OWN first-party overlay mode (Veil
+/** `?mode=overlay` is Aitheros Online's OWN first-party overlay mode (Veil
  *  `src/components/os/overlay-mode.ts` — the exact mode AitherConnect embeds): it skips
  *  the boot greeter, sets `html.aither-os-overlay` whose CSS is
  *  `background: transparent !important`, and goes straight to the desktop stage. No
@@ -48,11 +48,11 @@ function urlFor(transparent) {
   }
 }
 
-/** The Living OS swappable-shell plane (Veil shell-registry.tsx): the overlay can run
- *  any registered shell. Unknown ids fall back to the Living Desktop server-side, so a
+/** The Aitheros Online swappable-shell plane (Veil shell-registry.tsx): the overlay can run
+ *  any registered shell. Unknown ids fall back to the Aitheros Online server-side, so a
  *  stale entry here degrades gracefully rather than blanking the overlay. */
 const SHELL_CHOICES = [
-  { id: null, label: "Living Desktop (default)" },
+  { id: null, label: "Aitheros Online (default)" },
   { id: "aither-desktop", label: "Desktop Anywhere" },
   { id: "aither-shell", label: "AitherShell cockpit" },
   { id: "gobbonet", label: "GobboNet" },
@@ -70,13 +70,13 @@ const PORTAL_LOGIN_URL = "https://portal.aitherium.com/login";
 
 let desktopWin = null; // the singleton overlay window
 let transparentMode = true; // owner-facing toggle; survives close/reopen within a run
-let ghostMode = true; // click-through everywhere the Living OS isn't drawing
+let ghostMode = true; // click-through everywhere the Aitheros Online isn't drawing
 
 // ── Ghost mode (click-through) ─────────────────────────────────────────────────
 // The overlay page reports its interactive hit-rects (see living-desktop-preload.cjs);
 // a main-process poll flips setIgnoreMouseEvents by cursor position. Fail-INTERACTIVE:
 // if no regions report arrived recently (page changed, solid mode, protocol drift) the
-// whole window stays clickable — a silently un-clickable Living OS would read as
+// whole window stays clickable — a silently un-clickable Aitheros Online would read as
 // "just broken", which is worse than losing click-through.
 const hitState = { regions: [], dock: null, reportedAt: 0 };
 const REGIONS_FRESH_MS = 5000;
@@ -129,7 +129,7 @@ function applyGhostTick() {
   const shouldIgnore = !shouldInteract;
   if (shouldIgnore !== ignoringMouse) {
     ignoringMouse = shouldIgnore;
-    // forward:true keeps mousemove flowing to the page while ignored, so Living OS
+    // forward:true keeps mousemove flowing to the page while ignored, so Aitheros Online
     // hover states still track even in the pass-through areas.
     desktopWin.setIgnoreMouseEvents(shouldIgnore, { forward: true });
   }
@@ -282,7 +282,7 @@ function isOpen() {
 
 /** Blank-page probe on the REAL window: capture and measure pixel spread. The attempt-1
  *  failure mode was a uniformly white page that every "did it load" signal called
- *  healthy — only looking at the pixels separates "rendered the Living OS" from
+ *  healthy — only looking at the pixels separates "rendered the Aitheros Online" from
  *  "rendered nothing". Appended to the log, never popped up anywhere. */
 async function probeRendered(win) {
   try {
@@ -327,9 +327,9 @@ function createWindow() {
     hasShadow: false,
     roundedCorners: false,
     // NOT alwaysOnTop: the avatar windows are alwaysOnTop and must float ABOVE the
-    // Living Desktop, the way they float above everything else.
+    // Aitheros Online, the way they float above everything else.
     skipTaskbar: false, // a real surface the owner alt-tabs to and can close from the taskbar
-    title: "AitherOS Living Desktop",
+    title: "AitherOS Aitheros Online",
     webPreferences: {
       partition: PARTITION,
       preload: path.join(__dirname, "living-desktop-preload.cjs"),
@@ -361,7 +361,7 @@ function createWindow() {
     // (Veil local-node-optin.ts) only probes loopback after an explicit opt-in, and
     // this overlay partition starts with none — so the owner's own shell "detects no
     // local services" while the fleet runs on the same box. Desk is the owner's own
-    // installed app on the owner's own machine: opening the Living Desktop FROM Desk
+    // installed app on the owner's own machine: opening the Aitheros Online FROM Desk
     // is the explicit act, so grant it here per load. (The probes still need the
     // adk/awnode loopback ports to be UP; granting only removes the consent gate, it
     // cannot invent a service.)
@@ -399,7 +399,7 @@ function createWindow() {
     if (win.isDestroyed()) return;
     await win.loadURL(target);
     void hasSessionCookie().then((signedIn) =>
-      log(signedIn ? "session cookie present — shell will see the signed-in account" : "NO session cookie — shell renders signed-out; use Sign in from the Living Desktop menu"),
+      log(signedIn ? "session cookie present — shell will see the signed-in account" : "NO session cookie — shell renders signed-out; use Sign in from the Aitheros Online menu"),
     );
   })();
   startGhostLoop();
@@ -488,7 +488,7 @@ function buildLivingDesktopMenu() {
   ];
 }
 
-// ── Desk -> Living OS state channel ──────────────────────────────────────────────
+// ── Desk -> Aitheros Online state channel ──────────────────────────────────────────────
 // main.cjs registers a snapshot provider (decision cards, avatar slots, agents,
 // relay feed); the overlay receives the latest snapshot on every load and whenever
 // main calls pushDeskState(). The page-side listener is the Veil OS

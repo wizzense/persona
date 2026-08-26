@@ -55,9 +55,9 @@ function originAllowed(origin) {
 }
 
 //: Web surfaces allowed to READ the decision queue over this loopback bridge.
-//: The Living Desktop that Desk hosts is the STATIC aitherium.com export,
+//: The Aitheros Online surface that Desk hosts is the STATIC aitherium.com export,
 //: whose /api/decisions is a build-time stub — so without this route the
-//: desktop bell can never see a card on exactly the surface the owner watches
+//: notification bell can never see a card on exactly the surface the owner watches
 //: (measured 2026-08-25: "No notifications" over a 673-card queue). Read-only,
 //: loopback interface only (hostAllowed), and the response is CORS-readable
 //: ONLY by these origins — any other site's fetch gets no ACAO header and the

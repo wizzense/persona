@@ -1,15 +1,15 @@
 "use strict";
 
-/** Preload for the Living Desktop overlay window.
+/** Preload for the Aitheros Online overlay window.
  *
- *  The Living OS shell in `?mode=overlay` publishes its interactive hit-rects every
+ *  The Aitheros Online shell in `?mode=overlay` publishes its interactive hit-rects every
  *  ~60ms as `postMessage({ __aither: 'os-regions', regions, dock }, '*')` to its parent
  *  (Veil `src/components/os/os-client.tsx` — the same protocol AitherConnect's browser
  *  overlay consumes to clip its iframe). Loaded TOP-LEVEL here, `window.parent` IS the
  *  window, so the page posts to itself and this listener receives it. We forward the
  *  rects to the main process, which flips `setIgnoreMouseEvents` per cursor position —
  *  that is what makes the real Windows desktop clickable THROUGH the overlay everywhere
- *  the Living OS isn't drawing a window/dock. */
+ *  Aitheros Online isn.t drawing a window/dock. */
 
 const { ipcRenderer } = require("electron");
 
@@ -22,7 +22,7 @@ window.addEventListener("message", (event) => {
   });
 });
 
-// Desk -> Living OS state channel (2026-08-25): main pushes the Desk snapshot
+// Desk -> Aitheros Online state channel (2026-08-25): main pushes the Desk snapshot
 // (decision cards, avatar slots, agents, relay feed) and this forwards it into the
 // page as a postMessage the Veil shell can listen for — the same family as the
 // os-regions protocol above, so the shell treats the overlay as a connected host

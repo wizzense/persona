@@ -4,7 +4,7 @@
  * market-client — the Desk's window onto the Aitherium marketplace.
  *
  * One-stop-shop foundation (owner 2026-08-25: "browse agent packs from
- * aitherium + avatars ... one stop shop"): the desk panel and Living Desktop
+ * aitherium + avatars ... one stop shop"): the desk panel and Aitheros Online
  * both need the SAME marketplace data. The MCP transport lives in
  * gateway-mcp.cjs (one transport, one identity story for every desk data
  * client); this module is only the marketplace shape on top of it. A down
