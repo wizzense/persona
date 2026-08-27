@@ -378,9 +378,9 @@ function ModelsMarketSection({
         <p className="deck-empty">+{filtered.length - 40} more — narrow the filter</p>
       ) : null}
       <p className="deck-empty">
-        Aitherium market {marketBusy ? '— searching…' : market.ok ? `— ${market.listings.length} packs` : `— ${market.reason ?? 'unreachable'}`}
+        Aitherium market {marketBusy ? '— searching…' : market.ok ? `— ${(market.listings ?? []).length} packs` : `— ${market.reason ?? 'unreachable'}`}
       </p>
-      {market.listings.slice(0, 10).map((l) => (
+      {(market.listings ?? []).slice(0, 10).map((l) => (
         <div className="deck-row deck-row-static" key={l.id}>
           <span className="deck-row-label">
             {l.name ?? l.id}

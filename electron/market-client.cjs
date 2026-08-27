@@ -17,7 +17,14 @@ const { callTool } = require("./gateway-mcp.cjs");
 /**
  * Browse the marketplace: query + optional type filter, sorted listings.
  * Returns {ok:true, listings:[{id,name,type,description,short,tags,price}]}
- * or {ok:false, reason}.
+ * or {ok:false, listings:[], reason}.
+ *
+ * 🚨 `listings` is ALWAYS present, even on failure — the Deck panel reads
+ * `market.listings.slice(...)` unconditionally, and a missing key crashed
+ * the whole deck window to BLANK on every error path (measured 2026-08-27:
+ * the panel opened empty, `Cannot read properties of undefined (reading
+ * 'slice')` at boot, so the decisions list, the character gallery and the
+ * settings tabs all read as dead buttons).
  */
 async function browse(query = "", type = "", limit = 24) {
   try {
@@ -37,12 +44,14 @@ async function browse(query = "", type = "", limit = 24) {
       return { ok: true, listings: [], note: text.slice(0, 500) };
     }
     if (!parsed.listings) {
-      // A validation error (or prose) has no listings — say so loudly.
-      return { ok: false, reason: text.slice(0, 300) };
+      // A validation error (or prose) has no listings — say so loudly,
+      // but keep the declared shape: the panel renders listings key
+      // unconditionally (2026-08-27 blank-deck-window crash).
+      return { ok: false, listings: [], reason: text.slice(0, 300) };
     }
     return { ok: true, listings: parsed.listings, count: parsed.count ?? parsed.listings.length };
   } catch (error) {
-    return { ok: false, reason: String(error?.message || error).slice(0, 300) };
+    return { ok: false, listings: [], reason: String(error?.message || error).slice(0, 300) };
   }
 }
 
