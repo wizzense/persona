@@ -741,6 +741,22 @@ export function Deck() {
     };
   }, []);
 
+  // "Browse models" opens the deck at the TOP (quick actions first — the
+  // 2026-08-25 ordering fix), but the Models & market section sits below
+  // notifications and system awareness, so the button read as dead
+  // (owner, 2026-08-27). Main sends scroll-to-section on that action;
+  // scroll the section into view here.
+  useEffect(() => {
+    return bridgeSubscribe((event) => {
+      if (event.type !== 'scroll-to-section') return;
+      const label =
+        event.section === 'models' ? 'Models and market' : String(event.section ?? '');
+      if (!label) return;
+      const el = document.querySelector(`[aria-label="${label}"]`);
+      el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  }, []);
+
   const handleAnswer = useCallback((id: string, choice: string) => {
     if (answering.current.has(id)) return; // one click per card per render
     answering.current.add(id);

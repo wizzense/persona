@@ -576,7 +576,26 @@ function openModelBrowser() {
   // on :47836) was "still fucking lame" and its marketplace tab never
   // existed — the deck panel's Models & Market section IS the browser now
   // (search + roster characters + the live Aitherium marketplace feed).
-  createDeckWindow();
+  const win = createDeckWindow();
+  // The deck opens at the TOP (quick actions first — the 2026-08-25 ordering
+  // fix), but Models & market sits below notifications and system awareness,
+  // so "Browse models" that only opens the deck read as a dead button
+  // (owner, 2026-08-27: "still unable to open model/avatar browser").
+  // Scroll the section into view; the renderer handles scroll-to-section.
+  const scrollToModels = () => {
+    if (win && !win.isDestroyed()) {
+      win.webContents.send("desk:event", {
+        type: "scroll-to-section",
+        section: "models",
+      });
+    }
+  };
+  if (win.webContents.isLoading()) {
+    win.webContents.once("did-finish-load", scrollToModels);
+  } else {
+    scrollToModels();
+  }
+  return win;
 }
 
 /** Open Forge Studio — media-forge's web UI, served by a HOST process
