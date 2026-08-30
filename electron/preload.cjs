@@ -1,6 +1,6 @@
 "use strict";
 
-const { contextBridge, ipcRenderer } = require("electron");
+const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
 contextBridge.exposeInMainWorld("deskBridge", {
   getSnapshot: () => ipcRenderer.invoke("desk:get-snapshot"),
@@ -41,6 +41,26 @@ contextBridge.exposeInMainWorld("deskBridge", {
     vision: () => ipcRenderer.invoke("desk:vision-snapshot"),
     desktop: () => ipcRenderer.invoke("desk:desktop-snapshot"),
     connect: () => ipcRenderer.invoke("desk:connect-snapshot"),
+  },
+  // Push-to-talk (2026-08-29): renderer captures the mic, main writes the wav
+  // to a temp file and runs it through the gateway's transcribe_audio tool.
+  // Returns the transcript text, or an error string starting with "ERROR:".
+  voiceTranscribe: (audioB64, format) =>
+    ipcRenderer.invoke("desk:voice-transcribe", audioB64, format ?? "wav"),
+  // Drop-to-avatar (2026-08-29): the renderer hands the File object over;
+  // the sandboxed renderer cannot see paths, so webUtils resolves it here.
+  // Main MIME-routes it (image/audio/video/doc) and resolves with the
+  // verdict: {ok, kind, name, summary} or {ok:false, reason}.
+  fileDropped: (file) => {
+    try {
+      const filePath = webUtils.getPathForFile(file);
+      if (!filePath) {
+        return Promise.resolve({ ok: false, reason: "could not resolve the dropped file's path" });
+      }
+      return ipcRenderer.invoke("desk:file-dropped", filePath, file.type || "");
+    } catch {
+      return Promise.resolve({ ok: false, reason: "could not resolve the dropped file's path" });
+    }
   },
 });
 

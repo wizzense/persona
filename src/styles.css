@@ -762,3 +762,71 @@ body {
 }
 .chat-ctl:hover { background: var(--bead-hover, rgba(52, 60, 88, 0.85)); }
 .chat-ctl-close:hover { background: #b33636; color: #fff; }
+
+/* Drop-to-avatar (2026-08-29): the full-window overlay while dragging +
+   the verdict rows in the deck's Drops section. */
+.deck-drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(10, 14, 26, 0.72);
+  backdrop-filter: blur(2px);
+  border: 2px dashed var(--deck-accent, #7aa2ff);
+  border-radius: 8px;
+  pointer-events: none;
+}
+.deck-drop-overlay-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 18px 26px;
+  border-radius: 10px;
+  background: rgba(30, 36, 54, 0.95);
+  color: var(--deck-text, #e8ecf6);
+  font-size: 13px;
+  text-align: center;
+}
+.deck-drop-overlay-box span {
+  font-size: 11px;
+  color: var(--deck-muted, #8b94a8);
+}
+.deck-drop-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin: 0 4px 8px;
+  padding: 7px 9px;
+  border-radius: 6px;
+  font-size: 12px;
+  border: 1px solid var(--deck-edge, rgba(255, 255, 255, 0.08));
+  background: rgba(255, 255, 255, 0.03);
+}
+.deck-drop-ok { border-left: 3px solid #3fae6a; }
+.deck-drop-err { border-left: 3px solid #e06060; }
+.deck-drop-kind {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--deck-accent, #7aa2ff);
+  padding-top: 1px;
+}
+.deck-drop-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  color: var(--deck-soft, #aab3c9);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.deck-drop-text strong {
+  color: var(--deck-text, #e8ecf6);
+  font-weight: 600;
+}
+.deck-drop-reason { color: #e06060; }

@@ -45,12 +45,27 @@ type AvatarBridgeEvent =
   // frames THAT avatar only; slotId null frames everyone again. reset-avatar-layout
   // drops the slot's stored spot/scale so it returns to the default transform.
   | { type: 'focus-avatar'; slotId: string | null }
-  | { type: 'reset-avatar-layout'; slotId: string };
+  | { type: 'reset-avatar-layout'; slotId: string }
+  // Drop-to-avatar (2026-08-29): main TTS'd the drop verdict and hands the
+  // audio over for playback + lip sync in the avatar window.
+  | { type: 'speak'; audioBase64: string };
+
+/** The verdict of a dropped file (preload -> main -> drop-router). */
+interface DropVerdict {
+  ok: boolean;
+  kind?: 'image' | 'audio' | 'video' | 'doc';
+  name?: string;
+  summary?: string;
+  detail?: string;
+  reason?: string;
+}
 
 interface Window {
   deskBridge?: {
     getSnapshot(): Promise<AvatarBridgeEvent | null>;
     hide(): void;
+    minimize(): void;
+    close(): void;
     avatarContextMenu(slotId: string): void;
     subscribe(listener: (event: AvatarBridgeEvent) => void): () => void;
   };

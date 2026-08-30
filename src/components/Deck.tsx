@@ -126,6 +126,20 @@ function bridgeDeck(): BridgeDeck | null {
   return bridge?.deck ?? null;
 }
 
+/** The drop bridge is a top-level deskBridge method (preload), not part of
+ *  deck. */
+function bridgeFileDropped(file: File): Promise<DropVerdict> {
+  const bridge = window.deskBridge as unknown as {
+    fileDropped?: (f: File) => Promise<DropVerdict>;
+  } | undefined;
+  if (!bridge?.fileDropped) return Promise.resolve({ ok: false, reason: 'drop bridge unavailable' });
+  try {
+    return bridge.fileDropped(file);
+  } catch {
+    return Promise.resolve({ ok: false, reason: 'drop bridge unavailable' });
+  }
+}
+
 function bridgeSubscribe(listener: (event: Record<string, unknown>) => void): () => void {
   const bridge = window.deskBridge as unknown as {
     subscribe?: (l: (event: Record<string, unknown>) => void) => () => void;
@@ -223,6 +237,68 @@ function AgentChatPane({
     setDraft('');
     onSend(text);
   };
+  // ── Push-to-talk (2026-08-29) ──────────────────────────────────────
+  // Mic button + Ctrl+Space toggle: capture -> gateway transcribe -> the
+  // transcript is filled in and sent, so "talk to the avatar" is one click.
+  const [recording, setRecording] = useState(false);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const toggleTalk = useCallback(async () => {
+    const bridge = (window as unknown as {
+      deskBridge?: { voiceTranscribe?: (b64: string, fmt: string) => Promise<string> };
+    }).deskBridge;
+    if (!bridge?.voiceTranscribe) {
+      setDraft('(voice bridge unavailable)');
+      return;
+    }
+    if (recording) {
+      recorderRef.current?.stop();
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : "audio/webm";
+      const rec = new MediaRecorder(stream, { mimeType: mime });
+      chunksRef.current = [];
+      rec.ondataavailable = (event) => { if (event.data.size > 0) chunksRef.current.push(event.data); };
+      rec.onstop = async () => {
+        stream.getTracks().forEach((track) => track.stop());
+        const blob = new Blob(chunksRef.current, { type: mime });
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        let binary = "";
+        for (const b of bytes) binary += String.fromCharCode(b);
+        const b64 = btoa(binary);
+        setRecording(false);
+        const text = await bridge.voiceTranscribe!(b64, "webm");
+        if (text.startsWith("ERROR:")) {
+          setDraft(text);
+          return;
+        }
+        if (text.trim()) {
+          setDraft(text.trim());
+          // "Talk to the avatar": the transcript goes out immediately.
+          onSend(text.trim());
+        }
+      };
+      recorderRef.current = rec;
+      rec.start();
+      setRecording(true);
+    } catch (error) {
+      setDraft(`(mic unavailable: ${error instanceof Error ? error.message : String(error)})`);
+    }
+  }, [recording, onSend]);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.code === "Space") {
+        event.preventDefault();
+        void toggleTalk();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [toggleTalk]);
   return (
     <section className="deck-section" aria-label={`Chat with ${agent}`}>
       <h2 className="deck-section-head">
@@ -269,6 +345,13 @@ function AgentChatPane({
           onClick={submit}
         >
           Send
+        </button>
+        <button
+          className={`deck-btn ${recording ? "deck-btn-record" : "deck-btn-mic"}`}
+          title={recording ? "Stop recording (Ctrl+Space)" : "Push to talk — click to record (Ctrl+Space)"}
+          onClick={() => void toggleTalk()}
+        >
+          {recording ? "● Stop" : "🎤 Talk"}
         </button>
       </div>
     </section>
@@ -709,6 +792,30 @@ export function Deck() {
   const [chatTarget, setChatTarget] = useState<string | null>(null);
   const [chatRootId, setChatRootId] = useState<string | null>(null);
   const [chatRows, setChatRows] = useState<RelayRow[]>([]);
+  // Drop-to-avatar (2026-08-29): the drag state + the verdict list. The
+  // verdicts are LOCAL to this panel (the relay feed is where the agent
+  // conversation continues — main posts the notice there itself).
+  const [dragOver, setDragOver] = useState(false);
+  const [drops, setDrops] = useState<DropVerdict[]>([]);
+  const [dropBusy, setDropBusy] = useState(false);
+
+  /** Route one dropped File through main's MIME router; the verdict lands in
+   *  the drop list (and, on success, main speaks it + posts it to #agents). */
+  const handleDrop = useCallback((files: FileList | null) => {
+    if (!files || files.length === 0 || dropBusy) return;
+    const file = files[0]; // one at a time — sequential is honest about time
+    setDropBusy(true);
+    setDrops((current) => [
+      { ok: false, name: file.name, reason: 'processing…' },
+      ...current,
+    ].slice(0, 12));
+    void bridgeFileDropped(file).then((verdict) => {
+      setDrops((current) => [
+        verdict,
+        ...current.filter((d) => d.name !== file.name),
+      ].slice(0, 12));
+    }).finally(() => setDropBusy(false));
+  }, [dropBusy]);
 
   useEffect(() => {
     const deck = bridgeDeck();
@@ -835,7 +942,27 @@ export function Deck() {
   }, [chatRootId, chatTarget, runAction, state.relayChannel]);
 
   return (
-    <main className="deck">
+    <main
+      className="deck"
+      onDragOver={(event) => {
+        event.preventDefault();
+        setDragOver(true);
+      }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={(event) => {
+        event.preventDefault();
+        setDragOver(false);
+        handleDrop(event.dataTransfer.files);
+      }}
+    >
+      {dragOver ? (
+        <div className="deck-drop-overlay">
+          <div className="deck-drop-overlay-box">
+            <strong>Drop on Aither</strong>
+            <span>I'll look at it, or put it in the knowledge base</span>
+          </div>
+        </div>
+      ) : null}
       <header className="deck-header">
         <span className="deck-header-icon"><DeskIcon /></span>
         <h1 className="deck-title">Desk</h1>
@@ -853,6 +980,29 @@ export function Deck() {
       </header>
 
       <div className="deck-body">
+        {/* Drop-to-avatar inbox: newest first. The verdict line is the whole
+            feedback — images/audio get a description/transcript, docs get
+            chunk/entity counts, failures get the reason. */}
+        {drops.length > 0 ? (
+          <section className="deck-section" aria-label="Drops">
+            <h2 className="deck-section-head">
+              <span className="deck-section-icon"><DeskIcon /></span>
+              Drops
+            </h2>
+            {drops.map((drop, index) => (
+              <div className={`deck-drop-row ${drop.ok ? 'deck-drop-ok' : 'deck-drop-err'}`} key={`${drop.name}-${index}`}>
+                <span className="deck-drop-kind">
+                  {drop.ok ? (drop.kind ?? 'file') : '✗'}
+                </span>
+                <span className="deck-drop-text">
+                  <strong>{drop.name}</strong>
+                  {drop.summary ? <span>{drop.summary}</span> : null}
+                  {drop.reason ? <span className="deck-drop-reason">{drop.reason}</span> : null}
+                </span>
+              </div>
+            ))}
+          </section>
+        ) : null}
         {/* Ordering IS the UX: quick actions come FIRST (the owner had to scroll
             past relay + notifications to reach them -- "you have to scroll all
             the way down to get to quick actions", 2026-08-25). Scroll-heavy

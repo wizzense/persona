@@ -1,6 +1,15 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type Dispatch,
+  type MutableRefObject,
+  type SetStateAction,
+} from 'react';
 import { Scene } from './components/Scene';
 import { Deck } from './components/Deck';
+import { ChatView } from './components/ChatView';
 import { Beads } from './components/Beads';
 import type { AnimationType } from './animation-catalog';
 import {
@@ -17,6 +26,56 @@ const INITIAL_STATE: VoiceState = {
 };
 
 const BODY_IDLE_DELAY_MS = 650;
+
+/** Play a base64 audio verdict through the avatar. Sets the voice state to
+ *  speaking for the duration (TALK animation) and streams the analyser RMS
+ *  into audioLevel (lip sync). Fail-soft: playback trouble drops the audio,
+ *  never the verdict row the deck already rendered. */
+async function playSpoken(
+  audioBase64: string,
+  setVoice: Dispatch<SetStateAction<VoiceState>>,
+  setAudioLevel: (level: number) => void,
+  ctxRef: MutableRefObject<AudioContext | null>,
+): Promise<void> {
+  try {
+    ctxRef.current?.close().catch(() => {});
+    const ctx = new AudioContext();
+    ctxRef.current = ctx;
+    const bin = atob(audioBase64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const buffer = await ctx.decodeAudioData(bytes.buffer);
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 512;
+    source.connect(analyser);
+    analyser.connect(ctx.destination);
+    setVoice((current) => ({ ...current, phase: 'active', activity: 'speaking' }));
+    source.start();
+    const samples = new Uint8Array(analyser.fftSize);
+    const tick = () => {
+      if (ctxRef.current !== ctx) return;
+      analyser.getByteTimeDomainData(samples);
+      let sum = 0;
+      for (let i = 0; i < samples.length; i++) {
+        const d = (samples[i] - 128) / 128;
+        sum += d * d;
+      }
+      setAudioLevel(Math.min(1, Math.sqrt(sum / samples.length) * 5));
+      requestAnimationFrame(tick);
+    };
+    source.onended = () => {
+      setAudioLevel(0);
+      setVoice((current) => ({ ...current, activity: 'idle' }));
+      ctxRef.current = null;
+      void ctx.close().catch(() => {});
+    };
+    requestAnimationFrame(tick);
+  } catch {
+    // Playback failed — the deck row already carries the verdict text.
+  }
+}
 
 /** Detached-avatar windows (electron/detached-avatar-window.cjs) load this SAME bundle
  *  with `?solo=<modelUrl>` set, instead of a separate render path — one pipeline for
@@ -42,6 +101,10 @@ export function App() {
     () => new URLSearchParams(window.location.search).get('deck') === '1',
   );
   if (isDeck) return <Deck />;
+  const [isChat] = useState(
+    () => new URLSearchParams(window.location.search).get('chat') === '1',
+  );
+  if (isChat) return <ChatView />;
   return <AvatarSceneApp />;
 }
 
@@ -57,6 +120,7 @@ function AvatarSceneApp() {
   const [extraSlots, setExtraSlots] = useState<Array<{ slotId: string; modelUrl: string }>>([]);
   const previousPhase = useRef<VoicePhase>('inactive');
   const previousSpeaking = useRef(false);
+  const audioCtxRef = useRef<AudioContext | null>(null);
 
   useEffect(() => {
     const bridge = window.deskBridge;
@@ -98,6 +162,12 @@ function AvatarSceneApp() {
         setExtraSlots((current) =>
           current.filter((slot) => slot.slotId !== event.slotId),
         );
+      } else if (event.type === 'speak') {
+        // Drop-to-avatar (2026-08-29): main TTS'd a verdict and handed the
+        // audio over. Play it through Web Audio and drive the SAME audioLevel
+        // + voice-state props the scene already renders — lip sync and the
+        // TALK animation come from the existing pipeline, no new render path.
+        void playSpoken(event.audioBase64, setVoice, setAudioLevel, audioCtxRef);
       }
     });
   }, []);

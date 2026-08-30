@@ -30,6 +30,7 @@ const marketClient = require("./market-client.cjs");
 const { systemSnapshot } = require("./system-client.cjs");
 const { voiceSnapshot } = require("./voice-client.cjs");
 const { visionSnapshot } = require("./vision-client.cjs");
+const { routeDrop, synthesizeVerdict, stagePath, cleanupStage } = require("./drop-router.cjs");
 const { desktopSnapshot } = require("./browser-client.cjs");
 const { connectSnapshot } = require("./connect-client.cjs");
 const { createBridgeServer, DEFAULT_PORT } = require("./bridge-server.cjs");
@@ -1284,6 +1285,80 @@ if (!app.requestSingleInstanceLock()) {
     // System awareness snapshots (#9) — read-only, fail-soft by contract.
     ipcMain.handle("desk:system-snapshot", () => systemSnapshot());
     ipcMain.handle("desk:voice-snapshot", () => voiceSnapshot());
+    // Push-to-talk (2026-08-29): base64 wav from the renderer's MediaRecorder
+    // -> temp file -> gateway transcribe_audio -> transcript. Errors return
+    // "ERROR: ..." strings so the renderer can show them without a throw.
+    ipcMain.handle("desk:voice-transcribe", async (_event, audioB64, format) => {
+      try {
+        if (typeof audioB64 !== "string" || audioB64.length === 0) {
+          return "ERROR: no audio received";
+        }
+        const { transcribe } = require("./voice-client.cjs");
+        const os = require("os");
+        const path = require("path");
+        const fs = require("fs");
+        const isWebm = format === "webm";
+        const tmp = path.join(os.tmpdir(), `desk-ptt-${Date.now()}.${isWebm ? "webm" : "wav"}`);
+        fs.writeFileSync(tmp, Buffer.from(audioB64, "base64"));
+        // Chromium's MediaRecorder emits webm/opus; whisper (PyAV) decodes
+        // it, but 16k mono wav is the proven lane — convert when webm.
+        let wav = tmp;
+        if (isWebm) {
+          wav = path.join(os.tmpdir(), `desk-ptt-${Date.now()}.wav`);
+          const { execFileSync } = require("child_process");
+          execFileSync("ffmpeg", ["-y", "-i", tmp, "-ar", "16000", "-ac", "1", wav],
+            { stdio: "ignore", timeout: 30000 });
+          fs.unlink(tmp, () => {});
+        }
+        // THE BRIDGE (drop-router doctrine, measured 2026-08-29): a HOST
+        // temp path does not exist in the gateway — transcribe_audio reads
+        // the file in ITS filesystem. Stage into the shared Library bind and
+        // hand over the container path, exactly like the drop lane does.
+        const staged = stagePath(wav);
+        let out;
+        try {
+          out = await transcribe(staged.container);
+        } finally {
+          cleanupStage(staged.host);
+          fs.unlink(wav, () => {});
+        }
+        const text = typeof out === "string" ? out : JSON.stringify(out);
+        return text;
+      } catch (error) {
+        return `ERROR: ${error && error.message ? error.message : String(error)}`;
+      }
+    });
+    // Drop-to-avatar (2026-08-29): the renderer hands a File over, main
+    // MIME-routes it through drop-router.cjs (image -> gemma4 vision,
+    // audio -> whisper, video -> first frame, doc -> rag_ingest) and returns
+    // the verdict the deck renders. Success ALSO speaks it through the
+    // avatar (TTS -> speak event) and posts a one-line notice to #agents so
+    // aitherone/writer and every agent see the new knowledge.
+    ipcMain.handle("desk:file-dropped", async (_event, filePath, mime) => {
+      const verdict = await routeDrop({ filePath, mime: typeof mime === "string" ? mime : "" });
+      if (!verdict.ok) return verdict;
+      const line = verdict.kind === "doc"
+        ? `📥 ${verdict.kind}: ${verdict.name} — ${verdict.summary}`
+        : `📥 ${verdict.kind}: ${verdict.name} — ${String(verdict.summary).slice(0, 160)}`;
+      const speakText = verdict.kind === "doc" ? verdict.summary : String(verdict.summary).slice(0, 220);
+      // The avatar SPEAKS the verdict (fail-soft: a dead voice service must
+      // never fail the drop itself).
+      void synthesizeVerdict(speakText).then((tts) => {
+        if (!tts.ok) return;
+        for (const win of BrowserWindow.getAllWindows()) {
+          if (!win.isDestroyed()) {
+            win.webContents.send("desk:event", { type: "speak", audioBase64: tts.audioBase64 });
+          }
+        }
+      });
+      // GAP-4 agent pass: post the notice to the cockpit channel; the deck's
+      // own relay feed picks it up via refreshRelayFeed. Fire-and-forget —
+      // a refused post must not fail the drop.
+      void postToRelay(RELAY_CHANNEL, line).then((sent) => {
+        if (sent && sent.ok) void refreshRelayFeed();
+      });
+      return verdict;
+    });
     ipcMain.handle("desk:vision-snapshot", () => visionSnapshot());
     ipcMain.handle("desk:desktop-snapshot", () => desktopSnapshot());
     ipcMain.handle("desk:connect-snapshot", () => connectSnapshot());
