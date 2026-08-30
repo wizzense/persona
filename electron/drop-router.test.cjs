@@ -116,18 +116,28 @@ async function okAsync(name, fn) {
 
   await okAsync("text docs route through the content ingest lane with real text", async () => {
     const { dir, p } = tmpfile("notes.md", "Drop lane notes.\nSecond line about the knowledge base.");
-    let seen = null;
+    const calls = [];
     const verdict = await routeDrop({ filePath: p, mime: "text/markdown" }, {
-      call: async (name, args) => { seen = { name, args }; return JSON.stringify({
-        status: "ingested", node_id: "abc123", source: "notes.md", graph_nodes: 9,
-      }); },
+      call: async (name, args) => {
+        calls.push({ name, args });
+        if (name === "wiki_ingest") return JSON.stringify({ source_id: "w1", pages_created: ["x"] });
+        if (name === "graph_kb_list") return JSON.stringify({ bases: [{ id: "kb1" }] });
+        if (name === "graph_kb_ingest") return JSON.stringify({ ingested: true });
+        return JSON.stringify({ status: "ingested", node_id: "abc123", source: "notes.md", graph_nodes: 9 });
+      },
     });
     assert.ok(verdict.ok, verdict.reason);
-    assert.strictEqual(seen.name, "ingest");
-    assert.ok(seen.args.content.includes("Drop lane notes"), "the desk text must reach ingest");
-    assert.strictEqual(seen.args.source_name, "notes.md");
+    const ingest = calls.find((c) => c.name === "ingest");
+    assert.ok(ingest, "ingest lane must run");
+    assert.ok(ingest.args.content.includes("Drop lane notes"), "the desk text must reach ingest");
+    assert.strictEqual(ingest.args.source_name, "notes.md");
     assert.ok(verdict.summary.includes("node abc123"), verdict.summary);
     assert.strictEqual(verdict.docId, "abc123");
+    // FEDERATION: the doc must also reach the wiki + graph KB.
+    assert.ok(calls.some((c) => c.name === "wiki_ingest"), "wiki federation must fire");
+    assert.ok(calls.some((c) => c.name === "graph_kb_ingest"), "graph federation must fire");
+    assert.strictEqual(verdict.federated?.wiki, "ok");
+    assert.strictEqual(verdict.federated?.graph, "ok");
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
@@ -160,6 +170,22 @@ async function okAsync(name, fn) {
     });
     assert.strictEqual(verdict.ok, false);
     assert.ok(verdict.reason.includes("next build"), verdict.reason);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  await okAsync("federation fails SOFT — a missing wiki tool never fails the drop", async () => {
+    const { dir, p } = tmpfile("memo.md", "Federation memo for the pending-rebuild path.");
+    const verdict = await routeDrop({ filePath: p, mime: "text/markdown" }, {
+      call: async (name) => {
+        if (name === "wiki_ingest" || name === "graph_kb_list") {
+          return JSON.stringify({ error: "Tool is not available on the platform tier. Upgrade to access more tools." });
+        }
+        return JSON.stringify({ status: "ingested", node_id: "abc", source: "memo.md", graph_nodes: 1 });
+      },
+    });
+    assert.ok(verdict.ok, "the drop must succeed despite federation being pending");
+    assert.strictEqual(verdict.federated?.wiki, "pending gateway rebuild");
+    assert.strictEqual(verdict.federated?.graph, "pending gateway rebuild");
     fs.rmSync(dir, { recursive: true, force: true });
   });
 

@@ -141,6 +141,67 @@ function firstFrame(filePath, stageDir, ffmpeg) {
  *  content lane works TODAY, without any fleet change. */
 const TEXT_READABLE_EXTS = ["txt", "md", "csv", "html", "htm", "rst", "log", "json", "yaml", "yml", "xml", "ini"];
 
+/** FEDERATION (owner 2026-08-29: "integrate aithergraph + lyrawiki/llmwiki"):
+ *  after the tenant memory ingest, also push the doc into the LLM wiki
+ *  (wiki_ingest — the full save-raw → extraction → summary-page pipeline)
+ *  and the graph knowledge base (graph_kb_ingest — needs an existing
+ *  base_id, taken from graph_kb_list).
+ *
+ *  Both tools live in the gateway's registry but the RUNNING gateway image
+ *  predates their registration (the image rebuild is queued), so each call
+ *  is fail-soft and reports its state honestly — "pending gateway rebuild"
+ *  — instead of failing the drop. Never fails the drop itself.
+ */
+async function federateDoc(name, content, call) {
+  const out = { wiki: null, graph: null };
+  const text = String(content || "").slice(0, 200000);
+  if (!text.trim()) return out;
+  try {
+    const w = await call("wiki_ingest", {
+      title: name.replace(/\.\w+$/, "").slice(0, 120),
+      content: text,
+      source_type: "document",
+      project: "default",
+    });
+    const wp = parseMaybeJson(w);
+    if (wp && typeof wp === "object" && wp.error) {
+      out.wiki = /not available|not listed|unknown tool|upgrade/i.test(String(wp.error))
+        ? "pending gateway rebuild" : String(wp.error).slice(0, 120);
+    } else {
+      out.wiki = "ok";
+    }
+  } catch (e) {
+    out.wiki = String(e.message || e).slice(0, 120);
+  }
+  try {
+    const list = await call("graph_kb_list", {});
+    const lp = parseMaybeJson(list);
+    if (lp && typeof lp === "object" && lp.error) {
+      out.graph = /not available|not listed|unknown tool|upgrade/i.test(String(lp.error))
+        ? "pending gateway rebuild" : String(lp.error).slice(0, 120);
+      return out;
+    }
+    const bases = Array.isArray(lp?.bases) ? lp.bases
+      : Array.isArray(lp) ? lp
+        : (lp && typeof lp === "object" ? Object.values(lp).filter((b) => b && typeof b === "object" && (b.id || b.base_id)) : []);
+    const base = bases?.[0];
+    const baseId = base?.id || base?.base_id;
+    if (!baseId) {
+      out.graph = "no knowledge base — create one (graph_kb_create)";
+      return out;
+    }
+    const g = await call("graph_kb_ingest", { base_id: baseId, content: text });
+    const gp = parseMaybeJson(g);
+    out.graph = gp && typeof gp === "object" && gp.error
+      ? String(gp.error).slice(0, 120) : "ok";
+  } catch (e) {
+    const msg = String(e.message || e);
+    out.graph = /not available|not listed|unknown tool|upgrade/i.test(msg)
+      ? "pending gateway rebuild" : msg.slice(0, 120);
+  }
+  return out;
+}
+
 /** The document lane, two routes:
  *  1. Text-readable files (txt/md/csv/...) — the desk reads the text and
  *     calls the gateway `ingest` tool (content-based, tenant-scoped from
@@ -170,11 +231,17 @@ async function ingestDoc(containerPath, hostPath, name, call) {
       return { ok: false, reason: String(parsed.error).slice(0, 300) };
     }
     const nodeId = parsed?.node_id || null;
+    // FEDERATION: the wiki + graph pushes (fail-soft; reports its state).
+    const federated = await federateDoc(name, content, call);
+    const fedNote = federated.wiki === "ok" || federated.graph === "ok"
+      ? ` · wiki:${federated.wiki ?? "pending"} · graph:${federated.graph ?? "pending"}`
+      : "";
     return {
       ok: true,
-      summary: `Ingested into the knowledge base — ${content.length.toLocaleString()} chars.${nodeId ? ` (node ${nodeId})` : ""}`,
+      summary: `Ingested into the knowledge base — ${content.length.toLocaleString()} chars.${nodeId ? ` (node ${nodeId})` : ""}${fedNote}`,
       detail: typeof text === "string" ? text.slice(0, 2000) : JSON.stringify(text),
       docId: nodeId,
+      federated,
     };
   }
   const text = await call("ingest_document", { file_path: containerPath, source_name: name });
