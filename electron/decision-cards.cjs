@@ -123,6 +123,7 @@ function listOpen(dir = storeDir()) {
       id: raw.id,
       title: typeof raw.title === "string" ? raw.title : "Decision needed",
       summary: typeof raw.summary === "string" ? raw.summary : "",
+      kind: typeof raw.kind === "string" ? raw.kind : "decision",
       urgency: typeof raw.urgency === "string" ? raw.urgency : "normal",
       createdAt: Number(raw.created_at) || 0,
       options,
@@ -136,6 +137,29 @@ function listOpen(dir = storeDir()) {
   }
   cards.sort((a, b) => a.createdAt - b.createdAt);
   return cards;
+}
+
+/**
+ * How many of these cards are actually WAITING on the owner. Actionable
+ * means: carries answer options, is a credential ask (no popup renders
+ * credentials — the masked prompt is the only door, so the bell must still
+ * count them), or is a BLOCKED card (the notification hook's permission/idle
+ * asks carry no options by design — "a permission prompt can only be
+ * answered in that tab" — and after the toast removal the tray bell is their
+ * only remaining push; an optionless blocked card is waiting on the owner
+ * even though nothing can be clicked). Info cards ("you should know", no
+ * options) are facts the deck shows, not decisions waiting on the owner —
+ * the tray bell counting them is how "3 decisions waiting" turns out to be
+ * one ask and two digests (owner report 2026-08-31, the same noise class as
+ * the removed toasts).
+ */
+function actionableCount(cards) {
+  return cards.filter(
+    (c) =>
+      (Array.isArray(c.options) && c.options.length > 0) ||
+      c.kind === "credential" ||
+      c.kind === "blocked",
+  ).length;
 }
 
 /**
@@ -231,6 +255,7 @@ module.exports = {
   storeDir,
   signature,
   listOpen,
+  actionableCount,
   openQueueWindow,
   openCardWindow,
   answerCard,

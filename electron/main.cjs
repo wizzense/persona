@@ -10,7 +10,6 @@ const {
   ipcMain,
   Menu,
   nativeImage,
-  Notification,
   screen,
   shell,
   Tray,
@@ -183,12 +182,12 @@ let latestVoiceState = null;
 let audioListener = null;
 let tray = null;
 // Decision-card plane (see decision-cards.cjs): the open queue drives the tray
-// label/tooltip, and new arrivals raise a native notification.
+// label/tooltip and the deck badge. Native notifications were REMOVED
+// 2026-08-31 (owner decision) — the tray badge, deck and Discord fanout carry
+// the push; DTOAST001 gates the notify.py twins against Windows toasts.
 let openDecisions = [];
 let relayFeed = [];
 let relayFeedTimer = null;
-let knownDecisionIds = new Set();
-let decisionsSeenOnce = false;
 let decisionWatchStop = null;
 let hyprlandConfigured = false;
 let hyprlandConfiguring = false;
@@ -1586,69 +1585,37 @@ if (!app.requestSingleInstanceLock()) {
 
     createTray();
 
-    // Watch the decision-card store: tray label + tooltip track the open queue,
-    // and a genuinely new card raises a native notification whose click opens
-    // the shared queue window. The first observation is summarised as ONE
-    // notification, never a burst — a backlog is a fact, not an alarm per row.
-    // Relay feed for the deck: first pull immediately, then every 60s. A
-    // cockpit feed lags the channel by design — it is a summary, not a client.
+    // Watch the decision-card store: tray label + tooltip and the deck badge
+    // track the open queue. Native notifications are REMOVED (2026-08-31,
+    // owner decision) — a toast presented under the PowerShell app id with a
+    // click that led nowhere is worse than no toast; the tray, deck and
+    // Discord fanout are the bells. Relay feed for the deck: first pull
+    // immediately, then every 60s. A cockpit feed lags the channel by design
+    // — it is a summary, not a client.
     void refreshRelayFeed();
     relayFeedTimer = setInterval(() => void refreshRelayFeed(), 60_000);
     relayFeedTimer.unref?.();
 
     decisionWatchStop = decisionCards.watch({
       onChange: (cards) => {
-        const previouslyKnown = knownDecisionIds;
         openDecisions = cards;
-        knownDecisionIds = new Set(cards.map((c) => c.id));
         refreshTrayMenu();
+        // The bell counts cards actually WAITING on the owner (options or
+        // credential asks), never info digests — "3 decisions waiting" must
+        // not turn out to be one ask and two facts (owner report 2026-08-31,
+        // the same noise class as the removed toasts). The total rides the
+        // tooltip so the deck's full view stays discoverable.
+        const waiting = decisionCards.actionableCount(cards);
         tray?.setToolTip(
-          cards.length > 0
-            ? `Desk — ${cards.length} decision${cards.length === 1 ? "" : "s"} waiting`
-            : "Desk",
+          waiting > 0
+            ? `Desk — ${waiting} decision${waiting === 1 ? "" : "s"} waiting`
+                + (cards.length > waiting ? ` · ${cards.length} cards in deck` : "")
+            : cards.length > 0
+              ? `Desk — ${cards.length} info card${cards.length === 1 ? "" : "s"} (nothing to answer)`
+              : "Desk",
         );
         sendDeckState();
         sendDecisionBadge();
-        if (!Notification.isSupported()) return;
-        if (!decisionsSeenOnce) {
-          decisionsSeenOnce = true;
-          if (cards.length > 0) {
-            const summary = new Notification({
-              title:
-                cards.length === 1
-                  ? "1 decision card is waiting on you"
-                  : `${cards.length} decision cards are waiting on you`,
-              body: cards[0].title,
-              silent: true,
-            });
-            summary.on("click", () => decisionCards.openQueueWindow());
-            summary.show();
-          }
-          return;
-        }
-        // Cap the burst: three individual notifications, then one rollup.
-        const fresh = cards.filter((c) => !previouslyKnown.has(c.id));
-        for (const card of fresh.slice(0, 3)) {
-          const where = card.tab || card.cwd || card.agent;
-          const n = new Notification({
-            title: card.title,
-            body:
-              (card.summary || "A decision card needs your answer.") +
-              (where && !card.title.includes(where) ? `
-${where}` : ""),
-            silent: card.urgency !== "critical" && card.urgency !== "high",
-          });
-          n.on("click", () => decisionCards.openQueueWindow());
-          n.show();
-        }
-        if (fresh.length > 3) {
-          const rollup = new Notification({
-            title: `${fresh.length - 3} more decision cards arrived`,
-            silent: true,
-          });
-          rollup.on("click", () => decisionCards.openQueueWindow());
-          rollup.show();
-        }
       },
     });
 

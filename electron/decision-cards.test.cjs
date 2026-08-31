@@ -6,7 +6,7 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 
-const { signature, listOpen, watch, answerCard, cancelCard } = require("./decision-cards.cjs");
+const { signature, listOpen, actionableCount, watch, answerCard, cancelCard } = require("./decision-cards.cjs");
 
 function tmpStore() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "desk-decisions-"));
@@ -129,6 +129,23 @@ test("cancelCard spawns awask cancel and refuses a blank id", () => {
   assert.ok(String(calls[0][0]).toLowerCase().includes("awask"));
   assert.deepEqual(calls[0][1], ["cancel", "d-1", "--note", "not now"]);
   assert.equal(cancelCard("", "", fakeSpawn), false);
+});
+
+test("actionableCount counts cards WAITING on the owner, never info digests", () => {
+  const dir = tmpStore();
+  writeCard(dir, "d-ask", { options: [{ key: "yes", label: "Yes" }] });
+  writeCard(dir, "d-cred", { kind: "credential", options: [] });
+  writeCard(dir, "d-blocked", { kind: "blocked", options: [] }); // the notification hook's shape
+  writeCard(dir, "d-info1", { kind: "info", options: [] });
+  writeCard(dir, "d-info2", { kind: "info", options: [], urgency: "high" });
+  writeCard(dir, "d-nokind", {}); // kind absent — sanitised to "decision", no options
+
+  const cards = listOpen(dir);
+  assert.equal(
+    actionableCount(cards),
+    3,
+    "one ask + one credential + one blocked count; two high-urgency info digests and a bare card do not — '3 decisions waiting' must not be one ask and two facts, and an optionless blocked session must not go silent",
+  );
 });
 
 test("an unreadable store is 'unreadable', never mistaken for empty-and-fine", () => {
