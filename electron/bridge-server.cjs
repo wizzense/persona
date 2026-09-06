@@ -2,7 +2,12 @@
 
 const http = require("node:http");
 
-const DEFAULT_PORT = 47831;
+// 47931, not 47831 (2026-09-06). 47831 sits inside a Windows reserved TCP exclusion
+// range (47736-47835, one of 107 on the owner's host; Hyper-V/WSL claims them and they
+// MOVE across reboots), so the bind failed EACCES while the window drew fine and awsh's
+// bridge latched its 30s dead-endpoint cooldown forever. DESK_BRIDGE_PORT still
+// overrides; the aitheros launcher passes what pickPort() actually found free.
+const DEFAULT_PORT = 47931;
 const MAX_BODY_BYTES = 64 * 1024;
 const TRUSTED_ORIGIN =
   /^(?:https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?|codex-app:\/\/[A-Za-z0-9._~-]*)$/i;

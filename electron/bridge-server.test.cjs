@@ -88,9 +88,9 @@ test("only accepts supported app and local webview origins", () => {
 });
 
 test("only accepts loopback Host headers", () => {
-  assert.equal(hostAllowed("127.0.0.1:47831"), true);
-  assert.equal(hostAllowed("localhost:47831"), true);
-  assert.equal(hostAllowed("[::1]:47831"), true);
+  assert.equal(hostAllowed("127.0.0.1:47931"), true);
+  assert.equal(hostAllowed("localhost:47931"), true);
+  assert.equal(hostAllowed("[::1]:47931"), true);
   assert.equal(hostAllowed("desk.example"), false);
   assert.equal(hostAllowed("127.0.0.1.example"), false);
   assert.equal(hostAllowed(undefined), false);
