@@ -651,7 +651,12 @@ function SteerBox({ card }: { card: DeckDecision }) {
     setText('');
     void deck
       .steer(card.id, body)
-      .then((ok) => setNote(ok ? 'Sent to the session.' : 'Refused — awask did not accept it.'))
+      // "Handed to awask", never "sent to the session": the write is a DETACHED
+      // spawn by design (nothing may block or flash on the owner's desktop), so
+      // main learns that the process started, not that the store took it. The
+      // deck's answer/cancel buttons have always had this shape; saying
+      // "delivered" would be the one claim we cannot make.
+      .then((ok) => setNote(ok ? 'Handed to awask.' : 'Refused — awask did not start.'))
       .catch(() => setNote('Refused — awask is unreachable.'));
   };
 

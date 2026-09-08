@@ -204,3 +204,16 @@ test("steerCard sends a work order through awask, as ONE argv element, and refus
   assert.equal(long, true);
   assert.equal(calls[1][2].length, 2000);
 });
+
+test("the card writes report the SPAWN, not delivery -- the deck must not claim more", () => {
+  // runAwask is a detached spawn by design (nothing blocks or flashes on the
+  // owner's desktop, the gate-1t class), so a true return means "awask started",
+  // never "the store took it". Pinned so a future refactor that starts claiming
+  // delivery has to change this test and read the reason.
+  const started = { unref() {} };
+  assert.equal(steerCard("d-1", "do the thing", () => started), true);
+  assert.equal(answerCard("d-1", "yes", "", () => started), true);
+  // A spawn that THROWS is the only failure these can see.
+  assert.equal(steerCard("d-1", "do the thing", () => { throw new Error("ENOENT"); }), false);
+  assert.equal(answerCard("d-1", "yes", "", () => { throw new Error("ENOENT"); }), false);
+});
