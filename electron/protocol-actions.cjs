@@ -20,6 +20,10 @@ function parseProtocolUrl(rawUrl, protocolScheme = "desk") {
     if (action === "show" || action === "hide" || action === "toggle") {
       return [{ type: action }];
     }
+    // desk://fleet -> the Fleet control window (`game panel`, Start-menu link).
+    if (action === "fleet") {
+      return [{ type: "fleet" }];
+    }
     if (action === "listening") {
       return [{ type: "event", event: voiceState("listening") }];
     }

@@ -38,6 +38,7 @@ const {
   getAnimationEventName,
   ANIMATION_EVENT_NAMES,
 } = require("./mcp-server.cjs");
+const { createFleetWindow, getControl: getFleetControl, fleetSummaryCached } = require("./fleet-window.cjs");
 const {
   configureHyprlandWindow,
   getHyprlandWindowPlacement,
@@ -560,6 +561,7 @@ function handleProtocolUrl(rawUrl) {
     if (command.type === "show") showOverlay({ focus: true });
     else if (command.type === "hide") void hideOverlay();
     else if (command.type === "toggle") toggleOverlay();
+    else if (command.type === "fleet") createFleetWindow();
     else if (command.type === "event") handleBridgeEvent(command.event);
   }
   return true;
@@ -958,6 +960,12 @@ function refreshTrayMenu() {
       { label: "Talk to Aither…", click: openTalkWindow },
       { label: "Browse models…", click: openModelBrowser },
       { label: "Media Forge", click: openMediaForge },
+      {
+        // The fleet's on/off switch as a real window (2026-09-07, owner:
+        // "a real program I can launch and interact with to control this").
+        label: `Fleet control… (${fleetSummaryCached().split(" — ")[0]})`,
+        click: () => createFleetWindow(),
+      },
       { label: "Aitheros Online", submenu: buildLivingDesktopMenu() },
       { type: "separator" },
       { label: "Characters", submenu: buildCharacterMenu() },
@@ -1187,6 +1195,27 @@ function createChatWindow() {
   return chatWindow;
 }
 
+/** ONE entry point for every fleet surface (window buttons, tray, bridge
+ *  /fleet/*, MCP fleet_control, `game`): the verb lands on the single
+ *  FleetControl so nothing can race a second mask/unmask pass. */
+async function fleetAction(action, { fresh = false } = {}) {
+  const control = getFleetControl();
+  if (action === "open_panel" || action === "open") {
+    createFleetWindow();
+    return { ok: true, opened: true, summary: fleetSummaryCached() };
+  }
+  if (action === "status") {
+    const verdict = await control.status(fresh ? { maxAgeMs: 0 } : {});
+    return { ...verdict, summary: fleetSummaryCached() };
+  }
+  if (!Object.prototype.hasOwnProperty.call(require("./fleet-control.cjs").ACTIONS, action)) {
+    return { ok: false, unknown: true, error: `unknown fleet action "${action}"` };
+  }
+  // Raise the window so the owner SEES a fleet-changing action an agent started.
+  if (action !== "status") createFleetWindow();
+  return control.run(action);
+}
+
 function createTray() {
   const iconPath = path.join(__dirname, "..", "build", "icon.png");
   const icon = nativeImage.createFromPath(iconPath).resize({ width: 20, height: 20 });
@@ -1204,6 +1233,10 @@ if (!app.requestSingleInstanceLock()) {
     handleProtocolArgv(argv);
     if (argv.includes("--open-deck")) {
       createDeckWindow();
+      return;
+    }
+    if (argv.includes("--fleet")) {
+      createFleetWindow();
       return;
     }
     if (!handled && !argv.includes("--background")) showOverlay({ focus: true });
@@ -1563,6 +1596,7 @@ if (!app.requestSingleInstanceLock()) {
       },
       onSpawnAvatar: (slotId, name) => spawnAvatarSlot(slotId, name),
       onRemoveAvatar: (slotId) => removeAvatarSlot(slotId),
+      onFleet: (action, opts) => fleetAction(action, opts),
     });
     bridge = createBridgeServer({
       port: Number(process.env.DESK_BRIDGE_PORT || DEFAULT_PORT),
@@ -1572,6 +1606,7 @@ if (!app.requestSingleInstanceLock()) {
       // /api/decisions is a build stub — this loopback read is how its bell
       // sees the queue at all. Read-only; answering stays in the queue window.
       decisionsProvider: () => decisionCards.listOpen(),
+      fleetHandler: (verb) => fleetAction(verb === "open" ? "open_panel" : verb, { fresh: false }),
     });
     try {
       await bridge.listen();
@@ -1584,6 +1619,11 @@ if (!app.requestSingleInstanceLock()) {
     }
 
     createTray();
+    if (process.argv.includes("--fleet")) createFleetWindow();
+    // Keep the tray's Fleet line honest: re-render the menu after every verdict.
+    getFleetControl().on("progress", (p) => {
+      if (p?.phase === "end") refreshTrayMenu();
+    });
 
     // Watch the decision-card store: tray label + tooltip and the deck badge
     // track the open queue. Native notifications are REMOVED (2026-08-31,

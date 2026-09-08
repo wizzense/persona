@@ -142,6 +142,7 @@ function createBridgeServer({
   onEvent,
   mcpHandler = null,
   decisionsProvider = null,
+  fleetHandler = null,
 }) {
   let lastStateEvent = null;
   const server = http.createServer((request, response) => {
@@ -198,6 +199,45 @@ function createBridgeServer({
       }
       response.writeHead(200, { ...cors, "content-type": "application/json" });
       response.end(JSON.stringify({ decisions, count: decisions.length }));
+      return;
+    }
+
+    // Fleet control over loopback (2026-09-07): GET /fleet/status, POST
+    // /fleet/<down|up|gaming|resume|adopt|open>. Same trust as /mcp — loopback
+    // host, no foreign Origin — and every verb lands on main's ONE FleetControl,
+    // so `game`, the window, MCP and this route cannot disagree. POST only for
+    // anything that changes the fleet: a GET that stops 200 containers is a
+    // prefetch away from an outage.
+    if (request.url === "/fleet/status" || request.url.startsWith("/fleet/")) {
+      if (!originAllowed(origin)) {
+        response.writeHead(403);
+        response.end();
+        return;
+      }
+      if (fleetHandler == null) {
+        response.writeHead(404);
+        response.end();
+        return;
+      }
+      const verb = request.url.slice("/fleet/".length).split("?")[0];
+      const isStatus = verb === "status";
+      if ((isStatus && request.method !== "GET") || (!isStatus && request.method !== "POST")) {
+        response.writeHead(405, { allow: isStatus ? "GET" : "POST" });
+        response.end();
+        return;
+      }
+      Promise.resolve()
+        .then(() => fleetHandler(verb))
+        .then((verdict) => {
+          const status = verdict?.unknown ? 404 : verdict?.busy ? 409 : verdict?.cannotJudge ? 503 : 200;
+          response.writeHead(status, { "content-type": "application/json" });
+          response.end(JSON.stringify(verdict ?? { ok: false, error: "no verdict" }));
+        })
+        .catch((error) => {
+          if (response.headersSent) return;
+          response.writeHead(500, { "content-type": "application/json" });
+          response.end(JSON.stringify({ ok: false, error: error?.message || String(error) }));
+        });
       return;
     }
 

@@ -18,6 +18,9 @@ const ANIMATION_EVENT_NAMES = {
 };
 const ANIMATION_NAMES = Object.keys(ANIMATION_EVENT_NAMES);
 const WINDOW_ACTIONS = ["show", "hide", "toggle"];
+// Fleet verbs an agent may drive (2026-09-07). `open_panel` raises the window
+// for the owner; the rest run the same FleetControl the window's buttons do.
+const FLEET_ACTIONS = ["down", "up", "gaming", "resume", "adopt", "open_panel"];
 const SERVER_INSTRUCTIONS =
   "Desk controls the installed local desktop character. Use play_animation when the user asks for a visual reaction or it clearly supports their request. Use control_window to show, hide, or toggle Desk. Desk never speaks or plays audio. get_status is read-only.";
 
@@ -43,6 +46,7 @@ function createDeskMcpServer({
   onExportPortrait = null,
   onSpawnAvatar = null,
   onRemoveAvatar = null,
+  onFleet = null,
 }) {
   const server = new McpServer(
     {
@@ -341,6 +345,41 @@ function createDeskMcpServer({
     );
   }
 
+  if (onFleet) {
+    server.registerTool(
+      "fleet_status",
+      {
+        title: "AitherOS fleet status",
+        description:
+          "Read-only: is the AitherOS fleet up, down, or GPU-quiet? Returns the running-container count, masked units, VRAM and the GPU HOLD state, measured from the podman/systemd reality in the Debian WSL distro (never from the last button pressed). CANNOT JUDGE is reported as such, never as healthy.",
+        inputSchema: {
+          fresh: z.boolean().optional().describe("true = probe now instead of the cached verdict (up to ~10 s)."),
+        },
+        annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      },
+      async ({ fresh }) => {
+        const verdict = await onFleet("status", { fresh: fresh === true });
+        return { content: [{ type: "text", text: JSON.stringify(verdict, null, 2) }], isError: verdict?.ok === false };
+      },
+    );
+    server.registerTool(
+      "fleet_control",
+      {
+        title: "Control the AitherOS fleet",
+        description:
+          "down = stop AND runtime-mask every aither unit + container (holds against restarts); up = unmask and bring back exactly what was stopped (GPU models one at a time, minutes); gaming = GPU models + routine runners off, rest stays up; resume = undo gaming; adopt = record a hand-stopped (masked) fleet so `up` knows what to start; open_panel = show the Fleet window to the owner. Refused with busy when another action is running. Same implementation as the Fleet window and `game down|up`.",
+        inputSchema: {
+          action: z.enum(FLEET_ACTIONS).describe("The fleet action."),
+        },
+        annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+      },
+      async ({ action }) => {
+        const verdict = await onFleet(action, {});
+        return { content: [{ type: "text", text: JSON.stringify(verdict, null, 2) }], isError: verdict?.ok === false };
+      },
+    );
+  }
+
   return server;
 }
 
@@ -377,6 +416,7 @@ function createDeskMcpHandler(controller) {
 module.exports = {
   ANIMATION_EVENT_NAMES,
   ANIMATION_NAMES,
+  FLEET_ACTIONS,
   MCP_PATH,
   SERVER_INSTRUCTIONS,
   WINDOW_ACTIONS,

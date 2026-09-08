@@ -9,6 +9,8 @@ test("maps Desk URLs to lifecycle and clamped level events", () => {
   assert.equal(commands[0].event.state.activity, "speaking");
   assert.deepEqual(commands[1].event, { type: "audio-level", level: 1 });
   assert.equal(parseProtocolUrl("desk://inactive")[0].event.state.phase, "inactive");
+  assert.deepEqual(parseProtocolUrl("desk://fleet"), [{ type: "fleet" }]);
+  assert.deepEqual(parseProtocolUrl("desk:///fleet"), [{ type: "fleet" }]);
 });
 
 test("maps window and animation URLs without accepting another scheme", () => {
