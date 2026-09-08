@@ -837,6 +837,8 @@ export function Deck() {
           agentCharacters: (event.agentCharacters as Record<string, string>) ?? {},
           relay: (event.relay as DeckState['relay']) ?? [],
           relayChannel: (event.relayChannel as string) ?? '#agents',
+          room: (event.room as DeckState['room']) ?? [],
+          roomStatus: (event.roomStatus as string) ?? 'not started',
         });
       }
     });

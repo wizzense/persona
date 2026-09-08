@@ -21,6 +21,7 @@ const {
   post: postToRelay,
   postThreadReply: postRelayThreadReply,
   RELAY_CHANNEL,
+  RELAY_NICK,
 } = require("./relay-feed.cjs");
 const marketClient = require("./market-client.cjs");
 // Full system awareness (#9): the five snapshot clients the deck's System
@@ -40,6 +41,10 @@ const {
 } = require("./mcp-server.cjs");
 const { createFleetWindow, getControl: getFleetControl, fleetSummaryCached } = require("./fleet-window.cjs");
 const { createCommandWindow, getAgent: getCommandAgent } = require("./command-window.cjs");
+// The company room, both halves: the awdk daemon room (local, fleet-independent)
+// and the relay channels (#command / #agents) that the poller executes from.
+const { RoomPublisher } = require("./room-publisher.cjs");
+const { RelayPoller } = require("./relay-poller.cjs");
 const {
   configureHyprlandWindow,
   getHyprlandWindowPlacement,
@@ -190,6 +195,12 @@ let tray = null;
 let openDecisions = [];
 let relayFeed = [];
 let relayFeedTimer = null;
+// The local room (awdk daemon :8362, works with the fleet down) and the relay
+// poller that turns messages typed anywhere in the relay into work orders.
+let roomFeed = [];
+let roomFeedTimer = null;
+let roomPublisher = null;
+let relayPoller = null;
 let decisionWatchStop = null;
 let hyprlandConfigured = false;
 let hyprlandConfiguring = false;
@@ -1042,6 +1053,11 @@ function deckState() {
     // (owner: "why would awask + awdesk not be integrated into awrelay").
     relay: relayFeed,
     relayChannel: RELAY_CHANNEL,
+    // The local room (awdk daemon): command requests/replies beside every
+    // session's tool calls — the half of the company room that outlives the fleet.
+    room: roomFeed,
+    roomStatus: roomPublisher ? (roomPublisher.lastError || "ok") : "not started",
+    relayPoller: relayPoller ? relayPoller.status() : null,
   };
 }
 
@@ -1074,6 +1090,17 @@ async function refreshRelayFeed() {
   const rows = await fetchRelayHistory();
   relayFeed = rows;
   sendDeckState();
+}
+
+/** The local room's chat-like rows (command requests/replies, agent messages)
+ *  from the awdk daemon — the half of the company room that does not need the
+ *  fleet. [] when the daemon is down; the chat window says so. */
+async function refreshRoomFeed() {
+  if (!roomPublisher) return;
+  const rows = await roomPublisher.recentChat({ limit: 60 });
+  const changed = rows.length !== roomFeed.length || (rows.length && rows[rows.length - 1].id !== roomFeed[roomFeed.length - 1]?.id);
+  roomFeed = rows;
+  if (changed) sendDeckState();
 }
 
 /** Push the open-count badge to the avatar window's floating beads. */
@@ -1560,6 +1587,20 @@ if (!app.requestSingleInstanceLock()) {
           if (replied && replied.ok) void refreshRelayFeed();
           return replied && replied.ok ? true : (replied && replied.detail) || "the relay refused";
         }
+        // The chat window's LOCAL executor: the sentence runs through the one
+        // CommandAgent (fleet verbs -> FleetControl, else a headless agent);
+        // the request and reply land in the room (RoomPublisher) and the
+        // Command window's history. Returns the reply text, or "ERROR: …".
+        case "command-send": {
+          if (typeof arg !== "string" || !arg.trim()) return false;
+          try {
+            const result = await getCommandAgent(getFleetControl()).run(arg.trim(), { source: "chat-window" });
+            void refreshRoomFeed();
+            return result && result.ok !== false ? String(result.reply || "done") : `ERROR: ${result?.reply || "failed"}`;
+          } catch (error) {
+            return `ERROR: ${error instanceof Error ? error.message : String(error)}`;
+          }
+        }
         case "spawn-agent": {
           if (typeof arg !== "string" || arg.length === 0) return false;
           const roster = listCharacters();
@@ -1677,6 +1718,37 @@ if (!app.requestSingleInstanceLock()) {
     void refreshRelayFeed();
     relayFeedTimer = setInterval(() => void refreshRelayFeed(), 60_000);
     relayFeedTimer.unref?.();
+
+    // The company room, wired both ways (owner, 2026-09-08: "full integration
+    // into aitherrelay + aitherroom ... so I can just chat in there and have
+    // things get done"). One CommandAgent executes; this makes every surface
+    // reach it and every outcome land where it was asked:
+    //  - RoomPublisher: each request/reply becomes an event in the awdk daemon
+    //    room "main" (host process — works while the fleet is DOWN), beside the
+    //    tool calls of every Claude Code tab; awsh /room and adk read it.
+    //  - RelayPoller: a message in #command, or "@desk …" in #agents, runs
+    //    through the same agent and is acked in-thread on the relay.
+    const commandAgent = getCommandAgent(getFleetControl());
+    roomPublisher = new RoomPublisher();
+    roomPublisher.attach(commandAgent, {
+      actorFor: (p) => (/^relay:/.test(String(p.source || ""))
+        ? { kind: "human", id: RELAY_NICK, name: RELAY_NICK }
+        : { kind: "human", id: "owner", name: "owner" }),
+    });
+    relayPoller = new RelayPoller({
+      agent: commandAgent,
+      fetchHistory: (channel, limit) => fetchRelayHistory(channel, limit),
+      postThreadReply: (channel, id, text) => postRelayThreadReply(channel, id, text),
+    });
+    relayPoller.on("executed", (r) => {
+      console.log(`[desk] relay order ${r.channel} ${r.id} -> ${r.result?.ok === false ? "FAILED" : "ok"}${r.posted ? "" : ` (ack not posted: ${r.postDetail || "refused"})`}`);
+      void refreshRelayFeed();
+    });
+    relayPoller.start();
+    void refreshRoomFeed();
+    roomFeedTimer = setInterval(() => void refreshRoomFeed(), 15_000);
+    roomFeedTimer.unref?.();
+    commandAgent.on("complete", () => void refreshRoomFeed());
 
     decisionWatchStop = decisionCards.watch({
       onChange: (cards) => {

@@ -207,3 +207,23 @@ test("CommandAgent: spawn ENOENT is a verdict, not a throw", async () => {
   assert.equal(result.ok, false);
   assert.match(result.reply, /ENOENT/);
 });
+
+test("CommandAgent: the relay mirror is an [ack] carrying the REPLY, never an echo of the request; relay-sourced commands are not mirrored", async () => {
+  const { agent, spawned } = agentWith();
+  await agent.run("Reply with PONG", { source: "command-window" });
+  await new Promise((r) => setTimeout(r, 10));
+  const relaySends = spawned.filter((s) => s.cmd === "awrelay");
+  assert.equal(relaySends.length, 1);
+  const args = relaySends[0].args;
+  assert.equal(args[0], "send");
+  assert.equal(args[1], "#command");
+  assert.match(args[2], /^\[ack\] ok/, "the body is the reply, ack-prefixed");
+  assert.match(args[2], /re: Reply with PONG/);
+  assert.notEqual(args[2].trim(), "Reply with PONG", "an echoed request would be re-executed by the relay poller");
+  assert.deepEqual(args.slice(3), ["--kind", "ack"]);
+
+  const { agent: fromRelay, spawned: spawned2 } = agentWith();
+  await fromRelay.run("Reply with PONG", { source: "relay:#command:m1" });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(spawned2.filter((s) => s.cmd === "awrelay").length, 0, "the poller acks in-thread; no second post");
+});

@@ -47,6 +47,22 @@ export interface DeckState {
   agentCharacters: Record<string, string>;
   relay: RelayRow[];
   relayChannel: string;
+  /** The local room (awdk daemon :8362): command requests/replies and agent
+   *  messages — the half of the company room that works with the fleet down. */
+  room: RoomRow[];
+  roomStatus: string;
+}
+
+export interface RoomRow {
+  id: string;
+  seq: number;
+  at: number;
+  author: string;
+  text: string;
+  /** command_request | command_reply | agent_message | chat */
+  kind: string;
+  agent: boolean;
+  correlationId: string;
 }
 
 export const EMPTY_DECK_STATE: DeckState = {
@@ -60,6 +76,8 @@ export const EMPTY_DECK_STATE: DeckState = {
   agentCharacters: {},
   relay: [],
   relayChannel: '#agents',
+  room: [],
+  roomStatus: 'not started',
 };
 
 /** WHERE a card came from, so a row can name it — a toast with no identity is

@@ -360,4 +360,5 @@ module.exports = {
   _resetJoinForTests,
   RELAY_URL,
   RELAY_CHANNEL,
+  RELAY_NICK,
 };

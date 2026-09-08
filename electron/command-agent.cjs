@@ -196,6 +196,7 @@ class CommandAgent extends EventEmitter {
     this.current = { id, startedAt: Date.now() };
     this.emit("progress", { id, text: `> ${classify.kind === "fleet" ? "fleet: " : "claude: "}${text}`, phase: "start" });
 
+    let outcome = null; // what the relay ack reports: the reply and whether it worked
     try {
       let result;
       if (classify.kind === "fleet") {
@@ -215,11 +216,13 @@ class CommandAgent extends EventEmitter {
 
       this.emit("progress", { id, text: result.reply, phase: "end", verdict: result.verdict });
       this.emit("complete", { id, ...result });
+      outcome = { reply: result.reply, ok: result.ok !== false };
 
       return result;
     } catch (error) {
       const reply = error?.message || String(error);
       const verdict = { ok: false, error: reply };
+      outcome = { reply, ok: false };
       this._appendTranscript({
         id,
         timestamp: new Date().toISOString(),
@@ -235,8 +238,8 @@ class CommandAgent extends EventEmitter {
       return { ok: false, id, reply, kind: classify.kind, verdict };
     } finally {
       this.current = null;
-      // Relay best-effort (fire-and-forget).
-      void this._relayRequest(text, classify.kind);
+      // Relay best-effort (fire-and-forget): an [ack] with the reply, never the request.
+      void this._relayRequest(text, classify.kind, { ...(outcome || { reply: "", ok: false }), source });
       // Process next in queue.
       const next = this.queue.shift();
       if (next) {
@@ -405,14 +408,30 @@ class CommandAgent extends EventEmitter {
     });
   }
 
-  async _relayRequest(text, kind) {
+  /**
+   * Mirror a FINISHED command to #command as an `[ack]` carrying the reply.
+   *
+   * It used to echo the REQUEST text as a `request`/`finding` envelope, which
+   * is exactly what the relay poller (relay-poller.cjs) treats as a work order
+   * — the desk would have re-executed its own echo every 20 s. An ack is what
+   * the channel wants anyway: the request is already there when it came from
+   * the relay, and when it came from the window the ack names it.
+   *
+   * A command that ARRIVED from the relay is not mirrored here: the poller
+   * posts the ack as a thread reply under the message that asked.
+   */
+  async _relayRequest(text, kind, { reply = "", ok = true, source = "" } = {}) {
     try {
+      if (/^relay:/.test(String(source || ""))) return { ok: true, skipped: "from-relay" };
+      const head = ok === false ? "[ack] FAILED — " : "[ack] ";
+      const body = `${head}${String(reply || (ok === false ? "failed" : "done")).trim()}`.slice(0, 1800)
+        + `\n— re: ${String(text || "").slice(0, 200)}`;
       const args = [
         "send",
         "#command",
-        `${text}`,
+        body,
         "--kind",
-        kind === "fleet" ? "request" : "finding",
+        "ack",
       ];
 
       return new Promise((resolve) => {

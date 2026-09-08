@@ -1,19 +1,48 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { EMPTY_DECK_STATE, formatAge, type DeckState, type RelayRow } from '../deck/deck-types';
+import { EMPTY_DECK_STATE, formatAge, type DeckState, type RelayRow, type RoomRow } from '../deck/deck-types';
 
 /**
  * The CHAT window — `?chat=1`, opened by the chat bead. Not the deck, not a
- * terminal: a dedicated chat surface over the company room (#agents relay).
- * Clicking a message opens the direct thread under it (the per-agent
- * conversation — main's `desk:relay-thread`), replies go back through the
- * same bridge actions the deck uses, so this window is a VIEW, never a
- * second chat implementation.
+ * terminal: a dedicated chat surface over the company room. Two halves of
+ * that room exist and both are here (owner, 2026-09-08: "full integration
+ * into aitherrelay + aitherroom ... so I can just chat in there and have
+ * things get done"):
+ *
+ *  - the RELAY channel (#agents): humans + cloud agents; a message addressed
+ *    "@desk …" is executed by the desk's own CommandAgent (relay-poller) and
+ *    acked in-thread. Needs the fleet.
+ *  - the LOCAL ROOM (awdk daemon :8362): every Claude Code tab's tool calls
+ *    plus the desk's command requests/replies. Typing here RUNS the sentence
+ *    through the CommandAgent directly — fleet up or down — and the reply
+ *    lands as a room event, so awsh `/room` and adk see the same exchange.
+ *
+ * When the relay refuses or does not answer, a post falls back to the local
+ * executor and the window switches to the room view, saying so. Clicking a
+ * relay message opens the direct thread under it (main's `desk:relay-thread`);
+ * replies go back through the same bridge actions the deck uses, so this
+ * window is a VIEW, never a second chat implementation.
  */
+
+type ChatSource = 'relay' | 'room';
 
 interface BridgeDeck {
   getState(): Promise<DeckState>;
-  action(name: string, arg?: string): Promise<boolean>;
+  action(name: string, arg?: string): Promise<boolean | string>;
   relayThread(messageId: string): Promise<RelayRow[]>;
+}
+
+/** A room event rendered like a relay row (same list component). */
+function roomAsRow(row: RoomRow): RelayRow {
+  return {
+    channel: 'room',
+    author: row.author,
+    text: row.kind === 'command_request' ? `› ${row.text}` : row.text,
+    at: row.at,
+    id: row.id,
+    threadId: null,
+    replyCount: 0,
+    agent: row.agent,
+  };
 }
 
 function bridgeDeck(): BridgeDeck | null {
@@ -39,6 +68,11 @@ export function ChatView() {
   // Who the composer is addressing: null = the room, "agent" = a direct thread.
   // When the agent has no feed message yet, posts go out as @agent mentions.
   const [chatTarget, setChatTarget] = useState<string | null>(null);
+  // relay = #agents (needs the fleet); room = the local awdk-daemon room,
+  // where typing RUNS the sentence through the desk's CommandAgent.
+  const [source, setSource] = useState<ChatSource>('relay');
+  const [running, setRunning] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   // Send failures are VISIBLE now -- main returns the real post result
   // (the relay 403s an unjoined identity on #agents), and the old
@@ -69,7 +103,7 @@ export function ChatView() {
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
-  }, [state.relay, thread]);
+  }, [state.relay, state.room, thread, source]);
 
   const openThread = (row: RelayRow) => {
     void bridgeDeck()
@@ -106,11 +140,36 @@ export function ChatView() {
     }
     setDraft('');
     setSendError(null);
+    setNotice(null);
     // Restore the draft on failure so a refused message is not silently eaten.
     const fail = (message: string) => {
       setDraft(text);
       setSendError(message);
     };
+    // The local executor: the sentence runs through the desk's CommandAgent
+    // (fleet verbs -> FleetControl, anything else -> a headless agent), the
+    // request and the reply land in the room, and the room view refreshes.
+    const runLocally = (why: string | null) => {
+      setSource('room');
+      setThread(null);
+      setRunning(text);
+      if (why) setNotice(why);
+      return deck
+        .action('command-send', text)
+        .then((res) => {
+          setRunning(null);
+          if (typeof res === 'string' && res.startsWith('ERROR:')) fail(res);
+          pull();
+        })
+        .catch((err) => {
+          setRunning(null);
+          fail(`Not run — ${err instanceof Error ? err.message : String(err)}`);
+        });
+    };
+    if (source === 'room') {
+      void runLocally(null);
+      return;
+    }
     if (thread && thread.anchorId) {
       const anchorId = thread.anchorId;
       void deck
@@ -137,7 +196,15 @@ export function ChatView() {
         .action('relay-post', payload)
         .then((ok) => {
           if (ok !== true) {
-            fail(typeof ok === 'string' && ok ? `Not sent — ${ok}` : 'Not sent — the relay refused the post.');
+            // A relay that is DOWN (the fleet is held, the container is
+            // masked) must not eat the sentence: run it here instead. A real
+            // refusal (403, agent-only) is reported, not worked around.
+            const detail = typeof ok === 'string' && ok ? ok : 'the relay refused the post';
+            if (!chatTarget && /did not answer|unreachable|restart|no answer|status 0/i.test(detail)) {
+              void runLocally(`Relay down (${detail}) — ran it locally instead; this is the room view.`);
+              return;
+            }
+            fail(`Not sent — ${detail}`);
             return;
           }
           // Belt and braces: main refreshes the feed and now pushes it to this
@@ -145,16 +212,19 @@ export function ChatView() {
           // the push is missed.
           window.setTimeout(() => pull(), 900);
         })
-        .catch(() => fail('Not sent — the relay is unreachable.'));
+        .catch(() => void runLocally('Relay unreachable — ran it locally instead; this is the room view.'));
     }
   };
 
-  const rows = thread ? thread.rows : state.relay;
+  const roomRows = state.room.map(roomAsRow);
+  const rows = thread ? thread.rows : source === 'room' ? roomRows : state.relay;
   const title = thread && thread.anchorId
     ? `Direct chat — ${chatTarget ?? 'thread'}`
-    : chatTarget
-      ? `${chatTarget} — direct`
-      : `${state.relayChannel} — the company room`;
+    : source === 'room'
+      ? `room — local (${state.roomStatus === 'ok' ? 'awdk daemon' : state.roomStatus})`
+      : chatTarget
+        ? `${chatTarget} — direct`
+        : `${state.relayChannel} — the company room`;
 
   return (
     <main className="chat-view">
@@ -162,11 +232,22 @@ export function ChatView() {
         <span className="chat-head-title" title={title}>{title}</span>
         <select
           className="chat-target"
-          value={chatTarget ?? ''}
-          onChange={(event) => pickTarget(event.target.value || null)}
-          title="Who you are talking to"
+          value={source === 'room' ? ' room' : chatTarget ?? ''}
+          onChange={(event) => {
+            const value = event.target.value;
+            if (value === ' room') {
+              setSource('room');
+              setThread(null);
+              setChatTarget(null);
+              return;
+            }
+            setSource('relay');
+            pickTarget(value || null);
+          }}
+          title="Where you are talking: the relay channel (needs the fleet) or the local room (runs the sentence here)"
         >
-          <option value="">{state.relayChannel} (room)</option>
+          <option value="">{state.relayChannel} (relay)</option>
+          <option value={' room'}>room — local, runs it (fleet up or down)</option>
           {state.agents.map((agent) => (
             <option key={agent} value={agent}>{agent}</option>
           ))}
@@ -185,7 +266,11 @@ export function ChatView() {
       <div className="chat-list" ref={listRef}>
         {rows.length === 0 ? (
           <p className="chat-empty">
-            {thread ? 'No replies in this thread yet.' : 'The room is quiet — say something.'}
+            {thread
+              ? 'No replies in this thread yet.'
+              : source === 'room'
+                ? (state.roomStatus === 'ok' ? 'Nothing said in the room yet — tell the desk what to do.' : `Room unavailable: ${state.roomStatus} (start the awdk daemon: aither harness serve).`)
+                : 'The room is quiet — say something.'}
           </p>
         ) : (
           rows.map((row, index) => {
@@ -210,9 +295,14 @@ export function ChatView() {
         )}
       </div>
       <footer className="chat-compose">
+        {(running || notice) && (
+          <p className="chat-notice" style={{ color: '#9ec1ff', fontSize: 11, margin: '0 0 4px' }}>
+            {running ? `running: ${running}` : notice}
+          </p>
+        )}
         <input
           className="chat-input"
-          placeholder={thread ? 'Reply in thread…' : `Post to ${state.relayChannel}…`}
+          placeholder={thread ? 'Reply in thread…' : source === 'room' ? 'Tell the desk what to do — it runs here…' : `Post to ${state.relayChannel}…`}
           value={draft}
           onChange={(event) => {
             setDraft(event.target.value);
