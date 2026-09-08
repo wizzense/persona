@@ -572,9 +572,27 @@ function showDesktopApp() {
   appWin.webContents.on("did-fail-load", (_e, code, desc, failedUrl, isMainFrame) => {
     if (isMainFrame) log(`[app] did-fail-load ${failedUrl}: ${code} ${desc}`);
   });
+  // The apex boots through a landing ("AI that runs on hardware you own" / Enter
+  // the OS) unless THIS TAB already reached the desktop this session — Veil's
+  // os-client.tsx keys that on sessionStorage 'aither-os-session'. A fresh
+  // Electron window is a fresh tab, so the owner got the marketing hero instead
+  // of the desktop (screenshot, 2026-09-08 09:40). Mark the session booted on
+  // the first load and reload ONCE; the second load lands on the desktop stage.
+  let bootSkipped = false;
   appWin.webContents.on("did-finish-load", () => {
     appWin.webContents
-      .executeJavaScript("try{localStorage.setItem('aither-local-node-probe-optin','1')}catch(e){}; true;")
+      .executeJavaScript(
+        "try{localStorage.setItem('aither-local-node-probe-optin','1')}catch(e){};" +
+          "(function(){try{if(sessionStorage.getItem('aither-os-session'))return 'booted';" +
+          "sessionStorage.setItem('aither-os-session','1');return 'marked'}catch(e){return 'no-storage'}})();",
+      )
+      .then((state) => {
+        if (state === "marked" && !bootSkipped && appWin && !appWin.isDestroyed()) {
+          bootSkipped = true;
+          log("[app] first load reached the landing; session marked booted, reloading to the desktop stage");
+          appWin.webContents.reload();
+        }
+      })
       .catch(() => {});
   });
   appWin.once("ready-to-show", () => {
