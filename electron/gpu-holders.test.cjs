@@ -40,7 +40,10 @@ test("shapeHolders drops sub-threshold rows and tolerates a single object or gar
 });
 
 test("hintFor knows the fleet distro, model servers, and says nothing when it does not know", () => {
+  // The fleet's own VRAM arrives on the host as the Hyper-V worker, never as a
+  // container (measured 2026-09-08: vmwp 6.0 GiB with 119 containers up).
   assert.match(hintFor("vmmem", ""), /WSL2/);
+  assert.match(hintFor("vmwp", ""), /the fleet distro itself/);
   assert.match(hintFor("ollama.exe", ""), /Ollama/);
   assert.match(hintFor("python.exe", "python server.py"), /python server\.py/);
   // The live shape: a base-interpreter path that never says ComfyUI; the flags do.

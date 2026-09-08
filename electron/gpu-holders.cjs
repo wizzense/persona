@@ -43,7 +43,15 @@ const GIB = 1024 * 1024 * 1024;
 function hintFor(name, cmd) {
   const n = String(name || "").toLowerCase();
   const c = String(cmd || "").toLowerCase();
-  if (n === "vmmem" || n === "vmmemwsl") return "WSL2 — the fleet distro (podman/GPU models)";
+  // The fleet's OWN VRAM, seen from Windows. WSL2 runs inside a Hyper-V VM, so
+  // the GPU memory its containers hold is attributed on the host to the VM
+  // worker process (vmwp.exe) or vmmem — never to a container, and never to
+  // nvidia-smi's compute-apps list. Measured 2026-09-08 with 119 containers up:
+  // vmwp held 6.0 GiB while the models loaded. Unnamed, it reads as a stray
+  // Windows process, which is the opposite of the truth.
+  if (n === "vmwp" || n === "vmmem" || n === "vmmemwsl") {
+    return "WSL2 / Hyper-V — the fleet distro itself (its containers' GPU memory)";
+  }
   if (n === "dwm.exe" || n === "dwm") return "Windows desktop compositor";
   // The live case: base-interpreter python.exe running `main.py --listen
   // --port 8188 --reserve-vram 10` from D:\ComfyUI — the path never says

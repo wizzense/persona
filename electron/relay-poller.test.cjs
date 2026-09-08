@@ -15,12 +15,13 @@ function tmpCursor(context) {
   return path.join(dir, "cursor.json");
 }
 
-test("pickWorkOrders: #command takes every plain message; acks, findings, agent rows, thread replies and seen ids never qualify", () => {
+test("pickWorkOrders: #command takes every plain message; acks, findings, system rows, thread replies and seen ids never qualify", () => {
   const rows = [
     row("m1", "fleet status"),
     row("m2", "[ack] DOWN — 0 containers"),
     row("m3", "[finding] something"),
-    row("m4", "an agent said this", { agent: true }),
+    row("m4", "[ack] the desk's own mirror", { agent: true }),
+    row("m8", "Channel #command created by david", { type: "system" }),
     row("m5", "reply in thread", { threadId: "m1" }),
     row("m6", "already ran"),
     row("m7", "   "),
@@ -28,6 +29,20 @@ test("pickWorkOrders: #command takes every plain message; acks, findings, agent 
   const orders = pickWorkOrders(rows, { channel: "#command", seen: new Set(["m6"]) });
   assert.deepEqual(orders.map((o) => o.id), ["m1"]);
   assert.equal(orders[0].text, "fleet status");
+});
+
+test("an agent-flagged row IS an order: the desk's own join makes the relay stamp the OWNER as an agent", () => {
+  // Measured live 2026-09-08: POST /v1/agent/join (how the desk reads an
+  // agent-only channel at all) registers the owner's nick as an agent in that
+  // channel, so every later message the owner TYPES arrives with agent:true.
+  // A blanket agent-skip silenced the owner's second message. The envelope is
+  // the discriminator, not the author flag.
+  const rows = [
+    row("a1", "fleet status", { agent: true }),
+    row("a2", "[ack] DOWN -- 0 containers", { agent: true }),
+  ];
+  const orders = pickWorkOrders(rows, { channel: "#command", seen: new Set() });
+  assert.deepEqual(orders.map((o) => o.id), ["a1"]);
 });
 
 test("pickWorkOrders: #agents only takes messages addressed to the desk, and strips the address", () => {

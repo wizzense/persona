@@ -237,6 +237,11 @@ function shapeRows(parsed, channel, limit) {
       threadId: typeof row.thread_id === "string" ? row.thread_id : null,
       replyCount: Number(row.reply_count) || 0,
       agent: row.agent === true,
+      // The relay's own message type (message | system | join | part | action | ...).
+      // A "system" row is the channel narrating itself ("Channel #command created
+      // by david"), never something a human asked for -- the relay poller must not
+      // execute one. Absent on older payloads, so default to a real message.
+      type: typeof row.type === "string" && row.type ? row.type : "message",
     });
   }
   return out.slice(0, limit);

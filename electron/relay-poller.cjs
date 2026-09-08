@@ -20,11 +20,22 @@
  *
  * Loop guards, because the desk posts as the OWNER identity (same bearer, same
  * nick — the relay refuses any other nick): an `[ack]`/`[finding]`/`[alert]`
- * envelope is never a work order; agent-authored rows (`row.agent`) are never
- * work orders; and the cursor file makes every message id run at most ONCE
- * across desk restarts. On the very first run everything already in the
- * channel is marked seen — a restart must never replay yesterday's history
- * into the fleet.
+ * envelope is never a work order (the desk's own mirror always carries `[ack]`);
+ * a `system` row is the channel narrating itself, never an order; and the cursor
+ * file makes every message id run at most ONCE across desk restarts. On the very
+ * first run everything already in the channel is marked seen — a restart must
+ * never replay yesterday's history into the fleet.
+ *
+ * 🚩 The guard that is NOT here, and why. The first version also skipped every
+ * row with `agent: true`, which looked like the obvious anti-loop rule and was
+ * measured wrong the first time it ran live (2026-09-08): the desk's own
+ * `POST /v1/agent/join` — the join that lets it read an agent-only channel at
+ * all — registers the OWNER's nick as an agent in that channel, so from the
+ * next message on the relay stamps `agent: true` on what the owner types. The
+ * owner's second message was silently skipped while the first had run. Author
+ * identity cannot separate the desk from the owner here (one nick, by the
+ * relay's own rule), so the discriminator is the CONTENT envelope, which the
+ * desk controls and a human does not accidentally type.
  *
  * READ goes through the awrelay CLI (relay-feed.fetchHistory), WRITE through
  * relay-feed.postThreadReply — one transport story, no second relay client.
@@ -51,7 +62,10 @@ function pickWorkOrders(rows, { channel, seen, policy = CHANNELS[channel] || "ad
   for (const row of Array.isArray(rows) ? rows : []) {
     if (!row || typeof row !== "object" || !row.id || !row.text) continue;
     if (seen.has(row.id)) continue;
-    if (row.agent === true) continue;
+    // Only a real message is an order: join/part/system/topic rows are the
+    // channel talking about itself.
+    if (row.type && row.type !== "message" && row.type !== "action") continue;
+    // The desk's own mirror (and any awrelay ack/finding/alert) — never re-run.
     if (ENVELOPE_RE.test(row.text)) continue;
     // A thread reply is a conversation under a message, not a new order.
     if (row.threadId) continue;
