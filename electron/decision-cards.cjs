@@ -274,6 +274,24 @@ function cancelCard(id, note = "", spawnFn = spawn) {
 }
 
 /**
+ * STEER a card: send the raising session a work order instead of picking one of
+ * its options. This is the verb that turns a card from a multiple-choice quiz
+ * into a conversation -- "none of these; do X instead" -- and until 2026-09-08
+ * the deck could answer and cancel but not steer, so every card whose right
+ * answer was not on the card had to be retyped in a terminal (integration-map
+ * gap 3). Same doctrine as answer/cancel: awask is the single WRITE
+ * implementation, Desk stays a read-only consumer of the store.
+ */
+function steerCard(id, text, spawnFn = spawn) {
+  if (typeof id !== "string" || id.length === 0) return false;
+  const body = String(text || "").trim();
+  if (!body) return false;
+  // `awask steer <id> <text...>` -- the text is positional and variadic; pass it
+  // as ONE argv element so a sentence is not re-split into flags.
+  return runAwask(["steer", id, body.slice(0, 2000), "--via", "desk"], spawnFn);
+}
+
+/**
  * Poll the store; call onChange(cards) whenever the signature moves (and once at
  * start). Injectable timers/dir for tests. Returns a stop function.
  */
@@ -311,5 +329,6 @@ module.exports = {
   openCardWindow,
   answerCard,
   cancelCard,
+  steerCard,
   watch,
 };

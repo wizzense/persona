@@ -367,6 +367,34 @@ body {
   margin-top: 10px;
 }
 
+/* STEER: "none of these -- do this instead". A card whose right answer is not
+   one of its options used to need a terminal (`awask steer`). */
+.deck-card-steer-open {
+  margin-top: 6px;
+  border: none;
+  background: transparent;
+  color: var(--deck-muted, #8a93a6);
+  font: inherit;
+  font-size: 11px;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline dotted;
+}
+.deck-card-steer-open:hover { color: inherit; }
+.deck-card-steer { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+.deck-card-steer-input {
+  flex: 1;
+  min-width: 140px;
+  border: 1px solid var(--deck-edge);
+  background: rgba(0, 0, 0, 0.25);
+  color: inherit;
+  border-radius: 8px;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 12px;
+}
+.deck-card-steer-note { width: 100%; margin: 2px 0 0; font-size: 11px; color: var(--deck-muted, #8a93a6); }
+
 .deck-btn {
   border: 1px solid var(--deck-edge);
   background: transparent;

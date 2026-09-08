@@ -25,6 +25,9 @@ contextBridge.exposeInMainWorld("deskBridge", {
     open: () => ipcRenderer.send("desk:deck-open"),
     close: () => ipcRenderer.send("desk:deck-close"),
     answer: (id, choice) => ipcRenderer.invoke("desk:deck-answer", { id, choice }),
+    // "None of these — do this instead": the card plane's steer verb, so a card
+    // whose right answer is not one of its options no longer needs a terminal.
+    steer: (id, text) => ipcRenderer.invoke("desk:deck-steer", { id, text }),
     action: (name, arg) => ipcRenderer.invoke("desk:deck-action", name, arg),
     // The Aitherium marketplace, one-stop-shop data layer
     // (market-client.cjs speaks MCP to the local gateway with the session

@@ -6,7 +6,9 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 
-const { signature, listOpen, actionableCount, watch, answerCard, cancelCard } = require("./decision-cards.cjs");
+const { signature, listOpen, actionableCount, watch, answerCard, cancelCard,
+  steerCard,
+} = require("./decision-cards.cjs");
 
 function tmpStore() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "desk-decisions-"));
@@ -181,4 +183,24 @@ test("watch fires at start and on change, not on quiet polls", () => {
 
   stop();
   assert.equal(tick, null, "stop clears the interval");
+});
+
+test("steerCard sends a work order through awask, as ONE argv element, and refuses empties", () => {
+  // The verb the deck never had (2026-09-08): a card whose right answer is not
+  // one of its options had to be retyped in a terminal. The sentence must stay
+  // one argv element -- `awask steer <id> <text...>` is variadic, so a split
+  // sentence would have its words re-parsed (a leading "--word" becomes a flag).
+  const calls = [];
+  const spawnFn = (bin, args) => {
+    calls.push(args);
+    return { unref() {} };
+  };
+  assert.equal(steerCard("d-1", "  rebuild the image instead  ", spawnFn), true);
+  assert.deepEqual(calls[0], ["steer", "d-1", "rebuild the image instead", "--via", "desk"]);
+  assert.equal(steerCard("d-1", "   ", spawnFn), false);
+  assert.equal(steerCard("", "do a thing", spawnFn), false);
+  assert.equal(calls.length, 1, "an empty steer never reaches awask");
+  const long = steerCard("d-2", "x".repeat(5000), spawnFn);
+  assert.equal(long, true);
+  assert.equal(calls[1][2].length, 2000);
 });

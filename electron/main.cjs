@@ -1367,6 +1367,20 @@ if (!app.requestSingleInstanceLock()) {
       }
       return ok;
     });
+    // STEER a card: "none of these options — do this instead". The card plane's
+    // write verb the deck never had (integration-map gap 3): without it, a card
+    // whose right answer was not one of its options had to be retyped in a
+    // terminal. Mirrored to the coordination channel like an answer, so the
+    // sessions see the order and not just its effect.
+    ipcMain.handle("desk:deck-steer", (_event, payload) => {
+      const { id, text } = payload || {};
+      const ok = decisionCards.steerCard(id, text);
+      if (ok) {
+        void postToRelay(RELAY_CHANNEL, `steered ${id}: ${String(text).slice(0, 300)} (via desk)`)
+          .then(() => void refreshRelayFeed());
+      }
+      return ok;
+    });
     // One-stop-shop data: the Aitherium marketplace via market-client.cjs
     // (MCP to the local gateway, session bearer — same story as relay).
     ipcMain.handle("desk:market-browse", (_event, query) =>

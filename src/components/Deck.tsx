@@ -623,7 +623,68 @@ function DecisionRow({
           </button>
         ) : null}
       </footer>
+      <SteerBox card={card} />
     </article>
+  );
+}
+
+/**
+ * "None of these — do this instead." The card plane's STEER verb, which the
+ * deck never had: until 2026-09-08 a card whose right answer was not one of
+ * its options had to be retyped in a terminal (`awask steer <id> "..."`), so
+ * the deck was a multiple-choice quiz over work orders. The text goes to the
+ * asking session and is mirrored to the coordination channel.
+ */
+function SteerBox({ card }: { card: DeckDecision }) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState('');
+  const [note, setNote] = useState<string | null>(null);
+
+  const send = () => {
+    const body = text.trim();
+    if (!body) return;
+    const deck = bridgeDeck() as unknown as { steer?: (id: string, t: string) => Promise<boolean> } | null;
+    if (!deck?.steer) {
+      setNote('Steering needs a newer Desk build.');
+      return;
+    }
+    setText('');
+    void deck
+      .steer(card.id, body)
+      .then((ok) => setNote(ok ? 'Sent to the session.' : 'Refused — awask did not accept it.'))
+      .catch(() => setNote('Refused — awask is unreachable.'));
+  };
+
+  if (!open) {
+    return (
+      <button
+        className="deck-card-steer-open"
+        title="Tell the asking session what to do instead of picking one of its options"
+        onClick={() => setOpen(true)}
+      >
+        Something else…
+      </button>
+    );
+  }
+  return (
+    <div className="deck-card-steer">
+      <input
+        className="deck-card-steer-input"
+        autoFocus
+        placeholder="Do this instead…"
+        value={text}
+        onChange={(event) => {
+          setText(event.target.value);
+          if (note) setNote(null);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') send();
+          if (event.key === 'Escape') setOpen(false);
+        }}
+      />
+      <button className="deck-btn" onClick={send}>Send</button>
+      {note ? <p className="deck-card-steer-note">{note}</p> : null}
+    </div>
   );
 }
 
