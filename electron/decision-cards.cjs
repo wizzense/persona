@@ -140,26 +140,66 @@ function listOpen(dir = storeDir()) {
 }
 
 /**
- * How many of these cards are actually WAITING on the owner. Actionable
- * means: carries answer options, is a credential ask (no popup renders
- * credentials — the masked prompt is the only door, so the bell must still
- * count them), or is a BLOCKED card (the notification hook's permission/idle
- * asks carry no options by design — "a permission prompt can only be
- * answered in that tab" — and after the toast removal the tray bell is their
- * only remaining push; an optionless blocked card is waiting on the owner
- * even though nothing can be clicked). Info cards ("you should know", no
- * options) are facts the deck shows, not decisions waiting on the owner —
- * the tray bell counting them is how "3 decisions waiting" turns out to be
- * one ask and two digests (owner report 2026-08-31, the same noise class as
- * the removed toasts).
+ * Classify a card as DECISION or CONTEXT using triage rules.
+ *
+ * DECISION: has options, has a deadline, or is credential/blocked kind.
+ * CONTEXT: info-only (status updates, hourly digests, etc).
+ *
+ * Returns "decision" or "context".
  */
-function actionableCount(cards) {
-  return cards.filter(
-    (c) =>
-      (Array.isArray(c.options) && c.options.length > 0) ||
-      c.kind === "credential" ||
-      c.kind === "blocked",
-  ).length;
+function triageCard(card, patterns) {
+  if (!patterns) return "decision"; // fallback when patterns unavailable
+
+  const kind = (card.kind || "decision").toLowerCase();
+  const options = Array.isArray(card.options) ? card.options : [];
+  const hasDeadline = card.deadline !== null && card.deadline !== undefined;
+
+  // Credentials and blocked cards are always decisions.
+  if (patterns.decision_kinds && patterns.decision_kinds.includes(kind)) {
+    return "decision";
+  }
+
+  // Has a future deadline? Decision.
+  if (hasDeadline && card.deadline > Date.now() / 1000) {
+    return "decision";
+  }
+
+  // Has actionable options? Decision.
+  if (options.length > 0) {
+    // Check if all options are status-only phrases (not actionable).
+    const actionable = options.filter((o) => {
+      const label = o.label || "";
+      // Check against each status-only pattern.
+      if (patterns.context_phrases) {
+        for (const pattern of patterns.context_phrases) {
+          try {
+            const re = new RegExp(pattern, "i");
+            if (re.test(label)) {
+              return false; // status-only
+            }
+          } catch {
+            // bad regex, skip
+          }
+        }
+      }
+      return true; // actionable
+    });
+    if (actionable.length > 0) {
+      return "decision";
+    }
+  }
+
+  // No options, no deadline, not credential/blocked. Info-only.
+  return "context";
+}
+
+/**
+ * How many of these cards are actually WAITING on the owner — i.e., DECISIONS.
+ * Using triage classification to filter out context/info cards.
+ * The tray bell counts decisions only, not digests or status updates.
+ */
+function actionableCount(cards, patterns) {
+  return cards.filter((c) => triageCard(c, patterns) === "decision").length;
 }
 
 /**
@@ -255,6 +295,7 @@ module.exports = {
   storeDir,
   signature,
   listOpen,
+  triageCard,
   actionableCount,
   openQueueWindow,
   openCardWindow,

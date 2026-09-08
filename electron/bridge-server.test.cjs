@@ -264,3 +264,78 @@ test("without a provider the route is absent (404), not an empty success", async
   });
   assert.equal(res.status, 404);
 });
+
+test("command route: GET /command/history returns history from handler", async (context) => {
+  const mockHistory = [
+    { id: "1", text: "test1", reply: "ok1" },
+    { id: "2", text: "test2", reply: "ok2" },
+  ];
+  const bridge = createBridgeServer({
+    port: 0,
+    onEvent: () => {},
+    commandHandler: (req) => {
+      if (req.action === "history") return mockHistory;
+    },
+  });
+  const address = await bridge.listen();
+  context.after(() => bridge.close());
+  const res = await requestServer(address, {
+    path: "/command/history?limit=50",
+    method: "GET",
+  });
+  assert.equal(res.status, 200);
+  const body = JSON.parse(res.body);
+  assert.deepEqual(body.history, mockHistory);
+});
+
+test("command route: POST /command sends text and returns result within 25s", async (context) => {
+  const bridge = createBridgeServer({
+    port: 0,
+    onEvent: () => {},
+    commandHandler: async (req) => {
+      if (req.action === "send") {
+        return {
+          ok: true,
+          id: "test-id",
+          reply: `Processed: ${req.text}`,
+          kind: "agent",
+        };
+      }
+    },
+  });
+  const address = await bridge.listen();
+  context.after(() => bridge.close());
+  const res = await requestServer(address, {
+    path: "/command",
+    method: "POST",
+    body: JSON.stringify({ text: "hello" }),
+    headers: { "content-type": "application/json" },
+  });
+  assert.equal(res.status, 200);
+  const body = JSON.parse(res.body);
+  assert.equal(body.ok, true);
+  assert.match(body.reply, /Processed: hello/);
+});
+
+test("command route: rejects non-loopback origin", async (context) => {
+  const bridge = createBridgeServer({
+    port: 0,
+    onEvent: () => {},
+    commandHandler: () => ({}),
+  });
+  const address = await bridge.listen();
+  context.after(() => bridge.close());
+  const res = await requestServer(address, {
+    path: "/command/history",
+    headers: { origin: "https://example.com" },
+  });
+  assert.equal(res.status, 403);
+});
+
+test("command route: 404 without handler", async (context) => {
+  const bridge = createBridgeServer({ port: 0, onEvent: () => {} });
+  const address = await bridge.listen();
+  context.after(() => bridge.close());
+  const res = await requestServer(address, { path: "/command/history" });
+  assert.equal(res.status, 404);
+});

@@ -47,6 +47,7 @@ function createDeskMcpServer({
   onSpawnAvatar = null,
   onRemoveAvatar = null,
   onFleet = null,
+  onCommand = null,
 }) {
   const server = new McpServer(
     {
@@ -362,6 +363,31 @@ function createDeskMcpServer({
         return { content: [{ type: "text", text: JSON.stringify(verdict, null, 2) }], isError: verdict?.ok === false };
       },
     );
+  }
+
+  if (onCommand != null) {
+    server.registerTool(
+      "desk_command",
+      {
+        title: "Run a command in the Aither Command window",
+        description:
+          "Send a sentence or command to the owner's Aither Command window. Fleet verbs (fleet down|up, gpu quiet|resume, etc.) route to fleet control; everything else spawns a Claude agent with a 30-minute timeout. Results are recorded in local history (~/.aither/desk-command.jsonl) and mirrored to awrelay.",
+        inputSchema: {
+          text: z.string().min(1).max(4096).describe("The command text or sentence to execute."),
+        },
+        annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+      },
+      async ({ text }) => {
+        const result = await onCommand(text, { source: "mcp" });
+        return {
+          content: [{ type: "text", text: result.reply }],
+          isError: result.ok === false,
+        };
+      },
+    );
+  }
+
+  if (onFleet != null) {
     server.registerTool(
       "fleet_control",
       {

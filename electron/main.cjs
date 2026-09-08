@@ -39,6 +39,7 @@ const {
   ANIMATION_EVENT_NAMES,
 } = require("./mcp-server.cjs");
 const { createFleetWindow, getControl: getFleetControl, fleetSummaryCached } = require("./fleet-window.cjs");
+const { createCommandWindow, getAgent: getCommandAgent } = require("./command-window.cjs");
 const {
   configureHyprlandWindow,
   getHyprlandWindowPlacement,
@@ -562,6 +563,7 @@ function handleProtocolUrl(rawUrl) {
     else if (command.type === "hide") void hideOverlay();
     else if (command.type === "toggle") toggleOverlay();
     else if (command.type === "fleet") createFleetWindow();
+    else if (command.type === "command") createCommandWindow(getFleetControl(), { createFleetWindow });
     else if (command.type === "event") handleBridgeEvent(command.event);
   }
   return true;
@@ -966,6 +968,10 @@ function refreshTrayMenu() {
         label: `Fleet control… (${fleetSummaryCached().split(" — ")[0]})`,
         click: () => createFleetWindow(),
       },
+      {
+        label: "Command…",
+        click: () => createCommandWindow(getFleetControl(), { createFleetWindow }),
+      },
       { label: "Aitheros Online", submenu: buildLivingDesktopMenu() },
       { type: "separator" },
       { label: "Characters", submenu: buildCharacterMenu() },
@@ -1216,6 +1222,14 @@ async function fleetAction(action, { fresh = false } = {}) {
   return control.run(action);
 }
 
+/** ONE entry point for every command surface (window, bridge, MCP): the request
+ *  lands on the single CommandAgent so history and queue are consistent. */
+async function commandAction(text, { source = "unknown" } = {}) {
+  createCommandWindow(getFleetControl(), { createFleetWindow });
+  const agentInstance = getCommandAgent(getFleetControl());
+  return agentInstance.run(text, { source });
+}
+
 function createTray() {
   const iconPath = path.join(__dirname, "..", "build", "icon.png");
   const icon = nativeImage.createFromPath(iconPath).resize({ width: 20, height: 20 });
@@ -1237,6 +1251,10 @@ if (!app.requestSingleInstanceLock()) {
     }
     if (argv.includes("--fleet")) {
       createFleetWindow();
+      return;
+    }
+    if (argv.includes("--command")) {
+      createCommandWindow(getFleetControl(), { createFleetWindow });
       return;
     }
     if (!handled && !argv.includes("--background")) showOverlay({ focus: true });
@@ -1597,6 +1615,7 @@ if (!app.requestSingleInstanceLock()) {
       onSpawnAvatar: (slotId, name) => spawnAvatarSlot(slotId, name),
       onRemoveAvatar: (slotId) => removeAvatarSlot(slotId),
       onFleet: (action, opts) => fleetAction(action, opts),
+      onCommand: (text, opts) => commandAction(text, opts),
     });
     bridge = createBridgeServer({
       port: Number(process.env.DESK_BRIDGE_PORT || DEFAULT_PORT),
@@ -1607,6 +1626,13 @@ if (!app.requestSingleInstanceLock()) {
       // sees the queue at all. Read-only; answering stays in the queue window.
       decisionsProvider: () => decisionCards.listOpen(),
       fleetHandler: (verb) => fleetAction(verb === "open" ? "open_panel" : verb, { fresh: false }),
+      commandHandler: (req) => {
+        if (req.action === "history") {
+          return getCommandAgent(getFleetControl()).history(req.limit);
+        } else if (req.action === "send") {
+          return commandAction(req.text, { source: "bridge" });
+        }
+      },
     });
     try {
       await bridge.listen();
@@ -1620,6 +1646,7 @@ if (!app.requestSingleInstanceLock()) {
 
     createTray();
     if (process.argv.includes("--fleet")) createFleetWindow();
+    if (process.argv.includes("--command")) createCommandWindow(getFleetControl(), { createFleetWindow });
     // Keep the tray's Fleet line honest: re-render the menu after every verdict.
     getFleetControl().on("progress", (p) => {
       if (p?.phase === "end") refreshTrayMenu();

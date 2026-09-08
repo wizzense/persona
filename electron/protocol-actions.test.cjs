@@ -28,3 +28,8 @@ test("maps window and animation URLs without accepting another scheme", () => {
   assert.equal(parseProtocolUrl("another-product://show"), null);
   assert.equal(parseProtocolUrl("not a URL"), null);
 });
+
+test("maps desk://command to command window protocol action", () => {
+  assert.deepEqual(parseProtocolUrl("desk://command"), [{ type: "command" }]);
+  assert.deepEqual(parseProtocolUrl("desk:///command"), [{ type: "command" }]);
+});

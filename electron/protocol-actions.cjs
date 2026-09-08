@@ -24,6 +24,10 @@ function parseProtocolUrl(rawUrl, protocolScheme = "desk") {
     if (action === "fleet") {
       return [{ type: "fleet" }];
     }
+    // desk://command -> the Command chat window.
+    if (action === "command") {
+      return [{ type: "command" }];
+    }
     if (action === "listening") {
       return [{ type: "event", event: voiceState("listening") }];
     }

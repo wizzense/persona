@@ -143,6 +143,7 @@ function createBridgeServer({
   mcpHandler = null,
   decisionsProvider = null,
   fleetHandler = null,
+  commandHandler = null,
 }) {
   let lastStateEvent = null;
   const server = http.createServer((request, response) => {
@@ -238,6 +239,106 @@ function createBridgeServer({
           response.writeHead(500, { "content-type": "application/json" });
           response.end(JSON.stringify({ ok: false, error: error?.message || String(error) }));
         });
+      return;
+    }
+
+    // Command chat over loopback: GET /command/history?limit=N, POST /command with
+    // JSON body {text}. Same trust as /fleet — loopback, no foreign Origin. Every
+    // request lands on main's ONE CommandAgent so windows, bridge, and MCP share
+    // the same queue and history.
+    if (request.url.startsWith("/command")) {
+      if (!originAllowed(origin)) {
+        response.writeHead(403);
+        response.end();
+        return;
+      }
+      if (commandHandler == null) {
+        response.writeHead(404);
+        response.end();
+        return;
+      }
+      if (request.url.startsWith("/command/history")) {
+        if (request.method !== "GET") {
+          response.writeHead(405, { allow: "GET" });
+          response.end();
+          return;
+        }
+        const url = new URL(`http://127.0.0.1${request.url}`);
+        const limit = Number(url.searchParams.get("limit")) || 50;
+        try {
+          const history = commandHandler({ action: "history", limit });
+          response.writeHead(200, { "content-type": "application/json" });
+          // `items` is the contract awsh /command, adk desk history and the
+          // window poll on ({id, at, source, text, reply, kind}); `history` stays
+          // as an alias for the first build's callers.
+          response.end(JSON.stringify({ items: history, history }));
+        } catch (error) {
+          response.writeHead(500, { "content-type": "application/json" });
+          response.end(JSON.stringify({ ok: false, error: error?.message || String(error) }));
+        }
+        return;
+      }
+      if (request.url === "/command") {
+        if (request.method !== "POST") {
+          response.writeHead(405, { allow: "POST" });
+          response.end();
+          return;
+        }
+        void readJsonBody(request)
+          .then((body) => {
+            const text = String(body?.text ?? "");
+            if (!text) {
+              response.writeHead(400, { "content-type": "application/json" });
+              response.end(JSON.stringify({ ok: false, error: "missing text field" }));
+              return;
+            }
+            return commandHandler({ action: "send", text });
+          })
+          .then((result) => {
+            // If result is a promise, wait for it (async run).
+            // If it finishes within 25s, return 200. Otherwise 202 with id.
+            if (result && typeof result.then === "function") {
+              const timer = setTimeout(() => {
+                if (!response.headersSent) {
+                  response.writeHead(202, { "content-type": "application/json" });
+                  response.end(JSON.stringify({ id: result.id ?? null }));
+                }
+              }, 25_000);
+              result.then((res) => {
+                if (!response.headersSent) {
+                  clearTimeout(timer);
+                  response.writeHead(200, { "content-type": "application/json" });
+                  response.end(JSON.stringify({ ok: res.ok, id: res.id, reply: res.reply }));
+                }
+              }).catch((error) => {
+                if (!response.headersSent) {
+                  clearTimeout(timer);
+                  response.writeHead(500, { "content-type": "application/json" });
+                  response.end(JSON.stringify({ ok: false, error: error?.message || String(error) }));
+                }
+              });
+            } else {
+              response.writeHead(200, { "content-type": "application/json" });
+              response.end(JSON.stringify({ ok: result?.ok, id: result?.id, reply: result?.reply }));
+            }
+          })
+          .catch((error) => {
+            if (response.headersSent) return;
+            if (error?.code === "BODY_TOO_LARGE") {
+              response.writeHead(413, { "content-type": "application/json" });
+              response.end(JSON.stringify({ ok: false, error: "Request body too large" }));
+            } else if (error?.code === "INVALID_JSON") {
+              response.writeHead(400, { "content-type": "application/json" });
+              response.end(JSON.stringify({ ok: false, error: "Invalid JSON" }));
+            } else {
+              response.writeHead(500, { "content-type": "application/json" });
+              response.end(JSON.stringify({ ok: false, error: error?.message || String(error) }));
+            }
+          });
+        return;
+      }
+      response.writeHead(404);
+      response.end();
       return;
     }
 
