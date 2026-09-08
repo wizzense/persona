@@ -14,4 +14,7 @@ contextBridge.exposeInMainWorld("fleet", {
     return () => ipcRenderer.off("desk:fleet-progress", handler);
   },
   close: () => ipcRenderer.send("desk:fleet-close"),
+  // Open one of the probed doors (tunnel, pulse, grafana, ...) in the browser.
+  // Main only opens URLs from its own SURFACES list — the renderer cannot pick.
+  open: (url) => ipcRenderer.send("desk:fleet-open", String(url)),
 });

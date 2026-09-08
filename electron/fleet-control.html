@@ -13,7 +13,24 @@
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
     font: 14px/1.4 system-ui, "Segoe UI", sans-serif; }
-  body { display: grid; grid-template-rows: auto auto auto 1fr auto; height: 100vh; }
+  body { display: grid; grid-template-rows: auto auto auto auto auto auto 1fr auto; height: 100vh; }
+  .holders { margin: -4px 18px 8px; padding: 8px 12px; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; font-size: 12px; color: #b8c0d0; }
+  .holders .k { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 4px; }
+  .holders .h { display: flex; gap: 8px; align-items: baseline; font-variant-numeric: tabular-nums; }
+  .holders .h .g { min-width: 62px; font-weight: 600; color: var(--fg); }
+  .holders .h .n { min-width: 90px; }
+  .holders .h .hint { color: var(--muted); }
+  .holders .none { color: var(--muted); }
+  .surfaces { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 18px 8px; }
+  .surfaces .k { width: 100%; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+  .surface { display: inline-flex; align-items: center; gap: 6px; padding: 5px 9px; border-radius: 999px;
+    border: 1px solid var(--line); background: var(--btn); font-size: 12px; font-weight: 500; cursor: pointer; }
+  .surface:hover { background: var(--btn-hi); }
+  .surface .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--unknown); }
+  .surface[data-up="1"] .dot { background: var(--up); }
+  .surface[data-up="0"] .dot { background: var(--down); }
+  .surface .d { color: var(--muted); font-weight: 400; }
   header { display: flex; align-items: center; gap: 12px; padding: 14px 18px 8px; }
   header h1 { font-size: 16px; margin: 0; font-weight: 600; letter-spacing: .02em; }
   header .sub { color: var(--muted); font-size: 12px; }
@@ -71,6 +88,15 @@
     <div class="stat"><div class="k">GPU hold</div><div class="v" id="s-hold">–</div></div>
   </div>
 
+  <div class="holders" id="holders">
+    <div class="k">Who holds the VRAM (Windows host, not the distro)</div>
+    <div class="none">not probed yet</div>
+  </div>
+
+  <div class="surfaces" id="surfaces">
+    <div class="k">Doors · click to open</div>
+  </div>
+
   <div class="actions">
     <button id="b-down" class="down" data-action="down">
       <span class="t">Fleet DOWN</span>
@@ -102,6 +128,7 @@
   <footer>
     <span>CLI: <code>game down</code> · <code>game up</code> · <code>game on</code> · <code>game off</code> · <code>game status</code></span>
     <span>MCP: <code>fleet_status</code> · <code>fleet_control</code></span>
+    <span>awsh: <code>/fleet</code> · adk: <code>adk desk fleet</code></span>
   </footer>
 
 <script>
@@ -134,6 +161,56 @@
     return "UNKNOWN";
   }
 
+  function el(tag, cls, text) {
+    const node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text != null) node.textContent = text;
+    return node;
+  }
+
+  // The VRAM number with 0 containers running was a riddle; this is the answer
+  // line by line: pid, GiB, what it is. Host counters — the distro cannot see them.
+  function renderHolders(holders, error) {
+    const box = $("holders");
+    while (box.childElementCount > 1) box.removeChild(box.lastChild);
+    if (!Array.isArray(holders)) {
+      box.appendChild(el("div", "none", error ? `not readable: ${error}` : "not probed yet"));
+      return;
+    }
+    if (holders.length === 0) {
+      box.appendChild(el("div", "none", error ? `not readable: ${error}` : "no process holds more than 0.1 GiB"));
+      return;
+    }
+    for (const h of holders) {
+      const row = el("div", "h");
+      row.appendChild(el("span", "g", `${h.gib.toFixed(2)} GiB`));
+      row.appendChild(el("span", "n", `${h.name} (pid ${h.pid})`));
+      row.appendChild(el("span", "hint", h.hint || h.cmd || ""));
+      row.title = h.cmd || "";
+      box.appendChild(row);
+    }
+  }
+
+  // Every door the owner asked for, probed; click opens it in the browser.
+  function renderSurfaces(rows) {
+    const box = $("surfaces");
+    while (box.childElementCount > 1) box.removeChild(box.lastChild);
+    if (!Array.isArray(rows) || rows.length === 0) {
+      box.appendChild(el("span", "surface", "not probed yet"));
+      return;
+    }
+    for (const s of rows) {
+      const chip = el("button", "surface");
+      chip.dataset.up = s.up ? "1" : "0";
+      chip.appendChild(el("span", "dot"));
+      chip.appendChild(el("span", null, s.label));
+      chip.appendChild(el("span", "d", s.up ? (s.detail && !/^HTTP/.test(s.detail) ? s.detail : `${s.ms} ms`) : `DOWN · ${s.detail}`));
+      chip.title = `${s.url}\n${s.detail}`;
+      chip.addEventListener("click", () => window.fleet.open(s.url));
+      box.appendChild(chip);
+    }
+  }
+
   function render(st) {
     const fl = (st && st.fleet) || {};
     $("s-running").textContent = fl.running == null ? "?" : fl.running;
@@ -141,6 +218,8 @@
     const v = st && st.vram;
     $("s-vram").innerHTML = v ? `${(v.used_mib / 1024).toFixed(1)} <small>/ ${(v.total_mib / 1024).toFixed(0)} GiB</small>` : "?";
     $("s-hold").textContent = st && st.cannotJudge ? "?" : (st && st.held ? "HELD" : "free");
+    renderHolders(st && st.gpu_holders, st && st.gpu_holders_error);
+    renderSurfaces(st && st.surfaces);
     const state = busy ? "BUSY" : classify(st);
     pill.dataset.state = state;
     pill.textContent = busy ? `RUNNING: ${busy.toUpperCase()}` : state;

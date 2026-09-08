@@ -173,3 +173,35 @@ test("FleetControl: an unknown action and a spawn failure are verdicts, never th
   assert.equal(dead.cannotJudge, true);
   assert.match(dead.error, /wsl\.exe not found/);
 });
+
+test("FleetControl: a status verdict is enriched from the HOST with who holds the VRAM and which doors answer", async () => {
+  const fc = new FleetControl({
+    script: "C:\\x\\q.py",
+    spawnImpl: () => fakeChild({ stdout: '{"fleet": {"running": 0, "masked": 171, "units": 189}, "held": true, "vram": {"used_mib": 10413, "total_mib": 32607}}' }),
+    gpuHolders: async () => ({ holders: [{ pid: 21084, name: "python", gib: 7.06, hint: "ComfyUI :8188 (Windows, not the fleet)", cmd: "" },
+      { pid: 2876, name: "dwm", gib: 4.46, hint: "Windows desktop compositor", cmd: "" }], error: null }),
+    surfaces: async () => [{ id: "pulse", label: "Pulse", up: true, detail: "HELD by owner" }, { id: "mcp", label: "MCP", up: false, detail: "ECONNREFUSED" }],
+  });
+  const st = await fc.run("status");
+  assert.equal(st.gpu_holders.length, 2);
+  assert.equal(st.surfaces.length, 2);
+  assert.match(summarize(st), /GPU 10\.2\/32 GiB \(ComfyUI 7\.1, dwm 4\.5\)/);
+  assert.match(summarize(st), /surfaces 1\/2 up \(down: mcp\)/);
+  // A non-status action is never enriched, and a throwing probe never breaks the verdict.
+  const fc2 = new FleetControl({
+    script: "C:\\x\\q.py",
+    spawnImpl: () => fakeChild({ stdout: '{"ok": true, "fleet": {"running": 0}}' }),
+    gpuHolders: async () => { throw new Error("counters busy"); },
+    surfaces: async () => { throw new Error("no network"); },
+  });
+  const adopt = await fc2.run("adopt");
+  assert.equal("gpu_holders" in adopt, false);
+  const st2 = await fc2.run("status");
+  assert.deepEqual(st2.gpu_holders, []);
+  assert.equal(st2.gpu_holders_error, "counters busy");
+  assert.deepEqual(st2.surfaces, []);
+  // A fake spawn with nothing injected gets NO host probes (tests never shell to powershell).
+  const fc3 = new FleetControl({ script: "C:\\x\\q.py", spawnImpl: () => fakeChild({ stdout: '{"fleet": {"running": 1}}' }) });
+  const st3 = await fc3.run("status");
+  assert.equal("gpu_holders" in st3, false);
+});

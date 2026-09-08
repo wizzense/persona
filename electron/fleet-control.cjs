@@ -27,6 +27,8 @@
 
 const { spawn } = require("node:child_process");
 const { EventEmitter } = require("node:events");
+const { readGpuHolders, summarizeHolders } = require("./gpu-holders.cjs");
+const { probeSurfaces, summarizeSurfaces } = require("./surfaces.cjs");
 
 const DEFAULT_SCRIPT = "C:\\AitherOS-Fresh\\.DEPLOYMENT\\scripts\\llm-quiesce-distro.py";
 const DEFAULT_DISTRO = "Debian";
@@ -127,8 +129,12 @@ function summarize(status) {
   const gpu = v ? `GPU ${(v.used_mib / 1024).toFixed(1)}/${(v.total_mib / 1024).toFixed(0)} GiB` : "GPU ?";
   const running = fl.running == null ? "?" : fl.running;
   const masked = fl.masked == null ? "?" : `${fl.masked}/${fl.units ?? "?"}`;
-  return `Fleet: ${running} container(s) running, ${masked} units masked, ${gpu}, HOLD ${status.held ? "yes" : "no"}` +
-    (fl.scope ? `, scope=${fl.scope}` : "");
+  // "GPU 10.2/32 GiB (ComfyUI 7.1, dwm 4.5)": the number AND who holds it —
+  // with 0 containers running the number alone was a riddle (2026-09-08).
+  const holders = summarizeHolders(status.gpu_holders);
+  const surfaces = summarizeSurfaces(status.surfaces);
+  return `Fleet: ${running} container(s) running, ${masked} units masked, ${gpu}${holders ? ` (${holders})` : ""}, HOLD ${status.held ? "yes" : "no"}` +
+    (fl.scope ? `, scope=${fl.scope}` : "") + (surfaces ? `, ${surfaces}` : "");
 }
 
 /** The single word the window's big pill shows. Derived from reality (the
@@ -144,11 +150,16 @@ function classify(status) {
 }
 
 class FleetControl extends EventEmitter {
-  constructor({ spawnImpl = spawn, script, distro } = {}) {
+  constructor({ spawnImpl = spawn, script, distro, gpuHolders = null, surfaces = null } = {}) {
     super();
     this.spawnImpl = spawnImpl;
     this.script = script;
     this.distro = distro;
+    // Host-side enrichment of a `status` verdict: who holds the VRAM (Windows
+    // counters — invisible from inside the distro) and whether the control-plane
+    // doors answer. Injectable; a fake spawn gets no host probes unless asked.
+    this.gpuHolders = gpuHolders !== null ? gpuHolders : (spawnImpl === spawn ? () => readGpuHolders() : null);
+    this.surfaces = surfaces !== null ? surfaces : (spawnImpl === spawn ? () => probeSurfaces() : null);
     this.current = null; // { action, startedAt }
     this.inflight = null; // the promise of the running action (a second status() joins it)
     this.lastStatus = null;
@@ -233,10 +244,32 @@ class FleetControl extends EventEmitter {
           stderrTail = (stderrTail + "\n" + stderrBuf).slice(-2000);
           this.emit("progress", { action, line: stderrBuf.trim(), phase: "run" });
         }
-        finish(parseVerdict(stdout, code ?? 1, stderrTail));
+        const verdict = parseVerdict(stdout, code ?? 1, stderrTail);
+        if (action !== "status") {
+          finish(verdict);
+          return;
+        }
+        // Enrich a status verdict from the HOST before it lands anywhere: the
+        // window, the bridge, awsh, adk and the MCP tool all read this one
+        // object, so the holders and the doors show up everywhere at once.
+        this._enrichStatus(verdict).then(finish, () => finish(verdict));
       });
     });
     return this.inflight;
+  }
+
+  /** Attach `gpu_holders` and `surfaces`; each probe fails to [] with a reason, never throws. */
+  async _enrichStatus(verdict) {
+    const [holders, surfaces] = await Promise.all([
+      this.gpuHolders ? Promise.resolve().then(this.gpuHolders).catch((e) => ({ holders: [], error: e?.message || String(e) })) : null,
+      this.surfaces ? Promise.resolve().then(this.surfaces).catch(() => []) : null,
+    ]);
+    if (holders) {
+      verdict.gpu_holders = Array.isArray(holders) ? holders : holders.holders || [];
+      if (holders.error) verdict.gpu_holders_error = holders.error;
+    }
+    if (surfaces) verdict.surfaces = Array.isArray(surfaces) ? surfaces : [];
+    return verdict;
   }
 
   /** Cached status if fresh enough, else a live probe. */

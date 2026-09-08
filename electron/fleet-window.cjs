@@ -12,8 +12,9 @@
  */
 
 const path = require("node:path");
-const { BrowserWindow, ipcMain } = require("electron");
+const { BrowserWindow, ipcMain, shell } = require("electron");
 const { FleetControl, summarize, classify } = require("./fleet-control.cjs");
+const { OPENABLE } = require("./surfaces.cjs");
 
 let fleetWindow = null;
 let control = null;
@@ -39,6 +40,11 @@ function wireIpc() {
   ipcMain.handle("desk:fleet-run", (_event, action) => getControl().run(String(action)));
   ipcMain.on("desk:fleet-close", () => {
     if (fleetWindow && !fleetWindow.isDestroyed()) fleetWindow.close();
+  });
+  // A door chip was clicked. Only the probed SURFACES may be opened — a
+  // renderer-supplied URL never reaches the shell.
+  ipcMain.on("desk:fleet-open", (_event, url) => {
+    if (typeof url === "string" && OPENABLE.has(url)) void shell.openExternal(url);
   });
 }
 
