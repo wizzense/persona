@@ -3,9 +3,14 @@
 const assert = require("node:assert/strict");
 const http = require("node:http");
 const test = require("node:test");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 const {
+  bearerOk,
   createBridgeServer,
   decisionsReadOriginAllowed,
+  readBridgeToken,
   hostAllowed,
   normalizeEvent,
   originAllowed,
@@ -292,6 +297,7 @@ test("command route: POST /command sends text and returns result within 25s", as
   const bridge = createBridgeServer({
     port: 0,
     onEvent: () => {},
+    bridgeToken: "test-token",
     commandHandler: async (req) => {
       if (req.action === "send") {
         return {
@@ -309,7 +315,7 @@ test("command route: POST /command sends text and returns result within 25s", as
     path: "/command",
     method: "POST",
     body: JSON.stringify({ text: "hello" }),
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", authorization: "Bearer test-token" },
   });
   assert.equal(res.status, 200);
   const body = JSON.parse(res.body);
@@ -338,4 +344,120 @@ test("command route: 404 without handler", async (context) => {
   context.after(() => bridge.close());
   const res = await requestServer(address, { path: "/command/history" });
   assert.equal(res.status, 404);
+});
+
+// ---- bearer on mutators (2026-09-08) ------------------------------------------
+// Host+Origin alone let any local process stop ~200 containers. The mutating
+// routes now need the awdk daemon's bearer; reads and window-raises do not.
+
+function fleetBridge(context, extra = {}) {
+  const bridge = createBridgeServer({
+    port: 0,
+    onEvent: () => {},
+    bridgeToken: "test-token",
+    fleetHandler: (verb) => ({ ok: true, verb }),
+    commandHandler: async (req) => (req.action === "send" ? { ok: true, id: "c1", reply: "PONG" } : null),
+    ...extra,
+  });
+  context.after(() => bridge.close());
+  return bridge.listen();
+}
+
+test("bearer: POST /fleet/down without a bearer is 401, never a stopped fleet", async (context) => {
+  const address = await fleetBridge(context);
+  const none = await requestServer(address, { path: "/fleet/down", method: "POST" });
+  assert.equal(none.status, 401);
+  assert.match(none.headers["www-authenticate"] || "", /Bearer/);
+  assert.equal(JSON.parse(none.body).ok, false);
+  const wrong = await requestServer(address, {
+    path: "/fleet/down",
+    method: "POST",
+    headers: { authorization: "Bearer test-tokem" },
+  });
+  assert.equal(wrong.status, 401);
+  const basic = await requestServer(address, {
+    path: "/fleet/down",
+    method: "POST",
+    headers: { authorization: "Basic dGVzdC10b2tlbg==" },
+  });
+  assert.equal(basic.status, 401);
+});
+
+test("bearer: the right bearer reaches the fleet handler", async (context) => {
+  const address = await fleetBridge(context);
+  const ok = await requestServer(address, {
+    path: "/fleet/down",
+    method: "POST",
+    headers: { authorization: "bearer test-token" }, // scheme is case-insensitive
+  });
+  assert.equal(ok.status, 200);
+  assert.deepEqual(JSON.parse(ok.body), { ok: true, verb: "down" });
+});
+
+test("bearer: GET /fleet/status and POST /fleet/open stay open on loopback", async (context) => {
+  const address = await fleetBridge(context);
+  const status = await requestServer(address, { path: "/fleet/status" });
+  assert.equal(status.status, 200);
+  const open = await requestServer(address, { path: "/fleet/open", method: "POST" });
+  assert.equal(open.status, 200);
+  assert.equal(JSON.parse(open.body).verb, "open");
+});
+
+test("bearer: POST /command needs it; history and open do not", async (context) => {
+  const address = await fleetBridge(context);
+  const denied = await requestServer(address, {
+    path: "/command",
+    method: "POST",
+    body: JSON.stringify({ text: "fleet down" }),
+    headers: { "content-type": "application/json" },
+  });
+  assert.equal(denied.status, 401);
+  const allowed = await requestServer(address, {
+    path: "/command",
+    method: "POST",
+    body: JSON.stringify({ text: "ping" }),
+    headers: { "content-type": "application/json", authorization: "Bearer test-token" },
+  });
+  assert.equal(allowed.status, 200);
+  assert.equal(JSON.parse(allowed.body).reply, "PONG");
+  const history = await requestServer(address, { path: "/command/history" });
+  assert.equal(history.status, 200);
+});
+
+test("bearer: no token configured fails CLOSED (503), not open", async (context) => {
+  const address = await fleetBridge(context, { bridgeToken: null });
+  const down = await requestServer(address, {
+    path: "/fleet/down",
+    method: "POST",
+    headers: { authorization: "Bearer anything" },
+  });
+  assert.equal(down.status, 503);
+  assert.match(JSON.parse(down.body).error, /no bridge token/);
+  const status = await requestServer(address, { path: "/fleet/status" });
+  assert.equal(status.status, 200);
+});
+
+test("bearer: token resolves env first, then ~/.aither/harness_token, else null", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "desk-bridge-token-"));
+  try {
+    assert.equal(readBridgeToken({ env: {}, home }), null);
+    fs.mkdirSync(path.join(home, ".aither"));
+    fs.writeFileSync(path.join(home, ".aither", "harness_token"), "  from-file \n");
+    assert.equal(readBridgeToken({ env: {}, home }), "from-file");
+    assert.equal(readBridgeToken({ env: { AITHER_HARNESS_TOKEN: " from-env " }, home }), "from-env");
+    fs.writeFileSync(path.join(home, ".aither", "harness_token"), "\n");
+    assert.equal(readBridgeToken({ env: {}, home }), null); // blank file is no token
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("bearer: bearerOk is exact and never matches an empty token", () => {
+  const req = (authorization) => ({ headers: authorization ? { authorization } : {} });
+  assert.equal(bearerOk(req("Bearer abc"), "abc"), true);
+  assert.equal(bearerOk(req("Bearer abcd"), "abc"), false);
+  assert.equal(bearerOk(req("Bearer ab"), "abc"), false);
+  assert.equal(bearerOk(req("Bearer "), ""), false);
+  assert.equal(bearerOk(req(undefined), "abc"), false);
+  assert.equal(bearerOk(req("Bearer abc"), null), false);
 });

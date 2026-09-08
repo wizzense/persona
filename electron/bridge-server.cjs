@@ -1,6 +1,10 @@
 "use strict";
 
+const crypto = require("node:crypto");
+const fs = require("node:fs");
 const http = require("node:http");
+const os = require("node:os");
+const path = require("node:path");
 
 // 47931, not 47831 (2026-09-06). 47831 sits inside a Windows reserved TCP exclusion
 // range (47736-47835, one of 107 on the owner's host; Hyper-V/WSL claims them and they
@@ -57,6 +61,53 @@ function normalizeEvent(value) {
 
 function originAllowed(origin) {
   return origin == null || TRUSTED_ORIGIN.test(origin);
+}
+
+// Mutating routes (POST /fleet/<verb> except open, POST /command) need a bearer.
+// Host+Origin alone let ANY local process stop ~200 containers or run `claude -p`
+// as the owner (2026-09-08, integration-map gap 5). The credential is the awdk
+// daemon's own: AITHER_HARNESS_TOKEN, else ~/.aither/harness_token -- the same
+// order awsh's daemonToken() and adk use, so every existing client already has it.
+function readBridgeToken({ env = process.env, home = os.homedir() } = {}) {
+  const fromEnv = String(env.AITHER_HARNESS_TOKEN || "").trim();
+  if (fromEnv) return fromEnv;
+  try {
+    const value = fs.readFileSync(path.join(home, ".aither", "harness_token"), "utf8").trim();
+    return value || null;
+  } catch {
+    return null;
+  }
+}
+
+function bearerOk(request, token) {
+  if (!token) return false;
+  const header = String(request.headers.authorization || "");
+  const match = /^Bearer\s+(\S+)\s*$/i.exec(header);
+  if (!match) return false;
+  const given = Buffer.from(match[1], "utf8");
+  const want = Buffer.from(token, "utf8");
+  // Length leaks nothing useful here (the token is not secret-length), but a
+  // compare that stops at the first differing byte would leak the prefix.
+  return given.length === want.length && crypto.timingSafeEqual(given, want);
+}
+
+// Fails CLOSED: no configured token means no mutation, not open mutation.
+function denyUnlessBearer(request, response, token) {
+  if (bearerOk(request, token)) return false;
+  const status = token ? 401 : 503;
+  response.writeHead(status, {
+    "content-type": "application/json",
+    ...(status === 401 ? { "www-authenticate": 'Bearer realm="awdesk"' } : {}),
+  });
+  response.end(
+    JSON.stringify({
+      ok: false,
+      error: token
+        ? "bearer required: Authorization: Bearer <AITHER_HARNESS_TOKEN or ~/.aither/harness_token>"
+        : "no bridge token configured (start the adk daemon once, or set AITHER_HARNESS_TOKEN)",
+    }),
+  );
+  return true;
 }
 
 //: Web surfaces allowed to READ the decision queue over this loopback bridge.
@@ -144,7 +195,10 @@ function createBridgeServer({
   decisionsProvider = null,
   fleetHandler = null,
   commandHandler = null,
+  // undefined = resolve from env/file at start; null = none configured (mutators 503).
+  bridgeToken = undefined,
 }) {
+  const token = bridgeToken === undefined ? readBridgeToken() : bridgeToken;
   let lastStateEvent = null;
   const server = http.createServer((request, response) => {
     const origin = request.headers.origin;
@@ -227,6 +281,11 @@ function createBridgeServer({
         response.end();
         return;
       }
+      // status is a read; open only raises the owner's own window. Everything
+      // else stops or starts containers and needs the bearer.
+      if (!isStatus && verb !== "open" && denyUnlessBearer(request, response, token)) {
+        return;
+      }
       Promise.resolve()
         .then(() => fleetHandler(verb))
         .then((verdict) => {
@@ -299,6 +358,10 @@ function createBridgeServer({
         if (request.method !== "POST") {
           response.writeHead(405, { allow: "POST" });
           response.end();
+          return;
+        }
+        // A command runs `claude -p` as the owner from the repo root: bearer required.
+        if (denyUnlessBearer(request, response, token)) {
           return;
         }
         void readJsonBody(request)
@@ -450,7 +513,9 @@ function createBridgeServer({
 module.exports = {
   ANIMATIONS,
   DEFAULT_PORT,
+  bearerOk,
   createBridgeServer,
+  readBridgeToken,
   decisionsReadOriginAllowed,
   hostAllowed,
   isVoiceState,
