@@ -1013,6 +1013,14 @@ export function Deck() {
             <span className="deck-section-icon"><GridIcon /></span>
             Quick actions
           </h2>
+          <button className="deck-row" title="Aither Command — type a sentence, an agent does the work (fleet verbs, Claude Code headless)" onClick={() => runAction('command')}>
+            <span className="deck-row-icon"><TerminalIcon /></span>
+            <span className="deck-row-label">Aither Command</span>
+          </button>
+          <button className="deck-row" title="Fleet control — the whole fleet up / down / GPU quiet, held against restarts" onClick={() => runAction('fleet')}>
+            <span className="deck-row-icon"><MonitorIcon /></span>
+            <span className="deck-row-label">Fleet control</span>
+          </button>
           <button className="deck-row" title="Open a chat with Aither" onClick={() => runAction('talk')}>
             <span className="deck-row-icon"><ChatIcon /></span>
             <span className="deck-row-label">Talk to Aither</span>

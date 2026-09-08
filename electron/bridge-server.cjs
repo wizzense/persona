@@ -278,6 +278,23 @@ function createBridgeServer({
         }
         return;
       }
+      if (request.url === "/command/open") {
+        // Raise the Command window for the owner (`game command`, `adk desk command --open`).
+        if (request.method !== "POST") {
+          response.writeHead(405, { allow: "POST" });
+          response.end();
+          return;
+        }
+        try {
+          const opened = commandHandler({ action: "open" });
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(JSON.stringify(opened ?? { ok: true }));
+        } catch (error) {
+          response.writeHead(500, { "content-type": "application/json" });
+          response.end(JSON.stringify({ ok: false, error: error?.message || String(error) }));
+        }
+        return;
+      }
       if (request.url === "/command") {
         if (request.method !== "POST") {
           response.writeHead(405, { allow: "POST" });

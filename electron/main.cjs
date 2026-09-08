@@ -754,6 +754,9 @@ function popupAvatarMenu(slotId) {
     { type: "separator" },
     { label: agent ? `Talk to ${agent}` : "Talk to Aither", click: () => openTalkWindow() },
     { label: "Open agent tools", click: () => createDeckWindow() },
+    { type: "separator" },
+    { label: "Aither Command…", click: () => createCommandWindow(getFleetControl(), { createFleetWindow }) },
+    { label: "Fleet control…", click: () => createFleetWindow() },
   ];
   if (!isDefault) {
     template.push(
@@ -1443,6 +1446,14 @@ if (!app.requestSingleInstanceLock()) {
         case "chat":
           createChatWindow();
           return true;
+        // The two control-plane windows, one click from the deck (owner,
+        // 2026-09-08: "no way for me to easily launch aither command").
+        case "command":
+          createCommandWindow(getFleetControl(), { createFleetWindow });
+          return true;
+        case "fleet":
+          createFleetWindow();
+          return true;
         case "talk":
           openTalkWindow();
           return true;
@@ -1631,6 +1642,10 @@ if (!app.requestSingleInstanceLock()) {
           return getCommandAgent(getFleetControl()).history(req.limit);
         } else if (req.action === "send") {
           return commandAction(req.text, { source: "bridge" });
+        } else if (req.action === "open") {
+          // `game command` / `adk desk command --open` raise the window for the owner.
+          createCommandWindow(getFleetControl(), { createFleetWindow });
+          return { ok: true, opened: true };
         }
       },
     });
