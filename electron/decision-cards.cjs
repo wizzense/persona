@@ -147,8 +147,18 @@ function listOpen(dir = storeDir()) {
  *
  * Returns "decision" or "context".
  */
+// What the daemon's /decisions/triage-patterns says when it cannot be asked.
+// The early `return "decision"` that stood here counted EVERY card while the
+// daemon was down or the caller passed no patterns (main.cjs's bell does) --
+// i.e. "3 decisions waiting" was one ask and two facts again, the exact noise
+// the bell was rebuilt to stop (measured 2026-09-08 by the actionableCount test).
+const DEFAULT_TRIAGE_PATTERNS = Object.freeze({
+  decision_kinds: ["credential", "blocked"],
+  context_phrases: [],
+});
+
 function triageCard(card, patterns) {
-  if (!patterns) return "decision"; // fallback when patterns unavailable
+  if (!patterns || typeof patterns !== "object") patterns = DEFAULT_TRIAGE_PATTERNS;
 
   const kind = (card.kind || "decision").toLowerCase();
   const options = Array.isArray(card.options) ? card.options : [];

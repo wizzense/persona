@@ -33,3 +33,10 @@ test("maps desk://command to command window protocol action", () => {
   assert.deepEqual(parseProtocolUrl("desk://command"), [{ type: "command" }]);
   assert.deepEqual(parseProtocolUrl("desk:///command"), [{ type: "command" }]);
 });
+
+test("desk://overlay and desk://desktop map to the two desktop surfaces", () => {
+  assert.deepEqual(parseProtocolUrl("desk://overlay"), [{ type: "overlay" }]);
+  assert.deepEqual(parseProtocolUrl("desk://living-desktop"), [{ type: "overlay" }]);
+  assert.deepEqual(parseProtocolUrl("desk://desktop"), [{ type: "desktop" }]);
+  assert.deepEqual(parseProtocolUrl("desk:///aither-desktop"), [{ type: "desktop" }]);
+});

@@ -195,6 +195,9 @@ function createBridgeServer({
   decisionsProvider = null,
   fleetHandler = null,
   commandHandler = null,
+  // The two desktop surfaces: POST /desktop/overlay | /desktop/app raise a
+  // window (no bearer — same class as /fleet/open); GET /desktop/status reads.
+  desktopHandler = null,
   // undefined = resolve from env/file at start; null = none configured (mutators 503).
   bridgeToken = undefined,
 }) {
@@ -262,6 +265,46 @@ function createBridgeServer({
     // host, no foreign Origin — and every verb lands on main's ONE FleetControl,
     // so `game`, the window, MCP and this route cannot disagree. POST only for
     // anything that changes the fleet: a GET that stops 200 containers is a
+    // The desktop surfaces (owner, 2026-09-08): overlay = the aitherium.com
+    // Living Desktop over the Windows desktop, app = the full AitherDesktop
+    // window. Raising a window on the owner's own screen needs no bearer.
+    if (request.url === "/desktop/status" || request.url.startsWith("/desktop/")) {
+      if (!originAllowed(origin)) {
+        response.writeHead(403);
+        response.end();
+        return;
+      }
+      if (desktopHandler == null) {
+        response.writeHead(404);
+        response.end();
+        return;
+      }
+      const mode = request.url.slice("/desktop/".length).split("?")[0];
+      const isStatus = mode === "status";
+      if ((isStatus && request.method !== "GET") || (!isStatus && request.method !== "POST")) {
+        response.writeHead(405, { allow: isStatus ? "GET" : "POST" });
+        response.end();
+        return;
+      }
+      if (!isStatus && mode !== "overlay" && mode !== "app") {
+        response.writeHead(404, { "content-type": "application/json" });
+        response.end(JSON.stringify({ ok: false, error: `unknown desktop surface "${mode}" (overlay | app)` }));
+        return;
+      }
+      Promise.resolve()
+        .then(() => desktopHandler(mode))
+        .then((result) => {
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(JSON.stringify(result ?? { ok: true }));
+        })
+        .catch((error) => {
+          if (response.headersSent) return;
+          response.writeHead(500, { "content-type": "application/json" });
+          response.end(JSON.stringify({ ok: false, error: error?.message || String(error) }));
+        });
+      return;
+    }
+
     // prefetch away from an outage.
     if (request.url === "/fleet/status" || request.url.startsWith("/fleet/")) {
       if (!originAllowed(origin)) {

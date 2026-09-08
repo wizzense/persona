@@ -461,3 +461,42 @@ test("bearer: bearerOk is exact and never matches an empty token", () => {
   assert.equal(bearerOk(req(undefined), "abc"), false);
   assert.equal(bearerOk(req("Bearer abc"), null), false);
 });
+
+// ---- the two desktop surfaces (2026-09-08) --------------------------------------
+
+test("desktop routes: POST /desktop/overlay|app raise a window with no bearer, GET /desktop/status reads, unknown surface is 404", async (context) => {
+  const opened = [];
+  const bridge = createBridgeServer({
+    port: 0,
+    onEvent: () => {},
+    bridgeToken: "test-token",
+    desktopHandler: (mode) => {
+      opened.push(mode);
+      return { ok: true, opened: mode === "status" ? null : mode, overlay: { open: mode === "overlay" }, app: { open: mode === "app" } };
+    },
+  });
+  const address = await bridge.listen();
+  context.after(() => bridge.close());
+  const app = await requestServer(address, { path: "/desktop/app", method: "POST" });
+  assert.equal(app.status, 200);
+  assert.equal(JSON.parse(app.body).opened, "app");
+  const overlay = await requestServer(address, { path: "/desktop/overlay", method: "POST" });
+  assert.equal(overlay.status, 200);
+  const status = await requestServer(address, { path: "/desktop/status" });
+  assert.equal(status.status, 200);
+  assert.deepEqual(opened, ["app", "overlay", "status"]);
+  const unknown = await requestServer(address, { path: "/desktop/taskbar", method: "POST" });
+  assert.equal(unknown.status, 404);
+  assert.match(JSON.parse(unknown.body).error, /overlay \| app/);
+  const wrongMethod = await requestServer(address, { path: "/desktop/app" });
+  assert.equal(wrongMethod.status, 405);
+  const denied = await requestServer(address, { path: "/desktop/app", method: "POST", headers: { origin: "https://evil.example" } });
+  assert.equal(denied.status, 403);
+});
+
+test("desktop routes: absent without a handler (404), never an empty success", async (context) => {
+  const bridge = createBridgeServer({ port: 0, onEvent: () => {}, bridgeToken: "t" });
+  const address = await bridge.listen();
+  context.after(() => bridge.close());
+  assert.equal((await requestServer(address, { path: "/desktop/status" })).status, 404);
+});

@@ -28,6 +28,14 @@ function parseProtocolUrl(rawUrl, protocolScheme = "desk") {
     if (action === "command") {
       return [{ type: "command" }];
     }
+    // desk://overlay -> the AitherOS overlay (aitherium.com Living Desktop over the
+    // Windows desktop); desk://desktop -> the AitherDesktop app window.
+    if (action === "overlay" || action === "living-desktop") {
+      return [{ type: "overlay" }];
+    }
+    if (action === "desktop" || action === "aither-desktop") {
+      return [{ type: "desktop" }];
+    }
     if (action === "listening") {
       return [{ type: "event", event: voiceState("listening") }];
     }

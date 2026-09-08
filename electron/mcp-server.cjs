@@ -48,6 +48,7 @@ function createDeskMcpServer({
   onRemoveAvatar = null,
   onFleet = null,
   onCommand = null,
+  onDesktop = null,
 }) {
   const server = new McpServer(
     {
@@ -402,6 +403,25 @@ function createDeskMcpServer({
       async ({ action }) => {
         const verdict = await onFleet(action, {});
         return { content: [{ type: "text", text: JSON.stringify(verdict, null, 2) }], isError: verdict?.ok === false };
+      },
+    );
+  }
+
+  if (onDesktop != null) {
+    server.registerTool(
+      "desktop_open",
+      {
+        title: "Open an AitherOS desktop surface",
+        description:
+          "overlay = the aitherium.com Living Desktop taskbar drawn over the Windows desktop (click-through where it draws nothing; the same overlay AitherConnect puts over any web page); app = the full aitherium.com AitherDesktop (Desktop Anywhere shell) in its own maximised window; status = which of the two are open. Both share one signed-in session.",
+        inputSchema: {
+          surface: z.enum(["overlay", "app", "status"]).describe("Which surface to open, or status."),
+        },
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      },
+      async ({ surface }) => {
+        const result = await onDesktop(surface);
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], isError: result?.ok === false };
       },
     );
   }

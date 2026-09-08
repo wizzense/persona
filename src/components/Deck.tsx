@@ -1023,6 +1023,14 @@ export function Deck() {
             <span className="deck-row-icon"><MonitorIcon /></span>
             <span className="deck-row-label">Fleet control</span>
           </button>
+          <button className="deck-row" title="AitherOS overlay — the aitherium.com Living Desktop taskbar over your Windows desktop (click-through where it draws nothing; Esc hides). The same overlay AitherConnect puts over any web page (Alt+O)." onClick={() => runAction('living-desktop')}>
+            <span className="deck-row-icon"><MonitorIcon /></span>
+            <span className="deck-row-label">AitherOS overlay (on top of the desktop)</span>
+          </button>
+          <button className="deck-row" title="AitherDesktop app — the full aitherium.com desktop (Desktop Anywhere shell) in its own maximised window; signed in with the same session as the overlay" onClick={() => runAction('aither-desktop')}>
+            <span className="deck-row-icon"><MonitorIcon /></span>
+            <span className="deck-row-label">AitherDesktop app (full desktop)</span>
+          </button>
           <button className="deck-row" title="Open a chat with Aither" onClick={() => runAction('talk')}>
             <span className="deck-row-icon"><ChatIcon /></span>
             <span className="deck-row-label">Talk to Aither</span>
@@ -1076,13 +1084,15 @@ export function Deck() {
               onPopout={(id) => runAction('popout-card', id)}
             />
           )}
+          {/* The overlay/app launchers live under Quick actions (top of the deck);
+              this section keeps the notification-area shortcut to the same overlay. */}
           <button
             className="deck-row"
-            title="Opens Aitheros Online with the notification area"
+            title="Opens the AitherOS overlay (aitherium.com Living Desktop) with the notification area"
             onClick={() => runAction('living-desktop')}
           >
             <span className="deck-row-icon"><MonitorIcon /></span>
-            <span className="deck-row-label">Show the notification area in Aitheros Online</span>
+            <span className="deck-row-label">Notification area in the AitherOS overlay</span>
           </button>
         </section>
 

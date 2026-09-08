@@ -72,8 +72,10 @@ const {
 const { exportToAitherShell } = require("./aithershell-export.cjs");
 const {
   buildLivingDesktopMenu,
+  desktopStatus,
   pushDeskState,
   setDeskStateProvider,
+  showDesktopApp,
   showLivingDesktop,
 } = require("./living-desktop-window.cjs");
 const { openDetachedAvatar } = require("./detached-avatar-window.cjs");
@@ -575,6 +577,8 @@ function handleProtocolUrl(rawUrl) {
     else if (command.type === "toggle") toggleOverlay();
     else if (command.type === "fleet") createFleetWindow();
     else if (command.type === "command") createCommandWindow(getFleetControl(), { createFleetWindow });
+    else if (command.type === "overlay") showLivingDesktop();
+    else if (command.type === "desktop") showDesktopApp();
     else if (command.type === "event") handleBridgeEvent(command.event);
   }
   return true;
@@ -986,7 +990,8 @@ function refreshTrayMenu() {
         label: "Command…",
         click: () => createCommandWindow(getFleetControl(), { createFleetWindow }),
       },
-      { label: "Aitheros Online", submenu: buildLivingDesktopMenu() },
+      { label: "AitherOS overlay (Aitheros Online)", submenu: buildLivingDesktopMenu() },
+      { label: "AitherDesktop app (full desktop)…", click: () => showDesktopApp() },
       { type: "separator" },
       { label: "Characters", submenu: buildCharacterMenu() },
       { label: "Window Size", submenu: buildSizeMenu() },
@@ -1287,6 +1292,14 @@ if (!app.requestSingleInstanceLock()) {
       createCommandWindow(getFleetControl(), { createFleetWindow });
       return;
     }
+    if (argv.includes("--overlay")) {
+      showLivingDesktop();
+      return;
+    }
+    if (argv.includes("--desktop")) {
+      showDesktopApp();
+      return;
+    }
     if (!handled && !argv.includes("--background")) showOverlay({ focus: true });
   });
 
@@ -1491,8 +1504,17 @@ if (!app.requestSingleInstanceLock()) {
           if (typeof arg !== "string" || arg.length === 0) return false;
           return decisionCards.openCardWindow(arg);
         }
+        // The two desktop surfaces (owner, 2026-09-08): the OVERLAY — the
+        // aitherium.com Living Desktop taskbar over the Windows desktop, the same
+        // one AitherConnect puts over any web page — and the APP — the full
+        // aitherium.com desktop (Desktop Anywhere shell) in its own window.
         case "living-desktop":
+        case "overlay":
           showLivingDesktop();
+          return true;
+        case "aither-desktop":
+        case "desktop":
+          showDesktopApp();
           return true;
         case "toggle-desk":
           toggleOverlay();
@@ -1668,6 +1690,11 @@ if (!app.requestSingleInstanceLock()) {
       onRemoveAvatar: (slotId) => removeAvatarSlot(slotId),
       onFleet: (action, opts) => fleetAction(action, opts),
       onCommand: (text, opts) => commandAction(text, opts),
+      onDesktop: (surface) => {
+        if (surface === "overlay") showLivingDesktop();
+        else if (surface === "app") showDesktopApp();
+        return { ok: true, opened: surface === "status" ? null : surface, ...desktopStatus() };
+      },
     });
     bridge = createBridgeServer({
       port: Number(process.env.DESK_BRIDGE_PORT || DEFAULT_PORT),
@@ -1678,6 +1705,12 @@ if (!app.requestSingleInstanceLock()) {
       // sees the queue at all. Read-only; answering stays in the queue window.
       decisionsProvider: () => decisionCards.listOpen(),
       fleetHandler: (verb) => fleetAction(verb === "open" ? "open_panel" : verb, { fresh: false }),
+      // awsh /desktop, adk desk desktop, awconnect's popup and `desk://` all land here.
+      desktopHandler: (mode) => {
+        if (mode === "overlay") showLivingDesktop();
+        else if (mode === "app") showDesktopApp();
+        return { ok: true, opened: mode === "status" ? null : mode, ...desktopStatus() };
+      },
       commandHandler: (req) => {
         if (req.action === "history") {
           return getCommandAgent(getFleetControl()).history(req.limit);
@@ -1703,6 +1736,8 @@ if (!app.requestSingleInstanceLock()) {
     createTray();
     if (process.argv.includes("--fleet")) createFleetWindow();
     if (process.argv.includes("--command")) createCommandWindow(getFleetControl(), { createFleetWindow });
+    if (process.argv.includes("--overlay")) showLivingDesktop();
+    if (process.argv.includes("--desktop")) showDesktopApp();
     // Keep the tray's Fleet line honest: re-render the menu after every verdict.
     getFleetControl().on("progress", (p) => {
       if (p?.phase === "end") refreshTrayMenu();

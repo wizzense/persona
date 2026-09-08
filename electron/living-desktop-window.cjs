@@ -505,9 +505,115 @@ function pushDeskState() {
   desktopWin.webContents.send("living-desktop:desk-state", snapshot);
 }
 
+// ── The AitherDesktop APP window ────────────────────────────────────────────────────
+// Owner, 2026-09-08: "one is an overlay that goes on top of the OS/browser, the
+// other is a fully AitherDesktop app ... the same AitherDesktop on aitherium.com".
+// The overlay above is the first. This is the second: a REAL framed, opaque,
+// maximisable window on the same aitherium.com desktop, shell `aither-desktop`
+// ("Desktop Anywhere" — Veil `shell-registry.tsx`, `@aitheros/desktop-core`
+// DesktopShell), reached by `?shell=` because `/desktop` is auth-gated in prod.
+// Same session partition as the overlay, so signing in once signs in both; same
+// navigation fence, so the window stays inside the aitherium family.
+const DESKTOP_APP_SHELL = "aither-desktop";
+let appWin = null;
+
+function desktopAppUrl() {
+  try {
+    const url = new URL(BASE_URL);
+    url.searchParams.delete("mode");
+    url.searchParams.set("shell", DESKTOP_APP_SHELL);
+    return url.href;
+  } catch {
+    return BASE_URL;
+  }
+}
+
+function isAppOpen() {
+  return appWin != null && !appWin.isDestroyed();
+}
+
+function showDesktopApp() {
+  if (isAppOpen()) {
+    if (appWin.isMinimized()) appWin.restore();
+    appWin.show();
+    appWin.focus();
+    return appWin;
+  }
+  const { workArea } = screen.getPrimaryDisplay();
+  appWin = new BrowserWindow({
+    width: Math.min(1440, workArea.width - 80),
+    height: Math.min(900, workArea.height - 80),
+    minWidth: 960,
+    minHeight: 600,
+    show: false,
+    frame: true,
+    autoHideMenuBar: true,
+    backgroundColor: "#0b0d12",
+    title: "AitherDesktop",
+    webPreferences: {
+      partition: PARTITION,
+      preload: path.join(__dirname, "living-desktop-preload.cjs"),
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  appWin.webContents.setWindowOpenHandler(({ url }) => {
+    if (isAitheriumFamily(url)) return { action: "allow" };
+    void shell.openExternal(url);
+    return { action: "deny" };
+  });
+  appWin.webContents.on("will-navigate", (event, targetUrl) => {
+    if (!isAitheriumFamily(targetUrl)) {
+      event.preventDefault();
+      void shell.openExternal(targetUrl);
+    }
+  });
+  appWin.webContents.on("did-fail-load", (_e, code, desc, failedUrl, isMainFrame) => {
+    if (isMainFrame) log(`[app] did-fail-load ${failedUrl}: ${code} ${desc}`);
+  });
+  appWin.webContents.on("did-finish-load", () => {
+    appWin.webContents
+      .executeJavaScript("try{localStorage.setItem('aither-local-node-probe-optin','1')}catch(e){}; true;")
+      .catch(() => {});
+  });
+  appWin.once("ready-to-show", () => {
+    appWin.maximize();
+    appWin.show();
+    appWin.focus();
+  });
+  appWin.on("closed", () => {
+    appWin = null;
+  });
+  const target = desktopAppUrl();
+  log(`[app] opening ${target}`);
+  void (async () => {
+    await syncPortalSessionCookie();
+    if (appWin && !appWin.isDestroyed()) await appWin.loadURL(target);
+  })();
+  return appWin;
+}
+
+/** Which of the two surfaces are up — for the deck rows, MCP and the bridge. */
+function desktopStatus() {
+  return {
+    overlay: { open: isOpen(), visible: isOpen() && desktopWin.isVisible(), shell: shellId, ghost: ghostMode, transparent: transparentMode },
+    app: { open: isAppOpen(), visible: isAppOpen() && appWin.isVisible(), shell: DESKTOP_APP_SHELL },
+    url: BASE_URL,
+    shells: SHELL_CHOICES.map((c) => ({ id: c.id, label: c.label })),
+  };
+}
+
 module.exports = {
   openLivingDesktop: showLivingDesktop, // kept for older callers
   showLivingDesktop,
+  showDesktopApp,
+  desktopStatus,
+  desktopAppUrl,
+  isAppOpen,
+  setShell,
+  SHELL_CHOICES,
+  DESKTOP_APP_SHELL,
   hideLivingDesktop,
   toggleLivingDesktop,
   setSolidBackground,
