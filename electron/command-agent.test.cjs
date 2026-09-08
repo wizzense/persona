@@ -227,3 +227,41 @@ test("CommandAgent: the relay mirror is an [ack] carrying the REPLY, never an ec
   await new Promise((r) => setTimeout(r, 10));
   assert.equal(spawned2.filter((s) => s.cmd === "awrelay").length, 0, "the poller acks in-thread; no second post");
 });
+
+test("CommandAgent: the relay mirror reports the relay's EXIT CODE, not merely that the process ended", async () => {
+  // Until 2026-09-08 the close handler was `() => resolve({ ok: true })`, so a
+  // failed post reported success. #command did not exist for most of a day and
+  // every mirror to it read as delivered.
+  const { agent: okAgent } = agentWith();
+  const good = await okAgent._relayRequest("do a thing", "agent", { reply: "done", ok: true });
+  assert.equal(good.ok, true, "a clean exit 0 is still a success");
+
+  const { agent: badAgent } = agentWith({
+    relay: () => fakeChild({ code: 1, stderrLines: ["awrelay: channel #command not found"], delay: 2 }),
+  });
+  const progress = [];
+  badAgent.on("progress", (p) => progress.push(p.text));
+  const bad = await badAgent._relayRequest("do a thing", "agent", { reply: "done", ok: true });
+  assert.equal(bad.ok, false, "a non-zero exit must not report success");
+  assert.equal(bad.reason, "exit");
+  assert.equal(bad.code, 1);
+  assert.match(bad.stderr, /channel #command not found/, "the reason travels with the verdict");
+  assert.ok(progress.some((t) => /ack NOT posted/.test(t)),
+    "a silent failure is the defect -- the owner must see it in the window");
+
+  // Killed by a signal is a failure too: code is null there, and the old
+  // `code == null` shortcut would have called it a pass.
+  const { agent: killed } = agentWith({
+    relay: () => {
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.kill = () => {};
+      setTimeout(() => child.emit("close", null, "SIGTERM"), 2);
+      return child;
+    },
+  });
+  const sig = await killed._relayRequest("do a thing", "agent", { reply: "done", ok: true });
+  assert.equal(sig.ok, false, "a killed relay did not post");
+  assert.equal(sig.reason, "signal");
+});

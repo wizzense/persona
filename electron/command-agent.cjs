@@ -20,6 +20,10 @@ const path = require("node:path");
 const os = require("node:os");
 const { randomUUID } = require("node:crypto");
 const { summarize: summarizeFleet, classify: classifyFleet } = require("./fleet-control.cjs");
+// One spelling of the mirror channel, shared with the poller that reads it. A
+// second literal here is how a rename leaves the desk writing to a channel
+// nothing polls. relay-poller requires only node builtins, so this is not a cycle.
+const { MIRROR_CHANNEL } = require("./relay-poller.cjs");
 
 const DEFAULT_CLAUDE_TIMEOUT_MS = 30 * 60 * 1000; // 30 min
 const RELAY_TIMEOUT_MS = 10 * 1000; // 10 s
@@ -428,7 +432,7 @@ class CommandAgent extends EventEmitter {
         + `\n— re: ${String(text || "").slice(0, 200)}`;
       const args = [
         "send",
-        "#command",
+        MIRROR_CHANNEL,
         body,
         "--kind",
         "ack",
@@ -459,9 +463,38 @@ class CommandAgent extends EventEmitter {
           resolve({ ok: false, reason: "timeout" });
         }, RELAY_TIMEOUT_MS);
 
-        child.on("close", () => {
+        // The mirror must report what the relay actually DID. This handler used to
+        // resolve({ ok: true }) on any close code, so every ack "succeeded" —
+        // including through the whole period #command did not exist, which is how
+        // a channel that was never created read as a working mirror for a day. A
+        // best-effort side channel is allowed to fail; it is not allowed to lie
+        // about failing.
+        let stderr = "";
+        try {
+          child.stderr?.on("data", (chunk) => {
+            if (stderr.length < 2000) stderr += String(chunk);
+          });
+        } catch {
+          /* a fake child with no streams is fine — the exit code is the verdict */
+        }
+
+        child.on("close", (code, signal) => {
           clearTimeout(timer);
-          resolve({ ok: true });
+          // A killed child reports code null WITH a signal — that is a failure,
+          // not a pass. A test fake that emits close with no arguments at all
+          // reports neither, and stays a pass so fixtures do not have to model
+          // an exit status they are not testing.
+          if (!signal && (code === 0 || code == null)) {
+            resolve({ ok: true });
+            return;
+          }
+          const why = stderr.trim().split("\n").filter(Boolean).slice(-1)[0] || "";
+          const what = signal ? `killed by ${signal}` : `exit ${code}`;
+          this.emit("progress", {
+            text: `relay: ack NOT posted (awrelay ${what}${why ? ` — ${why.slice(0, 160)}` : ""})`,
+            phase: "run",
+          });
+          resolve({ ok: false, reason: signal ? "signal" : "exit", code, signal, stderr: why });
         });
 
         child.on("error", () => {

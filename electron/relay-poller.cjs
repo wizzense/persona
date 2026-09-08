@@ -46,7 +46,16 @@ const os = require("node:os");
 const path = require("node:path");
 const { EventEmitter } = require("node:events");
 
+// THE one place a desk relay channel is spelled. Every other file imports from
+// here, and check_relay_broadcast_deliverable.py derives what it asserts from
+// this file rather than carrying a second copy — a checker holding its own list
+// keeps asserting the old channel long after someone repoints the desk, and
+// passes while the real lane is mute. That is the exact failure that gate
+// exists for: #awrun was its only entry, so #command not existing for most of
+// 2026-09-08 was invisible to it.
 const CHANNELS = Object.freeze({ "#command": "all", "#agents": "addressed" });
+/** Where the CommandAgent mirrors its [ack] — read side and write side, one name. */
+const MIRROR_CHANNEL = "#command";
 const ADDRESS_RE = /^\s*(?:@(?:desk|awdesk|aither)\b[:,]?\s*|\/do\s+)/i;
 const ENVELOPE_RE = /^\s*\[(ack|finding|alert)\]/i;
 const DEFAULT_INTERVAL_MS = 20_000;
@@ -234,4 +243,6 @@ class RelayPoller extends EventEmitter {
   }
 }
 
-module.exports = { ADDRESS_RE, CHANNELS, RelayPoller, ackText, cursorPath, pickWorkOrders };
+module.exports = {
+  ADDRESS_RE, CHANNELS, MIRROR_CHANNEL, RelayPoller, ackText, cursorPath, pickWorkOrders,
+};
