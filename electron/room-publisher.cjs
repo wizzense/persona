@@ -45,7 +45,7 @@ function defaultRequest(method, path, body, { timeoutMs = 4000, token = readBrid
     const done = (status, text) => {
       if (settled) return;
       settled = true;
-      let parsed = null;
+      let parsed;
       try {
         parsed = text ? JSON.parse(text) : null;
       } catch {

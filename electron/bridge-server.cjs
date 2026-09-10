@@ -1,6 +1,6 @@
 "use strict";
 
-const crypto = require("node:crypto");
+const { timingSafeEqual } = require("node:crypto");
 const fs = require("node:fs");
 const http = require("node:http");
 const os = require("node:os");
@@ -88,7 +88,7 @@ function bearerOk(request, token) {
   const want = Buffer.from(token, "utf8");
   // Length leaks nothing useful here (the token is not secret-length), but a
   // compare that stops at the first differing byte would leak the prefix.
-  return given.length === want.length && crypto.timingSafeEqual(given, want);
+  return given.length === want.length && timingSafeEqual(given, want);
 }
 
 // Fails CLOSED: no configured token means no mutation, not open mutation.

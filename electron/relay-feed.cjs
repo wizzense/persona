@@ -52,7 +52,9 @@ function relayCa() {
   for (const p of candidates) {
     try {
       if (fs.existsSync(p)) return { ca: fs.readFileSync(p) };
-    } catch {}
+    } catch {
+      /* unreadable candidate: try the next one */
+    }
   }
   return {};
 }
@@ -104,7 +106,9 @@ function refusalDetail(body) {
     if (parsed && typeof parsed.message === "string" && parsed.message) {
       return parsed.message.slice(0, 160);
     }
-  } catch {}
+  } catch {
+    /* not JSON: the raw body below is the message */
+  }
   return body.slice(0, 160);
 }
 
