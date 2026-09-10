@@ -12,7 +12,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
-const { routeDrop, kindOf } = require("./drop-router.cjs");
+const { routeDrop, kindOf, LIBRARY_HOST } = require("./drop-router.cjs");
 
 function tmpfile(name, content) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "drop-router-test-"));
@@ -226,12 +226,22 @@ async function okAsync(name, fn) {
 
   await okAsync("stage is cleaned up even when the lane fails", async () => {
     const { dir, p } = tmpfile("bad.png", IMAGE_PNG);
-    const stageDir = path.join("C:\\AitherOS-Data\\Library", "tmp", "desk-uploads");
-    const before = fs.readdirSync(stageDir).filter((f) => f.startsWith("drop-")).length;
+    const stageDir = path.join(LIBRARY_HOST, "tmp", "desk-uploads");
+    // The stage directory is created on first use, so a machine that has never
+    // staged a drop has none -- absent is zero, not a failure. (It read as one on
+    // every non-Windows CI runner: ENOENT scandir before the drop even ran.)
+    const staged = () => {
+      try {
+        return fs.readdirSync(stageDir).filter((f) => f.startsWith("drop-")).length;
+      } catch {
+        return 0;
+      }
+    };
+    const before = staged();
     await routeDrop({ filePath: p, mime: "image/png" }, {
       call: async () => { throw new Error("vision down"); },
     });
-    const after = fs.readdirSync(stageDir).filter((f) => f.startsWith("drop-")).length;
+    const after = staged();
     assert.strictEqual(after, before, "a staged file was left behind");
     fs.rmSync(dir, { recursive: true, force: true });
   });
