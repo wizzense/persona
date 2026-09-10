@@ -9,7 +9,12 @@ const os = require("node:os");
 
 const { classifyCommand, CommandAgent, resolveBin, exeFromCmdShim } = require("./command-agent.cjs");
 
-test("exeFromCmdShim follows npm's .cmd shim to the real .exe (Node >= 20.12 EINVAL on .cmd)", () => {
+// Windows-only: the helper resolves a WINDOWS .cmd shim and asserts a Windows
+// path, so on Linux and macOS it compared a POSIX-resolved path and failed --
+// red on two of the three public CI runners for a property those platforms do
+// not have.
+test("exeFromCmdShim follows npm's .cmd shim to the real .exe (Node >= 20.12 EINVAL on .cmd)",
+  { skip: process.platform !== "win32" ? "Windows-only shim resolution" : false }, () => {
   const shim = '@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe"   %*\r\n';
   const exe = exeFromCmdShim("C:\\Users\\x\\AppData\\Roaming\\npm\\claude.cmd", shim);
   assert.equal(exe, path.join("C:\\Users\\x\\AppData\\Roaming\\npm", "node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe"));
