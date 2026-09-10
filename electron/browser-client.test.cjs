@@ -12,7 +12,7 @@ function fakeCall(calls) {
       return JSON.stringify({ process: "Code.exe", title: "Desk.tsx" });
     }
     if (name === "browser_context") {
-      return JSON.stringify({ url: "https://portal.aitherium.com", title: "Portal" });
+      return JSON.stringify({ url: "https://aitherium.com", title: "Portal" });
     }
     throw new Error(`unexpected tool ${name}`);
   };
@@ -23,7 +23,7 @@ test("desktopSnapshot aggregates the focused window and the active tab", async (
   const snap = await desktopSnapshot(fakeCall(calls));
   assert.equal(snap.ok, true);
   assert.equal(snap.window.process, "Code.exe");
-  assert.equal(snap.context.url, "https://portal.aitherium.com");
+  assert.equal(snap.context.url, "https://aitherium.com");
   assert.ok(snap.at > 0);
   assert.deepEqual(
     calls.map((c) => c.name),

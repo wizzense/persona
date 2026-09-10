@@ -3,7 +3,7 @@
 /** The Aitheros Online surface as a REAL desktop overlay — not a browser tab.
  *
  *  History, so nobody rebuilds the failures:
- *  - Attempt 1 loaded https://portal.aitherium.com in a framed BrowserWindow and rendered
+ *  - Attempt 1 loaded the auth-gated portal in a framed BrowserWindow and rendered
  *    BLANK WHITE: portal. is auth-gated, a fresh webContents has no cookies, and the
  *    login redirect renders nothing.
  *  - Attempt 2 punted to shell.openExternal — explicitly rejected by the owner ("I don't
@@ -66,7 +66,8 @@ function setShell(id) {
 }
 
 const PARTITION = "persist:living-desktop";
-const PORTAL_LOGIN_URL = "https://portal.aitherium.com/login";
+// The retired portal host 301s to the apex login; ask the apex directly.
+const PORTAL_LOGIN_URL = "https://aitherium.com/login";
 
 let desktopWin = null; // the singleton overlay window
 let transparentMode = true; // owner-facing toggle; survives close/reopen within a run

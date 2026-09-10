@@ -35,7 +35,7 @@ body {
   background: transparent !important;
 }
 
-/* D-2170: frameless (frame:false in main.cjs) means there is no title bar
+/* Frameless (frame:false in main.cjs) means there is no title bar
    to grab, so the window looked undraggable. A drag region on the CANVAS
    was tried first and reverted — Windows treats an app-region:drag element
    as non-client area (same as a title bar), which swallows right-click

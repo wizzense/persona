@@ -201,7 +201,7 @@ test("bridge routes only valid local JSON requests to MCP", async (context) => {
 
 test("decision reads: hosted web surfaces may read, strangers may not", () => {
   assert.equal(decisionsReadOriginAllowed("https://aitherium.com"), true);
-  assert.equal(decisionsReadOriginAllowed("https://portal.aitherium.com"), true);
+  assert.equal(decisionsReadOriginAllowed("https://www.aitherium.com"), true);
   assert.equal(decisionsReadOriginAllowed("http://127.0.0.1:5173"), true); // local dev keeps bridge trust
   assert.equal(decisionsReadOriginAllowed(undefined), true); // overlay's own null origin
   assert.equal(decisionsReadOriginAllowed("https://evil.example"), false);

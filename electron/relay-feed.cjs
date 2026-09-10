@@ -86,7 +86,7 @@ function relayRequest(method, urlPath, body) {
     );
     req.on("error", () => resolve({ status: 0, body: "" }));
     // A hard timeout: the relay's RBAC can stall on Identity resolution
-    // (measured 2.5s, D-1596 instrumentation) and a hung socket otherwise
+    // (measured 2.5s) and a hung socket otherwise
     // eats the user's message with no answer at all.
     req.setTimeout(15000, () => req.destroy(new Error("relay request timed out")));
     req.end(payload);

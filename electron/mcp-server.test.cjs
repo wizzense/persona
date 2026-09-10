@@ -234,7 +234,7 @@ test("a void onAnimation stays backwards-compatible (only false is a refusal)", 
 /**
  * `listAnimations` was accepted as a constructor option and passed in by main.cjs, but no
  * tool ever exposed it — so FILE:<name>.vrma playback worked while a caller had no way to
- * discover which packs were installed (D-1660 in the AitherOS ledger).
+ * discover which packs were installed.
  */
 test("list_animations exposes the built-ins AND installed .vrma packs", async (context) => {
   const mcpHandler = createDeskMcpHandler({

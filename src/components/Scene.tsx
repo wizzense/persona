@@ -61,7 +61,7 @@ function FullBodyCamera({
 }) {
   const getThreeState = useThree((state) => state.get);
   const controlsReady = useThree((state) => Boolean(state.controls));
-  // D-2170: this used to guard on `framedObject.current === object` and
+  // This used to guard on `framedObject.current === object` and
   // never re-run for the SAME avatar — so the window is user-resizable
   // (Electron default; nothing sets resizable:false) but resizing it left
   // the framing computed for the OLD aspect ratio in place, which reads as

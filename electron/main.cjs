@@ -92,7 +92,7 @@ function detachAvatarToOwnWindow(slotId) {
   return true;
 }
 
-// D-2170: 430x680 on a 3840x2112 4K display reads as "trapped in a tiny box" —
+// 430x680 on a 3840x2112 4K display reads as "trapped in a tiny box" —
 // it's genuinely small on a real screen, independent of camera framing. Kept
 // the same ~0.63 aspect ratio, just bigger. Still user-resizable (min 320x480).
 const WINDOW_WIDTH = 600;
@@ -106,7 +106,7 @@ const WINDOW_HEIGHT = 950;
 // true and useless. Fixed the same way window MOVE already is: menu items +
 // shortcuts driving setBounds() directly, not relying on an edge nobody can
 // click. Size is persisted so it survives a restart instead of resetting to
-// the D-2170 default every time.
+// the old default every time.
 const SIZE_PRESETS = [
   { label: "Small", width: 430, height: 680 },
   { label: "Medium", width: WINDOW_WIDTH, height: WINDOW_HEIGHT },
@@ -421,7 +421,7 @@ function createWindow() {
   ipcMain.removeAllListeners("desk:context-menu");
   ipcMain.on("desk:context-menu", () => createDeckWindow());
 
-  // D-2170: middle-mouse-drag window move (preload.cjs sends these). Tracks
+  // Middle-mouse-drag window move (preload.cjs sends these). Tracks
   // the mouse's screen position at drag start against the window's own
   // position at drag start, then repositions by the same delta on every
   // move — works from anywhere on the avatar, doesn't touch left/right
@@ -1478,7 +1478,7 @@ if (!app.requestSingleInstanceLock()) {
           // The aitherium agent-pack + avatar marketplace. Portal is the
           // platform surface; the deep marketplace route gets pinned when the
           // Living-Desktop app phase lands.
-          void shell.openExternal("https://portal.aitherium.com");
+          void shell.openExternal("https://aitherium.com");
           return true;
         case "switch-character": {
           // One-stop-shop switching: same path set_character over MCP uses,

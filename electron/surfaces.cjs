@@ -4,8 +4,8 @@
  * surfaces — the control-plane doors, probed from the host.
  *
  * The Fleet window showed a pill and four numbers and nothing about WHERE the
- * owner could look next (owner, 2026-09-08: "why isn't tunnel.aitherium.com +
- * pulse.aitherium.com + genesis + grafana + loki/prometheus … in here?"). This
+ * owner could look next (owner, 2026-09-08: why aren't the tunnel, the edge
+ * pulse, genesis and the dashboards in here?). This
  * is that strip: every row is a real URL, probed the way the fallback worker's
  * status grid probes hosts (anything that answers below 500 is UP — a 302 to
  * login or a 401 means the door is there; 5xx, a refused socket or a timeout
@@ -21,18 +21,50 @@
 
 const fs = require("node:fs");
 const http = require("node:http");
+const os = require("node:os");
 const https = require("node:https");
 const path = require("node:path");
 
-const SURFACES = [
-  { id: "tunnel", label: "Tunnel", open: "https://tunnel.aitherium.com/", probe: "https://tunnel.aitherium.com/", scope: "public" },
-  { id: "pulse", label: "Pulse (edge)", open: "https://pulse.aitherium.com/", probe: "https://pulse.aitherium.com/status", scope: "edge", json: true },
-  { id: "grafana", label: "Grafana", open: "https://grafana.aitherium.com/", probe: "https://grafana.aitherium.com/", scope: "public" },
-  { id: "prometheus", label: "Prometheus", open: "https://prometheus.aitherium.com/", probe: "https://prometheus.aitherium.com/", scope: "public" },
+// Doors every install has: its own loopback front doors.
+const LOCAL_SURFACES = [
   { id: "mcp", label: "Genesis via MCP gateway", open: "http://127.0.0.1:8182/health", probe: "http://127.0.0.1:8182/health", scope: "fleet" },
   { id: "daemon", label: "awdk daemon (rooms, decisions)", open: "http://127.0.0.1:8362/health", probe: "http://127.0.0.1:8362/health", scope: "host" },
   { id: "registry", label: "Registry", open: "https://127.0.0.1:8149/health", probe: "https://127.0.0.1:8149/health", scope: "fleet" },
 ];
+
+// An operator's PUBLIC doors (their tunnel, edge pulse, dashboards) are their own
+// hostnames, so they are configuration, not source: a JSON array of rows (or
+// { "surfaces": [...] }) in AWDESK_SURFACES_FILE, else ~/.aither/desk-surfaces.json.
+// No file is the normal install. A file that exists but cannot be used says so on
+// stderr and contributes nothing -- the loopback rows still render.
+function defaultSurfacesFile() {
+  return process.env.AWDESK_SURFACES_FILE || path.join(os.homedir(), ".aither", "desk-surfaces.json");
+}
+
+// open feeds shell.openExternal via OPENABLE, so only http(s) rows are admitted.
+function validSurface(s) {
+  return Boolean(s) && typeof s.id === "string" && typeof s.label === "string"
+    && /^https?:\/\//.test(String(s.open || "")) && /^https?:\/\//.test(String(s.probe || ""));
+}
+
+function loadOperatorSurfaces(file = defaultSurfacesFile()) {
+  if (!file || !fs.existsSync(file)) return [];
+  try {
+    const doc = JSON.parse(fs.readFileSync(file, "utf8"));
+    const rows = Array.isArray(doc) ? doc : doc?.surfaces;
+    if (!Array.isArray(rows)) throw new Error("expected an array of surface rows");
+    const good = rows.filter(validSurface);
+    if (good.length !== rows.length) {
+      console.warn(`[surfaces] ${file}: ignored ${rows.length - good.length} row(s) without id, label and http(s) open+probe`);
+    }
+    return good;
+  } catch (error) {
+    console.warn(`[surfaces] ${file}: unusable (${error?.message || error}); showing loopback doors only`);
+    return [];
+  }
+}
+
+const SURFACES = [...loadOperatorSurfaces(), ...LOCAL_SURFACES];
 
 const OPENABLE = new Set(SURFACES.map((s) => s.open));
 
@@ -183,4 +215,13 @@ function summarizeSurfaces(rows) {
   return `surfaces ${up}/${rows.length} up${down.length ? ` (down: ${down.join(", ")})` : ""}`;
 }
 
-module.exports = { OPENABLE, SURFACES, defaultRequest, judge, probeSurfaces, summarizeSurfaces };
+module.exports = {
+  LOCAL_SURFACES,
+  OPENABLE,
+  SURFACES,
+  defaultRequest,
+  judge,
+  loadOperatorSurfaces,
+  probeSurfaces,
+  summarizeSurfaces,
+};

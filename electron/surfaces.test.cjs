@@ -1,8 +1,33 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 const test = require("node:test");
-const { OPENABLE, SURFACES, judge, probeSurfaces, summarizeSurfaces } = require("./surfaces.cjs");
+
+// Operator rows are CONFIGURATION (their own hostnames), so the suite supplies them the
+// way an operator does: a file named by AWDESK_SURFACES_FILE, set BEFORE surfaces.cjs
+// loads, because the row list is built at module load.
+const FIXTURE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "awdesk-surfaces-"));
+const OPERATOR_FILE = path.join(FIXTURE_DIR, "desk-surfaces.json");
+fs.writeFileSync(OPERATOR_FILE, JSON.stringify([
+  { id: "tunnel", label: "Tunnel", open: "https://tunnel.example.test/", probe: "https://tunnel.example.test/", scope: "public" },
+  { id: "pulse", label: "Pulse (edge)", open: "https://pulse.example.test/", probe: "https://pulse.example.test/status", scope: "edge", json: true },
+  { id: "grafana", label: "Grafana", open: "https://grafana.example.test/", probe: "https://grafana.example.test/", scope: "public" },
+  { id: "prometheus", label: "Prometheus", open: "https://prometheus.example.test/", probe: "https://prometheus.example.test/", scope: "public" },
+]));
+process.env.AWDESK_SURFACES_FILE = OPERATOR_FILE;
+
+const {
+  LOCAL_SURFACES,
+  OPENABLE,
+  SURFACES,
+  judge,
+  loadOperatorSurfaces,
+  probeSurfaces,
+  summarizeSurfaces,
+} = require("./surfaces.cjs");
 
 test("SURFACES names every door the owner asked for, each with an openable URL", () => {
   const ids = SURFACES.map((s) => s.id);
@@ -68,4 +93,21 @@ test("probeSurfaces probes every door concurrently and a throwing probe is a DOW
   assert.equal(rows.find((r) => r.id === "pulse").detail, "HELD by owner");
   assert.equal(summarizeSurfaces(rows), `surfaces ${SURFACES.length - 1}/${SURFACES.length} up (down: mcp)`);
   assert.equal(summarizeSurfaces([]), "");
+});
+
+test("operator doors are configuration: no file means the loopback doors only", () => {
+  assert.deepEqual(loadOperatorSurfaces(path.join(FIXTURE_DIR, "absent.json")), []);
+  assert.deepEqual(LOCAL_SURFACES.map((s) => s.id), ["mcp", "daemon", "registry"]);
+});
+
+test("an unusable operator file contributes nothing, and a non-http(s) row never becomes openable", () => {
+  const broken = path.join(FIXTURE_DIR, "broken.json");
+  fs.writeFileSync(broken, "{not json");
+  assert.deepEqual(loadOperatorSurfaces(broken), []);
+  const mixed = path.join(FIXTURE_DIR, "mixed.json");
+  fs.writeFileSync(mixed, JSON.stringify({ surfaces: [
+    { id: "ok", label: "OK", open: "https://ok.example.test/", probe: "https://ok.example.test/" },
+    { id: "js", label: "JS", open: "javascript:alert(1)", probe: "https://x.example.test/" },
+  ] }));
+  assert.deepEqual(loadOperatorSurfaces(mixed).map((s) => s.id), ["ok"]);
 });

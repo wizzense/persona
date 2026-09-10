@@ -133,7 +133,7 @@ def synthesize(text: str, voice: str | None, context: ssl.SSLContext) -> tuple[b
 def ask_agent(message: str) -> str:
     """Ask the agent, preferring the STREAMING endpoint.
 
-    Measured 2026-07-29 (D-1579): `POST /chat` takes 108-241s while `POST /chat/stream`
+    Measured 2026-07-29: `POST /chat` takes 108-241s while `POST /chat/stream`
     answers the same question with a first token in ~3s and completes in ~10s — same
     model, same minute. So stream by default and only fall back to the slow endpoint if
     streaming is unavailable.

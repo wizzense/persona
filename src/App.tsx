@@ -224,7 +224,7 @@ function AvatarSceneApp() {
 
   return (
     <main className="app">
-      {/* D-2170 follow-up: making the whole canvas a drag region (so the
+      {/* Follow-up: making the whole canvas a drag region (so the
           frameless window could be moved at all) swallowed right-click
           (Characters/Talk/Quit menu), OrbitControls rotate-drag AND native
           Windows edge-resize — all of it routes through the same OS

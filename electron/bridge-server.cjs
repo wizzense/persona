@@ -121,8 +121,6 @@ function denyUnlessBearer(request, response, token) {
 const DECISIONS_READ_ORIGINS = new Set([
   "https://aitherium.com",
   "https://www.aitherium.com",
-  "https://portal.aitherium.com",
-  "https://veil.aitherium.com",
 ]);
 
 function decisionsReadOriginAllowed(origin) {
