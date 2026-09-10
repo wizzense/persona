@@ -46,8 +46,16 @@ const { callTool, parseMaybeJson } = require("./gateway-mcp.cjs");
 
 // The one path bridge (see module docstring). Host side is a Windows path,
 // container side is what the gateway's tools actually read.
-const LIBRARY_HOST = "C:\\AitherOS-Data\\Library";
-const DROP_REL = "tmp\\desk-uploads";
+// The HOST half of the Library mount. A Windows install keeps it at
+// C:\\AitherOS-Data\\Library (the gateway's /app/AitherOS/Library); anywhere else --
+// including the Linux and macOS CI runners, where the hardcoded path made the
+// stage-cleanup test scandir a path that cannot exist -- AWDESK_LIBRARY_HOST names
+// it, defaulting under the user's home.
+const LIBRARY_HOST = process.env.AWDESK_LIBRARY_HOST
+  || (process.platform === "win32"
+    ? "C:\\AitherOS-Data\\Library"
+    : path.join(os.homedir(), ".aither", "library"));
+const DROP_REL = path.join("tmp", "desk-uploads");
 const LIBRARY_CONTAINER = "/app/AitherOS/Library";
 
 const MAX_BYTES = 100 * 1024 * 1024; // 100 MB — a drop bigger than this is not an ingest
