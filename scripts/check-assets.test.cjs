@@ -8,6 +8,7 @@ const test = require("node:test");
 const {
   EXPECTED_ASSET_ROLES,
   EXPECTED_ASSETS,
+  listRuntimeAssets,
   validateAssets,
 } = require("./check-assets.cjs");
 
@@ -24,77 +25,66 @@ function createFixture(context) {
   return { assetRoot, manifestPath };
 }
 
-test("development accepts the complete local set or no media", (context) => {
+test("the stable contract requires no redistributed assets at all", () => {
+  // Owner decision 2026-09-10: Desk ships no character models. This assertion
+  // is the contract — if a future change wants a bundled model back, it must
+  // fail HERE first, not at a release tag.
+  assert.deepEqual(EXPECTED_ASSETS, []);
+  assert.deepEqual(EXPECTED_ASSET_ROLES, {});
+});
+
+test("development accepts the real tree, with or without local media", (context) => {
   assert.deepEqual(validateAssets(), []);
   const fixture = createFixture(context);
   assert.deepEqual(validateAssets(fixture), []);
 });
 
-test("manifest assigns every stable asset its intended semantic role", () => {
+test("the committed manifest declares no redistributed assets", () => {
   const manifest = JSON.parse(
     fs.readFileSync(
       path.join(__dirname, "..", "public", "assets", "manifest.json"),
       "utf8",
     ),
   );
-  assert.deepEqual(
-    Object.fromEntries(manifest.assets.map((asset) => [asset.path, asset.role])),
-    EXPECTED_ASSET_ROLES,
-  );
+  assert.deepEqual(manifest.assets, []);
 });
 
-test("per-slot runtime copies never break the stable contract", (context) => {
-  // installCharacterToSlot() writes model-slot<N>.vrm into every asset tree
-  // at runtime; those copies are state, not contract assets. A stale pair of
-  // them broke `npm test` on 2026-08-25 by being counted as undeclared assets.
+test("a user's own model and slot copies are dev media, never an error", (context) => {
+  // installCharacter()/installCharacterToSlot() write model.vrm and
+  // model-slot<N>.vrm into assets/ at runtime; vroid-sync writes animations.
+  // All of it is the user's own licensed media, allowed in dev, forbidden in
+  // a package.
   const fixture = createFixture(context);
-  fs.writeFileSync(
-    path.join(fixture.assetRoot, "model-slot1.vrm"),
-    "runtime slot copy",
-  );
-  fs.writeFileSync(
-    path.join(fixture.assetRoot, "model-slot2.vrm"),
-    "runtime slot copy",
-  );
-  assert.deepEqual(validateAssets(fixture), []);
-});
-
-test("runtime animations are allowed media, not undeclared assets", (context) => {
-  // The packaged app ships WITHOUT .vrma files (they are per-user VRoid Hub
-  // downloads); a dev tree with them present must still validate.
-  const fixture = createFixture(context);
+  fs.writeFileSync(path.join(fixture.assetRoot, "model.vrm"), "user model");
+  fs.writeFileSync(path.join(fixture.assetRoot, "model-slot1.vrm"), "slot copy");
   fs.mkdirSync(path.join(fixture.assetRoot, "animations"), { recursive: true });
   fs.writeFileSync(
     path.join(fixture.assetRoot, "animations", "talk1.vrma"),
-    "local motion media",
+    "user motion",
   );
   assert.deepEqual(validateAssets(fixture), []);
 });
 
-test("development rejects an EMPTY required asset while media is present", (context) => {
-  const fixture = createFixture(context);
-  fs.writeFileSync(
-    path.join(fixture.assetRoot, EXPECTED_ASSETS[0]),
-    "",
-  );
-  assert.ok(
-    validateAssets(fixture).some((error) =>
-      error.includes(`Missing or empty asset: ${EXPECTED_ASSETS[0]}`),
-    ),
-  );
-});
-
-test("release gate passes on the licensed real tree", () => {
-  // The real tree ships a verified-redistributable model (VRM 1.0 meta
-  // inspected directly, 2026-08-25) with complete manifest metadata.
+test("release passes on the clean real tree", () => {
   assert.deepEqual(validateAssets({ release: true }), []);
 });
 
-test("release gate rejects disabled distribution and incomplete licenses", (context) => {
+test("release REFUSES to package a tree containing a character model", (context) => {
+  const fixture = createFixture(context);
+  fs.writeFileSync(path.join(fixture.assetRoot, "model.vrm"), "stray model");
+  const errors = validateAssets({
+    release: true,
+    assetRoot: fixture.assetRoot,
+    manifestPath: fixture.manifestPath,
+  });
+  assert.ok(errors.some((error) => error.includes("may not contain character media")));
+  assert.ok(errors.some((error) => error.includes("model.vrm")));
+});
+
+test("release REFUSES a manifest that declares a redistributed asset", (context) => {
   const fixture = createFixture(context);
   const manifest = JSON.parse(fs.readFileSync(fixture.manifestPath, "utf8"));
-  manifest.distributionAllowed = false;
-  for (const asset of manifest.assets) asset.license = null;
+  manifest.assets = [{ path: "model.vrm", role: "model" }];
   fs.writeFileSync(
     fixture.manifestPath,
     JSON.stringify(manifest, null, 2),
@@ -105,6 +95,13 @@ test("release gate rejects disabled distribution and incomplete licenses", (cont
     assetRoot: fixture.assetRoot,
     manifestPath: fixture.manifestPath,
   });
-  assert.ok(errors.some((error) => error.includes("distribution is disabled")));
-  assert.ok(errors.some((error) => error.includes("Incomplete release license metadata")));
+  assert.ok(errors.some((error) => error.includes("declares redistributed assets")));
+});
+
+test("listRuntimeAssets finds nested vrm/vrma media only", (context) => {
+  const fixture = createFixture(context);
+  fs.mkdirSync(path.join(fixture.assetRoot, "animations"), { recursive: true });
+  fs.writeFileSync(path.join(fixture.assetRoot, "avatar.png"), "not media");
+  fs.writeFileSync(path.join(fixture.assetRoot, "animations", "idle.vrma"), "m");
+  assert.deepEqual(listRuntimeAssets(fixture.assetRoot), ["animations/idle.vrma"]);
 });

@@ -846,22 +846,29 @@ function buildCharacterMenu() {
   const groups = [];
   for (let start = 0; start < all.length; start += CHUNK) {
     const slice = all.slice(start, start + CHUNK);
-    const first = slice[0];
-    const last = slice[slice.length - 1];
     groups.push({
-      label: slice.length > 1 ? `${first} … ${last}` : first,
+      // Paged, not "first … last": two 30-character slugs as a submenu LABEL
+      // wrapped the menu and read as noise. A page number is scannable.
+      label: `${start + 1}–${start + slice.length} of ${all.length}`,
       submenu: slice.map(item),
     });
   }
 
   const recents = getRecentCharacters().map(item);
+  const rosterEntries = groups.length
+    ? groups
+    : [
+        { label: "(no characters yet)", enabled: false },
+        { type: "separator" },
+        { label: "Get a model from VRoid Hub…", click: openVroidHub },
+      ];
   return [
     { label: "Recent", enabled: false },
-    ...(recents.length ? recents : [{ label: "(none yet)", enabled: false }]),
+    ...(recents.length ? recents : [{ label: "(none yet — pick one below)", enabled: false }]),
     { type: "separator" },
     {
       label: `All characters (${all.length})`,
-      submenu: groups.length ? groups : [{ label: "(roster empty)", enabled: false }],
+      submenu: rosterEntries,
     },
     { label: "Browse with pictures…", click: openModelBrowser },
     {
@@ -876,6 +883,7 @@ function buildCharacterMenu() {
     },
     { type: "separator" },
     { label: "Agents", submenu: buildAgentMenu() },
+    { label: "Get a model from VRoid Hub…", click: openVroidHub },
     {
       label: "Enroll newest Downloads .vrm",
       click: () => {
@@ -892,6 +900,53 @@ function buildCharacterMenu() {
       },
     },
   ];
+}
+
+/** Where characters come from (owner decision, 2026-09-10: Desk ships none).
+ *  One function so the tray, the About box and any first-run prompt point at
+ *  the SAME front door instead of three half-remembered URLs. */
+function openVroidHub() {
+  void shell.openExternal("https://hub.vroid.com/en/");
+}
+
+/** First run with an empty roster: Desk has nothing to render and — until now —
+ *  said so nowhere. Asked ONCE per install (a marker file), never on every
+ *  boot, and never blocking: the dialog is fire-and-forget. "Later" is a real
+ *  answer; the tray keeps the same two entries forever. */
+function maybePromptForFirstCharacter() {
+  try {
+    if (listCharacters().length > 0) return;
+    const marker = path.join(app.getPath("userData"), ".first-character-prompted");
+    if (fs.existsSync(marker)) return;
+    fs.writeFileSync(marker, new Date().toISOString());
+    void dialog
+      .showMessageBox({
+        type: "info",
+        title: "Desk has no character yet",
+        message: "Desk ships no character models — add your own",
+        detail: [
+          "Get a VRM from VRoid Hub (free, and the models state their own",
+          "license), then drop it in or use the tray:",
+          "",
+          "    tray ▸ Characters ▸ Enroll newest Downloads .vrm",
+          "",
+          "Any VRM 1.0 file you have the rights to works. Your models stay",
+          "on this machine and are never redistributed.",
+        ].join("\n"),
+        buttons: ["Browse VRoid Hub…", "Open characters folder", "Later"],
+        defaultId: 0,
+        cancelId: 2,
+      })
+      .then(({ response }) => {
+        if (response === 0) openVroidHub();
+        else if (response === 1) {
+          fsMkdirSafe(ROSTER_DIR);
+          void shell.openPath(ROSTER_DIR);
+        }
+      });
+  } catch (error) {
+    debugLog("first-character prompt failed", error);
+  }
 }
 
 /** Agents ▸ <agent> ▸ [Switch to its avatar | Assign current character]. Lets you keep
@@ -999,22 +1054,30 @@ function refreshTrayMenu() {
       {
         label: "About Desk",
         click: () => {
-          // The default character's VRM 1.0 license has creditNotation:
-          // required, so the attribution lives in the product itself, not
-          // just ASSET_LICENSES.md (verified from the file's embedded meta,
-          // 2026-08-25).
-          dialog.showMessageBox({
-            type: "info",
-            title: "About Desk",
-            message: `Desk ${app.getVersion()}`,
-            detail: [
-              "The AitherOS desktop hub — avatar presence, decision cards, model & agent browsing, relay.",
-              "",
-              'Default character model: "Gyigi" v1.1 by Robotnik (VRoid Hub).',
-              "VRM 1.0 license — corporate commercial use permitted, redistribution allowed, credit required.",
-              "Full asset licenses: ASSET_LICENSES.md.",
-            ].join("\n"),
-          });
+          // No bundled character since 2026-09-10 (owner decision): the About
+          // surface says where a model comes from instead of crediting one,
+          // and points at a real window rather than restating a license.
+          void dialog
+            .showMessageBox({
+              type: "info",
+              title: "About Desk",
+              message: `Desk ${app.getVersion()}`,
+              detail: [
+                "The AitherOS desktop hub — avatar presence, decision cards, model & agent browsing, relay.",
+                "",
+                "Desk ships no character models. Add your own — VRoid Hub is the guided path;",
+                "any VRM 1.0 file you have the rights to works. Your models stay on this machine.",
+                "Full asset policy: ASSET_LICENSES.md.",
+              ].join("\n"),
+              buttons: ["Browse VRoid Hub…", "Close"],
+              defaultId: 1,
+              cancelId: 1,
+            })
+            .then(({ response }) => {
+              if (response === 0) {
+                void shell.openExternal("https://hub.vroid.com/en/");
+              }
+            });
         },
       },
       { type: "separator" },
@@ -1748,6 +1811,7 @@ if (!app.requestSingleInstanceLock()) {
     }
 
     createTray();
+    maybePromptForFirstCharacter();
     if (process.argv.includes("--fleet")) createFleetWindow();
     if (process.argv.includes("--command")) createCommandWindow(getFleetControl(), { createFleetWindow });
     if (process.argv.includes("--overlay")) showLivingDesktop();
