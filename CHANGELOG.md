@@ -13,6 +13,9 @@ Persona's first beta is under active development.
   the rights to — [VRoid Hub](https://hub.vroid.com/en/) is the guided path —
   and it is stored per-user, never redistributed. The release gate fails
   closed if a model is present.
+- Hair, tails and tool chains hang naturally: springs that carry no authored
+  gravity (the VRM default) get VRoid Studio's default instead of holding
+  whatever level pose the file was authored in.
 - Stable, replaceable model and animation slots with a strict release asset
   gate.
 - Linux, Windows, macOS arm64, and macOS x64 validation and release workflows.
