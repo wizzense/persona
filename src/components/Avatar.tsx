@@ -49,10 +49,19 @@ function AvatarModel({
 
   useFrame((_, delta) => {
     if (!vrm) return;
-    updateAnimation(delta);
-    updateBlink(delta);
-    updateLipSync(delta, audioLevel, speaking);
-    vrm.update(delta);
+    // CLAMP the physics step (owner report, 2026-09-11: "hair and tools hang
+    // horizontally"). This box shares one GPU with the whole fleet, so the
+    // avatar's rAF stalls for a second or more while something else renders
+    // (measured: the 62-avatar preview backfill). three-vrm's spring bones
+    // integrate the RAW delta, and a single second-sized step overshoots every
+    // hair/tool chain into a horizontal smear that barely recovers — it reads
+    // as broken physics, not as a stall. 1/30 s is the largest step that still
+    // integrates stably; anything longer is a stall, not elapsed time.
+    const step = Math.min(delta, 1 / 30);
+    updateAnimation(step);
+    updateBlink(step);
+    updateLipSync(step, audioLevel, speaking);
+    vrm.update(step);
   });
 
   return vrm ? <primitive object={vrm.scene} /> : null;
