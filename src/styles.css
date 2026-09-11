@@ -517,6 +517,8 @@ body {
 }
 
 .deck-avatar-tile {
+  position: relative;
+  overflow: hidden;
   display: grid;
   place-items: center;
   width: 44px;
@@ -531,6 +533,16 @@ body {
     hsl(var(--avatar-hue, 220) 55% 46%),
     hsl(calc(var(--avatar-hue, 220) + 38) 60% 30%)
   );
+}
+
+/* The rendered preview IS the tile: it already carries the same hue gradient
+   (thumbnails.ts paints it), so it fills the square edge to edge. */
+.deck-avatar-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .deck-avatar-name {

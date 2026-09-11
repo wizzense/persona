@@ -43,6 +43,9 @@ export interface DeckState {
   slots: DeckSlot[];
   agents: string[];
   characters: string[];
+  /** name -> file:// URL of that character's model.vrm (for preview renders).
+   *  Only main knows the real roster root; the deck never builds these. */
+  characterModels: Record<string, string>;
   activeCharacter: string;
   agentCharacters: Record<string, string>;
   relay: RelayRow[];
@@ -72,6 +75,7 @@ export const EMPTY_DECK_STATE: DeckState = {
   slots: [],
   agents: [],
   characters: [],
+  characterModels: {},
   activeCharacter: '',
   agentCharacters: {},
   relay: [],

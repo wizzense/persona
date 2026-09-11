@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 
 import { setDragMode, useDragMode } from '../hooks/useDragMode';
+import { renderVrmThumbnail } from '../thumbnails';
 import {
   EMPTY_DECK_STATE,
   cardWhere,
@@ -390,11 +391,13 @@ function avatarInitials(name: string): string {
 
 function ModelsMarketSection({
   characters,
+  characterModels,
   activeCharacter,
   agentCharacters,
   onAction,
 }: {
   characters: string[];
+  characterModels: Record<string, string>;
   activeCharacter: string;
   agentCharacters: Record<string, string>;
   onAction: (name: string, arg?: string) => void;
@@ -406,6 +409,7 @@ function ModelsMarketSection({
     reason?: string;
   }>({ ok: false, listings: [] });
   const [marketBusy, setMarketBusy] = useState(false);
+  const [thumbs, setThumbs] = useState<Record<string, string>>({});
 
   const runMarket = useCallback((q: string) => {
     const deck = window.deskBridge as unknown as {
@@ -422,6 +426,44 @@ function ModelsMarketSection({
   useEffect(() => {
     runMarket('');
   }, [runMarket]);
+
+  // Real previews (owner, 2026-09-10): cached thumbnail if one exists, else
+  // render the character's own model offscreen ONCE and store it beside the
+  // model. Serialized by thumbnails.ts; failed names stay on the monogram
+  // tile for this session rather than retrying in a loop.
+  const previewsAttempted = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const bridge = window.deskBridge as unknown as {
+      deck?: {
+        characterThumb?: (name: string) => Promise<string | null>;
+        saveCharacterThumb?: (name: string, dataUrl: string) => Promise<boolean>;
+      };
+    } | undefined;
+    const api = bridge?.deck;
+    if (!api?.characterThumb) return;
+    let cancelled = false;
+    for (const name of characters) {
+      if (previewsAttempted.current.has(name)) continue;
+      const modelUrl = characterModels[name];
+      previewsAttempted.current.add(name);
+      void (async () => {
+        const cached = await api.characterThumb!(name).catch(() => null);
+        if (cancelled) return;
+        if (cached) {
+          setThumbs((prev) => ({ ...prev, [name]: cached }));
+          return;
+        }
+        if (!modelUrl) return;
+        const rendered = await renderVrmThumbnail(name, modelUrl);
+        if (cancelled || !rendered) return;
+        setThumbs((prev) => ({ ...prev, [name]: rendered }));
+        void api.saveCharacterThumb?.(name, rendered);
+      })();
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [characters, characterModels]);
 
   const needle = query.trim().toLowerCase();
   const filtered = characters.filter((c) => c.toLowerCase().includes(needle));
@@ -488,7 +530,11 @@ function ModelsMarketSection({
                   className="deck-avatar-tile"
                   style={{ '--avatar-hue': String(avatarHue(name)) } as CSSProperties}
                 >
-                  {avatarInitials(name)}
+                  {thumbs[name] ? (
+                    <img className="deck-avatar-img" src={thumbs[name]} alt="" draggable={false} />
+                  ) : (
+                    avatarInitials(name)
+                  )}
                 </span>
                 <span className="deck-avatar-name">{name}</span>
                 {owner ? <span className="deck-avatar-agent">{owner}</span> : null}
@@ -937,6 +983,7 @@ export function Deck() {
           slots: (event.slots as DeckState['slots']) ?? [],
           agents: (event.agents as string[]) ?? [],
           characters: (event.characters as string[]) ?? [],
+          characterModels: (event.characterModels as Record<string, string>) ?? {},
           activeCharacter: (event.activeCharacter as string) ?? '',
           agentCharacters: (event.agentCharacters as Record<string, string>) ?? {},
           relay: (event.relay as DeckState['relay']) ?? [],
@@ -1283,6 +1330,7 @@ export function Deck() {
 
         <ModelsMarketSection
           characters={state.characters}
+          characterModels={state.characterModels ?? {}}
           activeCharacter={state.activeCharacter}
           agentCharacters={state.agentCharacters}
           onAction={runAction}
