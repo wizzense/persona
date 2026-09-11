@@ -8,28 +8,29 @@ const ASSET_ROOT = path.join(PROJECT_ROOT, "public", "assets");
 const MANIFEST_PATH = path.join(ASSET_ROOT, "manifest.json");
 
 /**
- * The stable asset contract is the ONE file Desk redistributes and licenses
- * in its installer: the default character model. Everything else under
- * assets/ is per-user runtime media, never shipped:
+ * Desk redistributes NO character media. Owner decision, 2026-09-10: a model
+ * shipped by default is a licensing and content-moderation liability the app
+ * should never carry — the app directs users to VRoid Hub (or any VRM 1.0
+ * file they have the rights to) and loads what they enrolled themselves.
  *
- *   - animations/*.vrma — VRoid Hub "personality motions", downloaded through
- *     the user's own Hub license at character-enroll time (vroid-sync.py).
- *     Their redistribution terms are NOT ours to grant, so they are never
- *     committed and the packaged app ships without them; the animation
- *     loader tolerates their absence (useVrmAnimation.play catches and
- *     completes the once-callback).
- *   - model-slot<N>.vrm — per-slot runtime copies written by
- *     installCharacterToSlot() for spawned avatar slots.
+ * So the contract is the INVERSE of the one this file used to enforce:
  *
- * So validation is PRESENCE of the required asset (all-or-nothing in dev,
- * mandatory in release), never an equality against the whole directory —
- * the old equality check counted two stale slot models as undeclared assets
- * and broke `npm test` (measured 2026-08-25).
+ *   - `manifest.assets` is EMPTY, and stays empty;
+ *   - a RELEASE must have no `.vrm`/`.vrma` anywhere under assets/ — a local
+ *     model in a dev tree is normal runtime media (installCharacter* and
+ *     vroid-sync write `model.vrm`, `model-slot<N>.vrm` and
+ *     `animations/*.vrma` there), but it must not reach a package;
+ *   - dev accepts anything, because dev IS the user's own tree.
+ *
+ * The previous contract required exactly one redistributed asset (`model.vrm`,
+ * "Gyigi" by Robotnik) and released only when `distributionAllowed` was true;
+ * both the file and the flag are gone with it. Failing closed here means the
+ * gate REFUSES to package a tree that contains a model, rather than merely
+ * declining to require one — "ships no models" is a property a check has to
+ * assert, not a hope.
  */
-const EXPECTED_ASSETS = ["model.vrm"];
-const EXPECTED_ASSET_ROLES = {
-  "model.vrm": "model",
-};
+const EXPECTED_ASSETS = [];
+const EXPECTED_ASSET_ROLES = {};
 
 function listRuntimeAssets(directory = ASSET_ROOT, prefix = "") {
   if (!fs.existsSync(directory)) return [];
@@ -57,10 +58,12 @@ function validateAssets({
     return [`Cannot read assets/manifest.json: ${error.message}`];
   }
 
-  const manifestPaths = (manifest.assets ?? []).map((asset) => asset.path).sort();
-  const expected = [...EXPECTED_ASSETS].sort();
-  if (JSON.stringify(manifestPaths) !== JSON.stringify(expected)) {
-    errors.push("Asset manifest paths do not match Desk's stable asset contract.");
+  const declared = (manifest.assets ?? []).map((asset) => asset.path).sort();
+  if (JSON.stringify(declared) !== JSON.stringify([...EXPECTED_ASSETS].sort())) {
+    errors.push(
+      "Asset manifest declares redistributed assets — Desk ships no character models " +
+        `(found: ${declared.join(", ") || "none"}).`,
+    );
   }
   for (const asset of manifest.assets ?? []) {
     if (EXPECTED_ASSET_ROLES[asset.path] !== asset.role) {
@@ -68,37 +71,16 @@ function validateAssets({
     }
   }
 
-  // Dev accepts EITHER no media at all (a fresh checkout — the user enrolls a
-  // character at runtime) OR every required asset present AND non-empty. A
-  // present-but-empty file is media and must not pass.
-  const anyMedia = EXPECTED_ASSETS.some((relative) =>
-    fs.existsSync(path.join(assetRoot, relative)),
-  );
-  if (anyMedia || release) {
-    for (const relative of EXPECTED_ASSETS) {
-      const absolute = path.join(assetRoot, relative);
-      if (!fs.existsSync(absolute) || fs.statSync(absolute).size === 0) {
-        errors.push(`Missing or empty asset: ${relative}`);
-      }
-    }
-  }
-
   if (release) {
-    if (manifest.distributionAllowed !== true) {
+    // The one thing a package must never contain. Names every offending file,
+    // because "a model is present" without the path is a bad afternoon.
+    const media = listRuntimeAssets(assetRoot);
+    if (media.length > 0) {
       errors.push(
-        "Asset distribution is disabled. Complete the license metadata and set distributionAllowed to true.",
+        "A release may not contain character media: " +
+          `${media.join(", ")} under public/assets. Desk ships no models — ` +
+          "remove them before packaging (they are per-user runtime state).",
       );
-    }
-    for (const asset of manifest.assets ?? []) {
-      if (
-        typeof asset.license !== "string" ||
-        asset.license.trim() === "" ||
-        typeof asset.source !== "string" ||
-        asset.source.trim() === "" ||
-        asset.source === "local-test-only"
-      ) {
-        errors.push(`Incomplete release license metadata: ${asset.path ?? "unknown asset"}`);
-      }
     }
   }
   return errors;
@@ -113,8 +95,8 @@ if (require.main === module) {
   } else {
     console.log(
       release
-        ? "Desk assets are complete and marked for distribution."
-        : "Desk asset contract is valid (local character media may be absent).",
+        ? "Desk release carries no character media and declares none."
+        : "Desk asset contract is valid (local character media may be present; none of it is redistributed).",
     );
   }
 }

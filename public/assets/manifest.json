@@ -1,13 +1,5 @@
 {
   "schemaVersion": 1,
-  "distributionAllowed": true,
-  "notice": "The default character model is redistributed under the VRM 1.0 license recorded in its own embedded metadata (verified 2026-08-25 by direct glb inspection). Animations are per-user VRoid Hub downloads and are intentionally never shipped; see ASSET_LICENSES.md.",
-  "assets": [
-    {
-      "path": "model.vrm",
-      "role": "model",
-      "license": "VRM 1.0 embedded meta (https://vrm.dev/licenses/1.0/): commercialUsage=corporation, allowRedistribution=true, creditNotation=required",
-      "source": "VRoid Hub — 'Gyigi' v1.1 by Robotnik (contact: Discord baldy.mcnosehair)"
-    }
-  ]
+  "notice": "Desk ships no character models. A character is per-user media: enroll one from VRoid Hub (or any VRM 1.0 file you have the rights to) at runtime into characters/<slug>/, and it is never redistributed. Animations are per-user VRoid Hub downloads and are never shipped either; see ASSET_LICENSES.md.",
+  "assets": []
 }

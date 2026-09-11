@@ -9,6 +9,10 @@ Persona's first beta is under active development.
 - Transparent desktop presence with manual lifecycle, tray controls, shortcut,
   URL protocol, always-on-top behavior, zoom, orbit, and pan.
 - Short-silence speech holding and smooth animation crossfades.
-- Stable, replaceable model and animation slots with a strict release license
+- Bring your own character: no model ships with Desk. Enroll any VRM you have
+  the rights to — [VRoid Hub](https://hub.vroid.com/en/) is the guided path —
+  and it is stored per-user, never redistributed. The release gate fails
+  closed if a model is present.
+- Stable, replaceable model and animation slots with a strict release asset
   gate.
 - Linux, Windows, macOS arm64, and macOS x64 validation and release workflows.
