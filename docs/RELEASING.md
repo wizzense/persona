@@ -74,6 +74,7 @@ The release workflow:
 6. writes `SHA256SUMS.txt`; and
 7. publishes one GitHub Release with generated notes.
 
-As of the first beta (2026-08-25) the committed default model (Gyigi, VRM 1.0)
-is verified and licensed, so step 1 of the release workflow passes. The
-animations remain per-user VRoid Hub downloads and are never shipped.
+No character model is committed (owner decision, 2026-09-10), so step 1 of the
+release workflow asserts an EMPTY asset manifest and the absence of any
+`.vrm`/`.vrma` under `public/assets/` — it fails closed if one is present.
+Animations remain per-user VRoid Hub downloads and are never shipped either.
