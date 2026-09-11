@@ -119,7 +119,31 @@ check("open strictly supersets closed", () => {
 });
 
 check("closed roster is not empty", () => {
-  // An empty roster would satisfy every denial assertion above trivially.
+  // An empty roster would satisfy every denial assertion above trivially —
+  // but only a machine WITH a local roster can be short-changed by an empty
+  // one. On a box that has content packs and no characters/ (a publish tree,
+  // or any fresh checkout on a box where the packs were installed), a closed
+  // roster is legitimately empty, and failing here would report the machine's
+  // media layout as a broken gate (measured 2026-09-10: exactly that, red on
+  // the publish tree while CI — no packs, no roster — skipped green).
+  const { ROSTER_DIR } = require("./character-roster.cjs");
+  let devRoster;
+  try {
+    devRoster = fs
+      .readdirSync(ROSTER_DIR, { withFileTypes: true })
+      .filter(
+        (entry) =>
+          entry.isDirectory() &&
+          fs.existsSync(path.join(ROSTER_DIR, entry.name, "model.vrm")),
+      )
+      .map((entry) => entry.name);
+  } catch {
+    devRoster = [];
+  }
+  if (devRoster.length === 0) {
+    console.log("  skip closed roster is not empty (no local roster on this box)");
+    return;
+  }
   assert.ok(closed.length > 0, "closed roster is empty — the app has no characters");
 });
 

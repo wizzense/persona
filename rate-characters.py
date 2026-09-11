@@ -52,12 +52,13 @@ _ADULT_MARKERS = re.compile(
     re.IGNORECASE,
 )
 
-# Japanese markers need no [-_] word boundaries — slugs like りお28歳-全裸ver2-0
-# ("fully nude") and 真夏の夜のサキュバス ("succubus") sailed straight through the
-# ASCII list above and landed rating=general via the step-4 default, which is how
-# 2026-08-07's audit found R18 models one deploy away from the public roster.
-# Substring match is safe here: these tokens have no innocent compound uses in a
-# character-name context.
+# Japanese markers need no [-_] word boundaries: the ASCII list above matches
+# only romanized slugs, so Japanese-script names slipped through to the
+# step-4 default and were listed as "general" — measured 2026-08-07, which is
+# why this second pass exists. Substring match is safe here: these tokens have
+# no innocent compound uses in a character-name context. (Detection vocabulary
+# stays: a filter must contain what it filters. No roster name is repeated in
+# this file or in any other shipped file.)
 _ADULT_MARKERS_UNICODE = re.compile(
     r"全裸|おもらし|サキュバス|えっち|エロ|裸体|半裸|淫|痴女|絶頂|乳首|下着|"
     r"ランジェリー|セクシー|オナ|ふたなり"

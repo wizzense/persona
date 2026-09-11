@@ -23,16 +23,14 @@ Treat signed and notarized artifacts as the production release path.
 
 ## Before tagging
 
-1. Confirm the committed default model's EMBEDDED VRM meta permits corporate
-   commercial use and redistribution (character.json sidecars are not
-   licenses) — see `ASSET_LICENSES.md`.
-2. Confirm `public/assets/manifest.json` matches the committed model and
-   `ASSET_LICENSES.md` carries the required attribution (the shipped Gyigi
-   model requires credit — it is in the tray's About Desk item).
-3. `distributionAllowed` is `true` in the manifest.
-4. Update `version` in `package.json` and `package-lock.json`.
-5. Add release notes to `CHANGELOG.md`.
-6. Run:
+1. Desk ships no character models (owner decision, 2026-09-10) — confirm no
+   `.vrm`/`.vrma` is committed and `public/assets/manifest.json` declares no
+   assets. See `ASSET_LICENSES.md`.
+2. Confirm no model reached a dev tree's `public/assets/` and got staged: the
+   release gate below fails closed if one is present, but never stage one.
+3. Update `version` in `package.json` and `package-lock.json`.
+4. Add release notes to `CHANGELOG.md`.
+5. Run:
 
    ```bash
    npm ci
@@ -42,7 +40,7 @@ Treat signed and notarized artifacts as the production release path.
    npm run native:test
    ```
 
-7. Manually verify on Linux, Windows, macOS arm64, and macOS x64:
+6. Manually verify on Linux, Windows, macOS arm64, and macOS x64:
 
    - install and launch;
    - first-run system audio permission where applicable;
@@ -76,6 +74,7 @@ The release workflow:
 6. writes `SHA256SUMS.txt`; and
 7. publishes one GitHub Release with generated notes.
 
-As of the first beta (2026-08-25) the committed default model (Gyigi, VRM 1.0)
-is verified and licensed, so step 1 of the release workflow passes. The
-animations remain per-user VRoid Hub downloads and are never shipped.
+No character model is committed (owner decision, 2026-09-10), so step 1 of the
+release workflow asserts an EMPTY asset manifest and the absence of any
+`.vrm`/`.vrma` under `public/assets/` — it fails closed if one is present.
+Animations remain per-user VRoid Hub downloads and are never shipped either.

@@ -115,24 +115,27 @@ asset release gate passes. See [Releasing](docs/RELEASING.md).
 
 ## Character assets
 
-Desk ships exactly one redistributed asset: `public/assets/model.vrm`, the
-default character — "Gyigi" v1.1 by Robotnik, redistributed under the VRM 1.0
-license in its own embedded metadata (corporate commercial use permitted,
-redistribution allowed, **credit required** — the attribution lives in the
-tray's About Desk item and in [ASSET_LICENSES.md](ASSET_LICENSES.md)).
-
-Everything else under `assets/` is per-user runtime media, never shipped:
-
-- `animations/*.vrma` — VRoid Hub personality motions. They are downloaded
-  through the user's own VRoid Hub license when a character is enrolled, so a
-  fresh install has none; the avatar stays in its idle pose until then, and
-  enrolling any roster character fills the slots.
-- `model-slot<N>.vrm` — per-slot copies for spawned extra avatars.
-
-The stable asset contract (`scripts/check-assets.cjs`) requires exactly the
-licensed model, complete manifest metadata, and `distributionAllowed: true`
-before any release tag. See [Releasing](docs/RELEASING.md) and
+**Desk ships no character models.** Bring your own: grab one from
+[VRoid Hub](https://hub.vroid.com/en/) (or export one with
+[VRoid Studio](https://vroid.com/en/studio)) and enroll it — tray ▸
+**Characters ▸ Enroll newest Downloads .vrm**, `install-model.ps1 <file>`, or
+the VRoid Hub flow in the desk panel. It lands in `characters/<slug>/` and the
+app copies it into `public/assets/` to render; both are per-user and
+gitignored. Your model, your license — see
 [Asset licenses](ASSET_LICENSES.md).
+
+Everything under `assets/` is per-user runtime media, never shipped and never
+committed:
+
+- `model.vrm` / `model-slot<N>.vrm` — the enrolled character (and per-slot
+  copies for extra avatars), copied in at runtime.
+- `animations/*.vrma` — VRoid Hub personality motions, downloaded through the
+  user's own VRoid Hub license when a character is enrolled; a fresh install
+  has none and the avatar stays in its idle pose.
+
+The asset contract (`scripts/check-assets.cjs`) asserts this: `manifest.assets`
+is empty, and `npm run assets:release` **fails** if any `.vrm`/`.vrma` is
+present under `public/assets/`. See [Releasing](docs/RELEASING.md).
 
 ## Development
 

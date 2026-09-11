@@ -35,72 +35,10 @@ electron/**
 # Directory-level files (no wildcard, prevents deep matches)
 .github/workflows/**
 
-# Character directories - general-rated only (explicit list)
-# Adult-rated characters (r15/r18) have been moved to the content pack
-# (~/.aither/packs/persona-adult-pack-v1/) and are not present in dev tree
-characters/aiko-droid-base-model/**
-characters/asuka-yujitomoto/**
-characters/avatarsample_o/**
-characters/avatarsample_q_vrm10/**
-characters/blue_union/**
-characters/celisia-arcroid/**
-characters/celisia-arcroid1-0/**
-characters/charlie/**
-characters/clara-hsr-vrm-0-0/**
-characters/ctg-1-0-vrm-0---downloadable/**
-characters/demon-vrm-1-0/**
-characters/eld-1-0-vrm-0---downloadable/**
-characters/eld-1-0-vrm-1---downloadable/**
-characters/ellie-aftermath/**
-characters/fauntomé/**
-characters/fdl-1-0-vrm0---downloadable/**
-characters/fdl-1-0-vrm1---downloadable/**
-characters/fexa/**
-characters/fica/**
-characters/frenni-fredina-new/**
-characters/fu-xuan-vrm-0-0/**
-characters/gold-kitsune/**
-characters/golden-fredina/**
-characters/helen/**
-characters/helltaker-suit/**
-characters/herta-hsr-vrm-0-0/**
-characters/himeko-hsr-vrm-0-0/**
-characters/jing-yuan-hsr-vrm-0-0/**
-characters/kafka-hsr-vrm-0-0/**
-characters/kato-straight-title-robot-anime/**
-characters/kunoichi-100-triangle-meshes/**
-characters/lisa/**
-characters/mermaid/**
-characters/mpm-1-0-vrm0---downloadable/**
-characters/mpm-1-0-vrm1---downloadable/**
-characters/nonohuman未完成/**
-characters/orion/**
-characters/sample/**
-characters/silver-kitsune/**
-characters/siren-head/**
-characters/smg-1-0-vrm-1---downloadable/**
-characters/smg-3-0-vrm0---downloadable/**
-characters/synth-android/**
-characters/tfw-1-0-vrm0---downloadable/**
-characters/tfw-1-0-vrm1---downloadable/**
-characters/tfw-2-0-vrm0---downloadable/**
-characters/tfw-2-0-vrm1---downloadable/**
-characters/uchuujin/**
-characters/vfg-1-0-vrm0---downloadable/**
-characters/vivi_blackandwhite/**
-characters/vrm_chimodemisiki_lessermokuri/**
-characters/vrm-0---downloadable/**
-characters/vrm-0-0-まさよし/**
-characters/vrm-0-model/**
-characters/vrm-1---downloadable/**
-characters/vrm-1-0/**
-characters/vrm-1-model/**
-characters/vrm0-0/**
-characters/yasumi_v01/**
-characters/きわどい下着/**
-characters/ｺｯｼｮﾘたん/**
-characters/ドットきゃっと/**
-characters/ファッション水着/**
-characters/りお28歳-全裸ver2-0/**
-characters/真夏の夜のサキュバス-日焼けおもらし/**
-characters/通常版/**
+# Character directories — NONE ship.
+#
+# Deliberately no `characters/**` entries and no roster listing: characters/
+# is per-user runtime state (a VRM the user enrolled themselves), and this
+# file is public. A public build config must not enumerate anybody's roster;
+# an unmatched path is excluded, so the artifact is smaller, never leakier.
+# Desk ships no character models at all — see ASSET_LICENSES.md.
