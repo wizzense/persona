@@ -47,6 +47,7 @@
   .stage { position: relative; flex: 1; min-height: 0; background: #0a0c11; }
   .pane { position: absolute; inset: 0; border: 0; width: 100%; height: 100%; display: none; }
   .pane.active { display: block; }
+  .pane.hosted { background: #0a0c11; }
   .placeholder { position: absolute; inset: 0; display: none; align-items: center;
     justify-content: center; text-align: center; padding: 40px; color: var(--muted); }
   .placeholder.active { display: flex; }
@@ -107,6 +108,15 @@ function say(message) {
 function frameFor(pane) {
   let frame = document.getElementById("pane-" + pane.id);
   if (frame) return frame;
+  if (pane.hosted) {
+    // Main paints this one itself (its own session partition). The shell keeps an
+    // empty rectangle so the layout is identical and reports where it landed.
+    frame = document.createElement("div");
+    frame.id = "pane-" + pane.id;
+    frame.className = "pane hosted";
+    stage.appendChild(frame);
+    return frame;
+  }
   if (!pane.src) {
     // Main refused to resolve this pane (empty renderer base). Say so; never load
     // a relative "?deck=1", which would nest the console inside itself.
@@ -186,10 +196,25 @@ function render() {
   }
 }
 
+/** Tell main where each HOSTED pane should be, or that it is hidden. One message
+ *  per hosted pane every time, so a view can never be left painted over another. */
+function reportStage() {
+  for (const pane of panes) {
+    if (!pane.hosted) continue;
+    const showing = pane.id === selected && !detached.has(pane.id);
+    if (!showing) { void window.aitherConsole.stage(pane.id, null); continue; }
+    const r = stage.getBoundingClientRect();
+    void window.aitherConsole.stage(pane.id, {
+      x: r.left, y: r.top, width: r.width, height: r.height,
+    });
+  }
+}
+
 function select(paneId) {
   selected = paneId;
   say("");
   render();
+  reportStage();
 }
 
 async function refreshDetached() {
@@ -200,6 +225,7 @@ async function refreshDetached() {
     say(String(error && error.message ? error.message : error));
   }
   render();
+  reportStage();
 }
 
 async function detach(paneId) {
@@ -209,6 +235,7 @@ async function detach(paneId) {
   }
   detached = new Set((result && result.detached) || []);
   render();
+  reportStage();
 }
 
 async function reattach(paneId) {
@@ -218,6 +245,7 @@ async function reattach(paneId) {
   }
   detached = new Set((result && result.detached) || []);
   render();
+  reportStage();
 }
 
 btnDetach.addEventListener("click", () => selected && detach(selected));
@@ -228,6 +256,27 @@ document.getElementById("btn-close").addEventListener("click", () => window.aith
 // main every time this window regains focus. A rail that says "detached" over a
 // window that no longer exists strands the pane with no way back.
 window.addEventListener("focus", () => { void refreshDetached(); });
+// A hosted view is positioned in DEVICE pixels by main and knows nothing about
+// the window changing size -- without this it stays the old size over the new
+// layout, which looks like a frozen pane rather than a missing message.
+window.addEventListener("resize", () => { reportStage(); });
+
+// Main routing a surface here -- today a decision card, which used to spawn its
+// own Tk popup. `param` names one card; the pane is reloaded with it so "show me
+// THIS card" lands somewhere specific instead of merely opening the deck.
+window.aitherConsole.onFocus((payload) => {
+  if (!payload || !payload.pane) return;
+  const pane = panes.find((p) => p.id === payload.pane);
+  if (!pane) return;
+  if (payload.param && pane.src) {
+    const want = pane.src + (pane.src.includes("?") ? "&" : "?")
+      + "card=" + encodeURIComponent(payload.param);
+    const frame = document.getElementById("pane-" + pane.id);
+    if (frame && frame.tagName === "IFRAME" && frame.src !== want) frame.src = want;
+    else if (!frame) pane.src = want;
+  }
+  select(pane.id);
+});
 
 (async function start() {
   try {

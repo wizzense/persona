@@ -62,6 +62,15 @@ const PANES = Object.freeze([
     id: "fleet", label: "Fleet", hint: "Containers, VRAM, doors",
     kind: "file", file: "fleet-control.html",
   }),
+  // Slice 1 of COCKPIT-DESIGN: the unified session directory (daemon-owned
+  // sessions + DISCOVERED interactive Claude Code tabs), read-only with live
+  // tails. No detach wiring on purpose yet — a pane that cannot come back out
+  // yet also must not offer a Detach button that does nothing (callWindow
+  // answers "no open target" and the rail stays honest).
+  Object.freeze({
+    id: "sessions", label: "Sessions", hint: "Every Claude session, live",
+    kind: "file", file: "sessions.html",
+  }),
   Object.freeze({
     id: "cards", label: "Cards", hint: "Decisions waiting on you",
     kind: "view", query: "deck=1",
@@ -69,6 +78,17 @@ const PANES = Object.freeze([
   Object.freeze({
     id: "chat", label: "Chat", hint: "The company room",
     kind: "view", query: "chat=1",
+  }),
+  // 🚩 HOSTED, not framed, and the difference is the login. The AitherDesktop
+  // shell keeps its session in the persist:living-desktop partition -- that is
+  // where the vault-injected aither_auth_token lives and why the standalone
+  // window comes up signed in. An iframe inherits the CONSOLE's session, so a
+  // framed desktop would render signed-out beside a signed-in twin and read as
+  // "the desktop is broken". A WebContentsView carries the partition, so the
+  // pane and the window are one profile.
+  Object.freeze({
+    id: "desktop", label: "Desktop", hint: "The aitherium.com shell",
+    kind: "hosted", partition: "persist:living-desktop",
   }),
 ]);
 
@@ -87,6 +107,9 @@ function paneSources(rendererUrl) {
   const base = String(rendererUrl || "");
   return PANES.map((pane) => {
     if (pane.kind === "file") return { ...pane, src: `./${pane.file}` };
+    // A hosted pane has no src at all: main paints its own view over the stage
+    // rectangle the shell reports. The shell must NOT build an iframe for it.
+    if (pane.kind === "hosted") return { ...pane, src: null, hosted: true };
     // 🚩 An EMPTY base is refused rather than concatenated. "" + "?deck=1" is a
     // relative URL, so the pane would load console.html INTO ITSELF -- a console
     // inside a console inside a console, with no error anywhere. A pane that says
@@ -95,6 +118,21 @@ function paneSources(rendererUrl) {
     const src = base + (base.includes("?") ? "&" : "?") + pane.query;
     return { ...pane, src };
   });
+}
+
+/**
+ * The renderer base, from a FUNCTION or a plain string.
+ *
+ * 🚩 It took a function only, and passing a string degraded to "" -- which
+ * paneSources correctly refuses, so Cards and Chat came up as "has nowhere to
+ * load from" while Command and Fleet were fine. The contract was invisible and
+ * its violation looked like two broken panes, not a wrong argument. Measured by
+ * console-smoke.cjs, which passed a string on its first run.
+ */
+function resolveRendererUrl() {
+  if (typeof rendererUrlImpl === "function") return String(rendererUrlImpl() || "");
+  if (typeof rendererUrlImpl === "string") return rendererUrlImpl;
+  return "";
 }
 
 /** Which panes are currently living in their own window. */
@@ -125,13 +163,76 @@ function callWindow(paneId, verb) {
   return { ok: true, pane: paneId, detached: detachedIds() };
 }
 
+/** { <paneId>: WebContentsView } — built on first show, kept across pane switches. */
+const hostedViews = new Map();
+let hostedUrls = {};
+
+/**
+ * Attach or detach a hosted pane's view, and size it to the stage.
+ *
+ * Detaching REMOVES the child view rather than destroying it: the desktop shell
+ * is a full web app with a login and a socket, and rebuilding it on every rail
+ * click would make the console the slowest way to reach it -- which is how a
+ * unified window stops being used.
+ */
+function placeHosted(paneId, rect) {
+  const pane = PANES.find((p) => p.id === paneId && p.kind === "hosted");
+  if (!pane || !consoleWindow || consoleWindow.isDestroyed()) return false;
+  const { WebContentsView } = electron();
+  let view = hostedViews.get(paneId);
+  if (!rect) {
+    if (view) consoleWindow.contentView.removeChildView(view);
+    return true;
+  }
+  if (!view) {
+    const url = typeof hostedUrls[paneId] === "function" ? hostedUrls[paneId]() : "";
+    if (!url) return false;
+    view = new WebContentsView({
+      webPreferences: {
+        partition: pane.partition,
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+      },
+    });
+    // The same fence the shell carries: a hosted surface may not spawn windows.
+    view.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+    hostedViews.set(paneId, view);
+    void view.webContents.loadURL(url);
+  }
+  consoleWindow.contentView.addChildView(view);
+  view.setBounds({
+    x: Math.round(rect.x || 0),
+    y: Math.round(rect.y || 0),
+    width: Math.max(0, Math.round(rect.width || 0)),
+    height: Math.max(0, Math.round(rect.height || 0)),
+  });
+  return true;
+}
+
+function dropHostedViews() {
+  for (const view of hostedViews.values()) {
+    try {
+      view.webContents.close();
+    } catch {
+      // A view whose contents are already gone is the normal case on window close.
+    }
+  }
+  hostedViews.clear();
+}
+
 function wireIpc() {
   if (wired) return;
   wired = true;
 
   const { ipcMain } = electron();
-  ipcMain.handle("desk:console-panes", () =>
-    paneSources(typeof rendererUrlImpl === "function" ? rendererUrlImpl() : ""));
+  // The shell measures its own stage and reports it; main never guesses a layout
+  // it cannot see. `rect: null` means "this pane is not showing" -- the same
+  // message carries both, so a hidden view can never be left painted over a
+  // different pane.
+  ipcMain.handle("desk:console-stage", (_event, payload) =>
+    placeHosted(payload && payload.pane, (payload && payload.rect) || null));
+  ipcMain.handle("desk:console-panes", () => paneSources(resolveRendererUrl()));
   ipcMain.handle("desk:console-detach", (_event, paneId) => callWindow(paneId, "open"));
   ipcMain.handle("desk:console-reattach", (_event, paneId) => callWindow(paneId, "close"));
   ipcMain.handle("desk:console-detached", () => detachedIds());
@@ -149,9 +250,10 @@ function wireIpc() {
  *                     pane table stays testable without Electron.
  * @param rendererUrl  main.cjs's own resolver, for the same reason.
  */
-function showConsole({ windows = {}, rendererUrl = null } = {}) {
+function showConsole({ windows = {}, rendererUrl = null, urls = {}, autoShow = true } = {}) {
   windowsImpl = windows || {};
   rendererUrlImpl = rendererUrl;
+  hostedUrls = urls || {};
   wireIpc();
 
   if (consoleWindow && !consoleWindow.isDestroyed()) {
@@ -190,23 +292,59 @@ function showConsole({ windows = {}, rendererUrl = null } = {}) {
 
   // The same fence every other desk window carries.
   consoleWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  // The SHELL never navigates. `will-navigate` is main-frame-only in Electron
+  // (a pane's own navigation is `will-frame-navigate`), so this cannot strand a
+  // pane -- and it is written to fail CLOSED rather than keyed on event.frame,
+  // which would let every navigation through if that property ever went missing.
   consoleWindow.webContents.on("will-navigate", (event, url) => {
-    // Panes navigate inside their own frames; the SHELL never navigates.
-    if (event.frame === consoleWindow.webContents.mainFrame && !url.includes("console.html")) {
-      event.preventDefault();
-    }
+    if (!String(url).includes("console.html")) event.preventDefault();
   });
 
+  // autoShow:false is for the smoke test ONLY. A verification run that pops a
+  // window steals the owner's focus mid-game, which is how a useful check becomes
+  // one nobody is willing to run.
   consoleWindow.once("ready-to-show", () => {
+    if (!autoShow) return;
     consoleWindow.show();
     consoleWindow.focus();
   });
   consoleWindow.on("closed", () => {
+    dropHostedViews();
     consoleWindow = null;
   });
 
   void consoleWindow.loadFile(path.join(__dirname, "console.html"));
   return consoleWindow;
+}
+
+/**
+ * Raise the console ON a given pane -- the door the decision-card router uses.
+ *
+ * `param` reaches the pane as an extra query flag (a card id), so "show me THIS
+ * card" lands somewhere specific instead of merely opening the deck. Returns
+ * false when there is no console to land in, which is what makes the caller's
+ * fallback to the standalone popup a real ladder rather than a silent drop.
+ */
+function focusPane(paneId, param = null) {
+  const id = String(paneId || "");
+  if (!PANES.some((pane) => pane.id === id)) return false;
+  if (!consoleWindow || consoleWindow.isDestroyed()) return false;
+  const send = () => {
+    if (consoleWindow && !consoleWindow.isDestroyed()) {
+      consoleWindow.webContents.send("desk:console-focus", { pane: id, param: param || null });
+    }
+  };
+  // A console raised in the same breath is still loading; a send() into a page
+  // that has not run its script yet is dropped with no error at all.
+  if (consoleWindow.webContents.isLoading()) {
+    consoleWindow.webContents.once("did-finish-load", send);
+  } else {
+    send();
+  }
+  if (consoleWindow.isMinimized()) consoleWindow.restore();
+  consoleWindow.show();
+  consoleWindow.focus();
+  return true;
 }
 
 function isConsoleOpen() {
@@ -224,6 +362,8 @@ function __setWindowsForTest(windows) {
 
 module.exports = {
   showConsole,
+  focusPane,
+  placeHosted,
   closeConsole,
   isConsoleOpen,
   paneSources,

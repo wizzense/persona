@@ -18,7 +18,7 @@ const read = (name) => fs.readFileSync(path.join(HERE, name), "utf8");
 
 test("every pane resolves to a page that exists", () => {
   const panes = paneSources("http://127.0.0.1:5173");
-  assert.equal(panes.length, 4);
+  assert.equal(panes.length, 6);
   for (const pane of panes) {
     if (pane.kind !== "file") continue;
     assert.ok(
@@ -38,6 +38,19 @@ test("view panes carry the renderer base and their own query flag", () => {
   const withQuery = Object.fromEntries(paneSources("file:///d/dist/index.html?x=1")
     .map((p) => [p.id, p]));
   assert.equal(withQuery.cards.src, "file:///d/dist/index.html?x=1&deck=1");
+});
+
+test("the Desktop pane is HOSTED, never framed -- that is what carries the login", () => {
+  const desktop = paneSources("http://127.0.0.1:5173").find((p) => p.id === "desktop");
+  assert.equal(desktop.kind, "hosted");
+  assert.equal(desktop.src, null, "a hosted pane must give the shell no iframe src");
+  assert.equal(desktop.hosted, true);
+  // The partition is the whole reason it is hosted: an iframe would inherit the
+  // console's session and render signed-out beside a signed-in standalone window.
+  assert.equal(desktop.partition, "persist:living-desktop");
+  const source = fs.readFileSync(path.join(HERE, "living-desktop-window.cjs"), "utf8");
+  assert.match(source, /partition:\s*PARTITION/);
+  assert.match(source, /PARTITION\s*=\s*"persist:living-desktop"/);
 });
 
 test("an EMPTY renderer base is refused, never concatenated", () => {
@@ -133,4 +146,38 @@ test("console.html frames the panes and nothing else", () => {
   // Both halves of the mode are present in the shell.
   assert.match(html, /btn-detach/);
   assert.match(html, /btn-reattach/);
+});
+
+test("openConsole wires the pane handlers BEFORE it shows the window", () => {
+  // Both pane pages talk to main the moment they load -- fleet-control.html probes
+  // on load, command.html sends on the first Enter -- and those handlers used to be
+  // installed only as a side effect of creating the STANDALONE window. Opening the
+  // console first gave a Fleet pane of em-dashes (identical to a fleet that is
+  // genuinely down) and a Command pane that threw "No handler registered". Both
+  // surfaces look finished and answer nothing, which is why this is asserted on
+  // ORDER and not merely on presence.
+  const main = read("main.cjs");
+  const block = main.slice(main.indexOf("function openConsole()"));
+  const show = block.indexOf("showConsole({");
+  for (const call of ["ensureFleetIpc()", "ensureCommandIpc("]) {
+    const at = block.indexOf(call);
+    assert.ok(at !== -1, `openConsole must call ${call}`);
+    assert.ok(at < show, `${call} must run before showConsole`);
+  }
+  // A pane's own close button has no standalone window to close; without a
+  // fallback it is a dead control that reports nothing.
+  assert.ok(block.indexOf("setFleetCloseFallback(closeConsole)") < show);
+  assert.ok(block.indexOf("setCommandCloseFallback(closeConsole)") < show);
+});
+
+test("a hosted pane is hidden by a rect of NULL, not by being left painted", () => {
+  // A WebContentsView is painted by main over the shell, so hiding it is main's
+  // job. If the shell only reported a rect when a pane was showing, switching away
+  // would leave the desktop view sitting on top of whichever pane came next.
+  const html = read("console.html");
+  assert.match(html, /aitherConsole\.stage\(pane\.id, null\)/);
+  assert.match(html, /addEventListener\("resize"/);
+  const source = read("console-window.cjs");
+  assert.match(source, /partition: pane\.partition/);
+  assert.match(source, /removeChildView/);
 });

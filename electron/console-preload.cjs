@@ -25,6 +25,8 @@ if (href.includes("command.html")) {
   require("./command-preload.cjs");
 } else if (href.includes("fleet-control.html")) {
   require("./fleet-preload.cjs");
+} else if (href.includes("sessions.html")) {
+  require("./sessions-preload.cjs");
 } else if (!href.includes("console.html")) {
   // The renderer bundle: ?deck=1 and ?chat=1 both live here. Loaded ONLY for
   // those frames, because preload.cjs also installs middle-drag window-move
@@ -43,5 +45,15 @@ contextBridge.exposeInMainWorld("aitherConsole", {
   /** Which panes are currently detached — the console asks on focus, because the
    *  owner can close a detached window directly and the rail must not lie. */
   detached: () => ipcRenderer.invoke("desk:console-detached"),
+  /** Report where a HOSTED pane should be painted, or null when it is hidden.
+   *  Main owns the view; the shell owns the layout, and only it can measure it. */
+  stage: (pane, rect) => ipcRenderer.invoke("desk:console-stage",
+    { pane: String(pane), rect: rect || null }),
+  /** Main asks for a pane (a decision card arriving, a tray click). */
+  onFocus: (listener) => {
+    const handler = (_event, payload) => listener(payload);
+    ipcRenderer.on("desk:console-focus", handler);
+    return () => ipcRenderer.off("desk:console-focus", handler);
+  },
   close: () => ipcRenderer.send("desk:console-close"),
 });
