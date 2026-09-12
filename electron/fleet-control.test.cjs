@@ -205,3 +205,77 @@ test("FleetControl: a status verdict is enriched from the HOST with who holds th
   const st3 = await fc3.run("status");
   assert.equal("gpu_holders" in st3, false);
 });
+
+test("FleetControl: a CANNOT_JUDGE status retries once, and the retry's verdict wins", async () => {
+  // Measured 2026-09-12: a load-54 window held the Fleet pane at "?" while the
+  // fleet was UP (91 containers) -- podman ps has a 60 s timeout inside the
+  // distro script and the spike passes in seconds, so one retry earns its keep.
+  let calls = 0;
+  const fc = new FleetControl({
+    script: "C:/x/q.py",
+    statusRetries: 1,
+    retryDelayMs: 10,
+    spawnImpl: () => {
+      calls += 1;
+      if (calls === 1) {
+        return fakeChild({ stdout: '{"verdict": "CANNOT_JUDGE", "error": "podman ps timed out after 60 seconds"}', delay: 5 });
+      }
+      return fakeChild({ stdout: '{"fleet": {"running": 91, "masked": 0}, "held": false}', delay: 5 });
+    },
+  });
+  const lines = [];
+  fc.on("progress", (p) => lines.push(p.line));
+  const st = await fc.run("status");
+  assert.equal(calls, 2);
+  assert.equal(st.cannotJudge, undefined, "the retry's good verdict replaced the failure");
+  assert.equal(st.fleet.running, 91);
+  assert.ok(lines.some((l) => /retrying in/.test(l)), "the retry is visible in the log");
+});
+
+test("FleetControl: an exhausted retry carries the last GOOD numbers as stale, cannotJudge stays loud", async () => {
+  let calls = 0;
+  const fc = new FleetControl({
+    script: "C:/x/q.py",
+    statusRetries: 1,
+    retryDelayMs: 10,
+    spawnImpl: () => {
+      calls += 1;
+      if (calls === 1) {
+        return fakeChild({ stdout: '{"fleet": {"running": 91, "masked": 0}, "held": false, "vram": {"used_mib": 1000, "total_mib": 32607}}', delay: 5 });
+      }
+      return fakeChild({ stdout: '{"verdict": "CANNOT_JUDGE", "error": "podman ps timed out"}', delay: 5 });
+    },
+  });
+  const good = await fc.run("status");
+  assert.equal(good.fleet.running, 91);
+  const st = await fc.run("status");
+  assert.equal(st.cannotJudge, true, "could not look must stay LOUD -- never a healthy-looking verdict");
+  assert.equal(st.stale.verdict.fleet.running, 91, "the last good numbers ride along, labeled");
+  assert.ok(st.stale.age_ms >= 0);
+  assert.match(st.stale.reason, /timed out/);
+  assert.equal(calls, 3, "one retry was spent before the stale fallback");
+});
+
+test("FleetControl: no retry and no stale without a prior good status", async () => {
+  let calls = 0;
+  const fc = new FleetControl({
+    script: "C:/x/q.py",
+    statusRetries: 1,
+    retryDelayMs: 10,
+    spawnImpl: () => { calls += 1; return fakeChild({ stdout: '{"verdict": "CANNOT_JUDGE", "error": "no distro"}', delay: 5 }); },
+  });
+  const st = await fc.run("status");
+  assert.equal(st.cannotJudge, true);
+  assert.equal(st.stale, undefined, "nothing to be stale FROM");
+  assert.equal(calls, 2, "the one retry still ran");
+  // statusRetries=0 disables the patience entirely.
+  let calls0 = 0;
+  const fc0 = new FleetControl({
+    script: "C:/x/q.py",
+    statusRetries: 0,
+    spawnImpl: () => { calls0 += 1; return fakeChild({ stdout: '{"verdict": "CANNOT_JUDGE"}', delay: 5 }); },
+  });
+  const s0 = await fc0.run("status");
+  assert.equal(s0.cannotJudge, true);
+  assert.equal(calls0, 1, "no patience configured, no retry spent");
+});
