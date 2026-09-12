@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - "v*.*.*"
+  # The tag path startup-failed with ZERO jobs until 2026-09-12: this repo's
+  # Actions policy allows actions/* and verified creators only, and the publish
+  # job used softprops/action-gh-release (third-party) -- a disallowed action
+  # refuses the whole workflow at STARTUP, which is what a 0-job failure is.
+  # The release is created with the preinstalled gh CLI instead, so every
+  # `uses:` in this file is actions/*.
   workflow_dispatch:
 
 permissions:
@@ -107,15 +113,14 @@ jobs:
       - name: Write SHA-256 checksums
         run: node scripts/write-checksums.cjs release-artifacts
       - name: Create the GitHub release
-        uses: softprops/action-gh-release@v3
-        with:
-          generate_release_notes: true
-          prerelease: ${{ contains(github.ref_name, '-') }}
-          fail_on_unmatched_files: true
-          files: |
-            release-artifacts/*.AppImage
-            release-artifacts/*.deb
-            release-artifacts/*.dmg
-            release-artifacts/*.exe
-            release-artifacts/*.zip
-            release-artifacts/SHA256SUMS.txt
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          test -n "$(ls -A release-artifacts)" || { echo "no artifacts to release"; exit 1; }
+          extra=""
+          case "${GITHUB_REF_NAME}" in *-*) extra="--prerelease" ;; esac
+          gh release create "${GITHUB_REF_NAME}" release-artifacts/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "Desk ${GITHUB_REF_NAME}" \
+            --generate-notes ${extra}
