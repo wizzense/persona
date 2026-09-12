@@ -204,6 +204,11 @@ const startInBackground = process.argv.includes("--background");
  *  deterministic way to verify the deck live (restart with this flag, screenshot). */
 const deckIsRequested = process.argv.includes("--open-deck");
 const consoleIsRequested = process.argv.includes("--console");
+/** "Boot the real window, prove the renderer loads, exit" — the Release workflow
+ *  runs this against the INSTALLED app on every platform (job: package, step:
+ *  "Smoke test the installed app"), so a package that cannot start fails the
+ *  release, not the user's first launch. */
+const smokeIsRequested = process.argv.includes("--smoke");
 const protocolScheme = "desk";
 const debugEnabled = process.env.DESK_DEBUG === "1";
 
@@ -1514,7 +1519,38 @@ function createTray() {
   tray.on("click", toggleOverlay);
 }
 
-if (!app.requestSingleInstanceLock()) {
+/** `--smoke`: boot the REAL overlay window against the built renderer, then exit.
+ *  Prints one SMOKE-OK / SMOKE-FAIL line; exits 1 on createWindow throw, load
+ *  failure, renderer crash, or a 30 s timeout. The single-instance lock is
+ *  skipped in smoke so an already-running Desk cannot turn this into a FALSE
+ *  PASS — a second instance normally quits 0 without ever booting a window. */
+function runSmokeTest() {
+  const fail = (reason) => {
+    console.error(`SMOKE-FAIL desk: ${reason}`);
+    app.exit(1);
+  };
+  const timer = setTimeout(() => fail("timed out after 30s"), 30000);
+  let window;
+  try {
+    window = createWindow();
+  } catch (error) {
+    clearTimeout(timer);
+    fail(`createWindow threw: ${error?.message || error}`);
+    return;
+  }
+  const contents = window.webContents;
+  contents.once("did-fail-load", (_event, code, description, url) =>
+    fail(`did-fail-load ${code} ${description} ${url}`));
+  contents.once("render-process-gone", (_event, details) =>
+    fail(`render-process-gone ${details?.reason || "unknown"}`));
+  contents.once("did-finish-load", () => {
+    clearTimeout(timer);
+    console.log(`SMOKE-OK desk ${app.getVersion()}`);
+    app.exit(0);
+  });
+}
+
+if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   app.on("second-instance", (_event, argv) => {
@@ -1553,6 +1589,10 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.whenReady().then(async () => {
+    if (smokeIsRequested) {
+      runSmokeTest();
+      return;
+    }
     // Unpackaged runs (npx electron .) have no Start Menu shortcut registering
     // the AUMID, so Windows shows the RAW id as every toast's header — the
     // owner's decision-card notification read "com.xikhar.persona" instead of

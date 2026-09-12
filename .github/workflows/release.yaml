@@ -10,6 +10,10 @@ on:
   # refuses the whole workflow at STARTUP, which is what a 0-job failure is.
   # The release is created with the preinstalled gh CLI instead, so every
   # `uses:` in this file is actions/*.
+  #
+  # workflow_dispatch runs the full build + install-smoke matrix WITHOUT
+  # publishing: the publish job is tag-gated, and the tag/version check is
+  # skipped — a dispatch is how the smoke itself gets exercised.
   workflow_dispatch:
 
 permissions:
@@ -36,6 +40,7 @@ jobs:
       - name: Require distributable, licensed assets
         run: npm run assets:release
       - name: Require tag to match package version
+        if: github.ref_type == 'tag'
         run: node scripts/check-release-tag.cjs "${GITHUB_REF_NAME}"
 
   package:
@@ -80,6 +85,36 @@ jobs:
         run: npm run lint && npm test
       - name: Build native installer
         run: ${{ matrix.command }}
+      - name: Smoke test the installed app
+        if: matrix.platform == 'linux'
+        timeout-minutes: 10
+        run: |
+          set -e
+          sudo dpkg -i release/*.deb || sudo apt-get -y -f install
+          test -x /opt/Desk/desk
+          xvfb-run -a /opt/Desk/desk --no-sandbox --disable-gpu --smoke
+      - name: Smoke test the installed app
+        if: matrix.platform == 'windows'
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          $setup = (Get-ChildItem release/Desk-*-setup.exe | Select-Object -First 1).FullName
+          if (-not $setup) { throw "no installer found in release/" }
+          Start-Process -FilePath $setup -ArgumentList '/S' -Wait
+          $exe = Join-Path $env:LOCALAPPDATA 'Programs\Desk\Desk.exe'
+          if (-not (Test-Path $exe)) { throw "installed exe not found: $exe" }
+          $proc = Start-Process -FilePath $exe -ArgumentList '--disable-gpu','--smoke' -PassThru -Wait
+          if ($proc.ExitCode -ne 0) { throw "smoke failed with exit code $($proc.ExitCode)" }
+      - name: Smoke test the installed app
+        if: matrix.platform == 'macos'
+        timeout-minutes: 10
+        run: |
+          set -e
+          mkdir -p /tmp/desk-smoke
+          dmg=$(ls release/*.dmg | head -1)
+          hdiutil attach "$dmg" -nobrowse -readonly -mountpoint /tmp/desk-smoke
+          /tmp/desk-smoke/Desk.app/Contents/MacOS/Desk --disable-gpu --smoke
+          hdiutil detach /tmp/desk-smoke
       - name: Upload installers
         uses: actions/upload-artifact@v7
         with:
@@ -95,6 +130,7 @@ jobs:
 
   publish:
     name: Publish GitHub release
+    if: github.ref_type == 'tag'
     needs: package
     runs-on: ubuntu-latest
     steps:
