@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useLoader } from '@react-three/fiber';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
@@ -47,20 +47,31 @@ export function useVrmLoader(url: string): VRM | null {
     loader.register((parser) => new VRMLoaderPlugin(parser));
   });
 
-  return useMemo(() => {
-    const vrm = gltf.userData.vrm as VRM | undefined;
-    if (!vrm) return null;
-    VRMUtils.removeUnnecessaryVertices(vrm.scene);
-    VRMUtils.combineSkeletons(vrm.scene);
-    VRMUtils.combineMorphs(vrm);
-    VRMUtils.rotateVRM0(vrm);
-    applyDefaultSpringGravity(vrm);
-    // A diagnostic seam: the avatar window is a transparent overlay whose
-    // renderer exposes nothing else, so "why does the hair do that" was
-    // unanswerable without a live handle. CDP (electron
-    // --remote-debugging-port + scripts/cdp-shot.cjs) can now read spring
-    // state and toggle settings per chain and screenshot the result.
-    (window as unknown as { __deskVrm?: VRM }).__deskVrm = vrm;
-    return vrm;
+  const vrm = useMemo(() => {
+    const loaded = gltf.userData.vrm as VRM | undefined;
+    if (!loaded) return null;
+    VRMUtils.removeUnnecessaryVertices(loaded.scene);
+    VRMUtils.combineSkeletons(loaded.scene);
+    VRMUtils.combineMorphs(loaded);
+    VRMUtils.rotateVRM0(loaded);
+    applyDefaultSpringGravity(loaded);
+    return loaded;
   }, [gltf]);
+
+  // A diagnostic seam: the avatar window is a transparent overlay whose renderer
+  // exposes nothing else, so "why does the hair do that" was unanswerable
+  // without a live handle. CDP (electron --remote-debugging-port +
+  // scripts/cdp-shot.cjs) can read spring state, toggle settings per chain and
+  // screenshot the result. Assigned in an EFFECT on purpose — the react-hooks
+  // lint refuses global mutation from a hook body or useMemo, and the seam is
+  // not worth a lint exception (it failed the public mirror's CI once).
+  useEffect(() => {
+    const w = window as unknown as { __deskVrm?: VRM | null };
+    w.__deskVrm = vrm;
+    return () => {
+      if (w.__deskVrm === vrm) delete w.__deskVrm;
+    };
+  }, [vrm]);
+
+  return vrm;
 }
