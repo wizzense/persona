@@ -24,6 +24,7 @@ const { summarize: summarizeFleet, classify: classifyFleet } = require("./fleet-
 // second literal here is how a rename leaves the desk writing to a channel
 // nothing polls. relay-poller requires only node builtins, so this is not a cycle.
 const { MIRROR_CHANNEL } = require("./relay-poller.cjs");
+const { BackendResolver } = require("./backend-profile.cjs");
 
 const DEFAULT_CLAUDE_TIMEOUT_MS = 30 * 60 * 1000; // 30 min
 const RELAY_TIMEOUT_MS = 10 * 1000; // 10 s
@@ -121,8 +122,9 @@ function classifyCommand(text) {
 
 class CommandAgent extends EventEmitter {
   constructor({ fleetControl = null, spawnImpl = spawn, claudePath = null, relayPath = null,
-    transcriptFile = null } = {}) {
+    transcriptFile = null, backendResolver = undefined } = {}) {
     super();
+    this._backendResolver = backendResolver;
     this.fleetControl = fleetControl;
     this.spawnImpl = spawnImpl;
     // Injectable: the first test suite wrote to the OWNER's real transcript, so
@@ -153,6 +155,16 @@ class CommandAgent extends EventEmitter {
       this._relayPath = this.spawnImpl === spawn ? resolveBin("awrelay", "AWDESK_AWRELAY_BIN") : "awrelay";
     }
     return this._relayPath;
+  }
+
+  get backend() {
+    // A fake spawn (tests) gets NO resolver: tests must never shell out to pwsh,
+    // and the pre-fix behaviour (inherit the desk's env) is what several of them
+    // assert against. Same laziness rule as claudePath/relayPath above.
+    if (this._backendResolver === undefined) {
+      this._backendResolver = this.spawnImpl === spawn ? new BackendResolver() : null;
+    }
+    return this._backendResolver;
   }
 
   /**
@@ -291,6 +303,25 @@ class CommandAgent extends EventEmitter {
   }
 
   async _handleAgentCommand(id, text) {
+    // The backend the owner is paying for, resolved BEFORE the spawn. Without
+    // this the pane ran on the default Anthropic login and its whole history
+    // answered "You've hit your weekly limit" (measured 2026-09-12). Failure is
+    // rendered, never fatal: no resolver / no env -> inherit the desk's env,
+    // exactly the pre-fix behaviour, with a visible note saying so.
+    let backendEnv = {};
+    const resolver = this.backend;
+    if (resolver) {
+      const resolved = await resolver.resolve();
+      backendEnv = (resolved && resolved.env) || {};
+      this.emit("progress", {
+        id,
+        text: backendEnv.ANTHROPIC_BASE_URL
+          ? `[backend] ${resolved.profile} — ${backendEnv.ANTHROPIC_MODEL || "default model"}`
+          : `[backend] ${(resolved && resolved.profile) || "default"} NOT resolved `
+            + `(${(resolved && resolved.note) || "no detail"}) — using the desk's default login`,
+        phase: "run",
+      });
+    }
     return new Promise((resolve, reject) => {
       const systemPrompt =
         `You are dispatched from the awdesk Command window by the owner. ` +
@@ -313,6 +344,9 @@ class CommandAgent extends EventEmitter {
           cwd: "C:\\AitherOS-Fresh",
           stdio: ["ignore", "pipe", "pipe"],
           windowsHide: true,
+          // The resolved profile rides the spawn env — never a settings.json
+          // write, never a User-scope var: this process's children only.
+          env: { ...process.env, ...backendEnv },
         });
       } catch (error) {
         return reject(new Error(`Failed to spawn claude: ${error?.message || String(error)}`));

@@ -9,6 +9,7 @@ const test = require("node:test");
 const { signature, listOpen, actionableCount, watch, answerCard, cancelCard,
   steerCard,
 } = require("./decision-cards.cjs");
+const cards = require("./decision-cards.cjs");
 
 function tmpStore() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "desk-decisions-"));
@@ -216,4 +217,33 @@ test("the card writes report the SPAWN, not delivery -- the deck must not claim 
   // A spawn that THROWS is the only failure these can see.
   assert.equal(steerCard("d-1", "do the thing", () => { throw new Error("ENOENT"); }), false);
   assert.equal(answerCard("d-1", "yes", "", () => { throw new Error("ENOENT"); }), false);
+});
+
+// --- The card popup ladder (2026-09-08: "I WANT TO CONSOLIDATE AND DEDUPE") ---
+// A decision card had three unrelated homes. These arms pin the routed rungs only:
+// the FALLBACK rung deliberately spawns awask's real Tk window, so exercising it in
+// a test would open a window on the owner's desktop.
+
+test("a router that takes the card stops the popup from spawning", () => {
+  const seen = [];
+  cards.setWindowRouter((kind, id) => { seen.push([kind, id]); return true; });
+  try {
+    assert.equal(cards.openQueueWindow(), true);
+    assert.equal(cards.openCardWindow("card-7"), true);
+    assert.deepEqual(seen, [["queue", null], ["card", "card-7"]]);
+  } finally {
+    cards.setWindowRouter(null);
+  }
+});
+
+test("an empty card id is refused before the router is asked", () => {
+  let asked = false;
+  cards.setWindowRouter(() => { asked = true; return true; });
+  try {
+    assert.equal(cards.openCardWindow(""), false);
+    assert.equal(cards.openCardWindow(null), false);
+    assert.equal(asked, false, "an id-less card must never reach a surface");
+  } finally {
+    cards.setWindowRouter(null);
+  }
 });

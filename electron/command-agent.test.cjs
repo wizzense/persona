@@ -65,10 +65,12 @@ function claudeStream(text, { tools = [] } = {}) {
   return lines.map((o) => JSON.stringify(o)).join("\n") + "\n";
 }
 
-function agentWith({ claude = null, fleetControl = fakeFleetControl(), relay = null } = {}) {
+function agentWith({ claude = null, fleetControl = fakeFleetControl(), relay = null,
+  backendResolver = undefined } = {}) {
   const spawned = [];
   const agent = new CommandAgent({
     fleetControl,
+    backendResolver,
     transcriptFile: tmpTranscript(),
     spawnImpl: (cmd, args, opts) => {
       spawned.push({ cmd, args, opts });
@@ -269,4 +271,42 @@ test("CommandAgent: the relay mirror reports the relay's EXIT CODE, not merely t
   const sig = await killed._relayRequest("do a thing", "agent", { reply: "done", ok: true });
   assert.equal(sig.ok, false, "a killed relay did not post");
   assert.equal(sig.reason, "signal");
+});
+
+test("CommandAgent: the resolved backend env reaches the claude spawn", async () => {
+  // The pre-fix spawn inherited the desk's env: the default Anthropic login,
+  // which answered every command with "You've hit your weekly limit".
+  const resolver = {
+    resolve: async () => ({
+      ok: true,
+      profile: "deepseek",
+      env: { ANTHROPIC_BASE_URL: "https://api.deepseek.com/anthropic", ANTHROPIC_MODEL: "deepseek-v4-flash[1m]" },
+      note: "resolved",
+    }),
+  };
+  const progress = [];
+  const { agent, spawned } = agentWith({ backendResolver: resolver });
+  agent.on("progress", (p) => progress.push(p.text));
+  const result = await agent.run("do a thing", { source: "test" });
+  assert.equal(result.ok, true);
+  const claude = spawned.find((s) => s.cmd === "claude");
+  assert.equal(claude.opts.env.ANTHROPIC_BASE_URL, "https://api.deepseek.com/anthropic");
+  assert.equal(claude.opts.env.ANTHROPIC_MODEL, "deepseek-v4-flash[1m]");
+  assert.ok(progress.some((t) => /^\[backend\] deepseek — /.test(t)), "the window says which brain ran it");
+});
+
+test("CommandAgent: an unresolvable backend falls back to the inherited env, VISIBLY", async () => {
+  const resolver = {
+    resolve: async () => ({ ok: false, profile: "deepseek", env: {}, note: "vault unreachable" }),
+  };
+  const progress = [];
+  const { agent, spawned } = agentWith({ backendResolver: resolver });
+  agent.on("progress", (p) => progress.push(p.text));
+  const result = await agent.run("do a thing", { source: "test" });
+  assert.equal(result.ok, true, "a backend miss must never fail the command");
+  const claude = spawned.find((s) => s.cmd === "claude");
+  assert.equal(claude.opts.env.ANTHROPIC_BASE_URL, process.env.ANTHROPIC_BASE_URL,
+    "no override on failure -- the desk's env is inherited, exactly the pre-fix behaviour");
+  assert.ok(progress.some((t) => /\[backend\] deepseek NOT resolved .*vault unreachable/.test(t)),
+    "the fallback is a rendered state, not a silent one");
 });

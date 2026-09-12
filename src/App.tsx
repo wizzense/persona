@@ -13,6 +13,7 @@ import { ChatView } from './components/ChatView';
 import { Beads } from './components/Beads';
 import type { AnimationType } from './animation-catalog';
 import {
+  bridgeAnimationOverride,
   finishBodyAnimationOverride,
   resolveBodyAnimation,
   type BodyAnimationOverride,
@@ -140,14 +141,14 @@ function AvatarSceneApp() {
             animation: event.animation,
             requestId: event.requestId,
           });
-        } else if (typeof event.animation === 'string' && event.animation.startsWith('FILE:')) {
-          // FILE: animations are one-shots, treat like MCP overrides
-          setBodyOverride({
-            animation: event.animation,
-            requestId: Math.random(),
-          });
         } else {
-          setVoiceAnimation(event.animation as AnimationType);
+          // Bridge-posted (no MCP requestId): only IDLE/TALK may take over the
+          // looping voice slot. GREETING/HAPPY/DANCE/FILE: are one-shots that
+          // clear themselves — a looping GREETING walked the avatar in from
+          // off-screen every ~4.5 s forever (2026-09-10).
+          const override = bridgeAnimationOverride(event.animation);
+          if (override) setBodyOverride(override);
+          else setVoiceAnimation(event.animation as AnimationType);
         }
       } else if (event.type === 'spawn-avatar') {
         // Idempotent by slotId: main replays every tracked slot on each

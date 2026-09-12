@@ -34,13 +34,39 @@ let fleetControlInstance = null;
 
 let createFleetWindowImpl = null;
 
+/** What "close" means when there is no standalone window -- set by main to close
+ *  the console, which is the only other surface this page can be living in. */
+let closeFallback = null;
+
+function setCloseFallback(fn) {
+  closeFallback = typeof fn === "function" ? fn : null;
+}
+
+/**
+ * Wire the IPC without opening a window.
+ *
+ * 🚩 The console's Command pane loads command.html directly, so `desk:command-send`
+ * must have a handler BEFORE any standalone window is created. Without this the
+ * pane renders perfectly and the first message fails with "No handler registered
+ * for 'desk:command-send'" -- the surface looks finished and answers nothing.
+ */
+function ensureCommandIpc(fleetControl, { createFleetWindow = null } = {}) {
+  if (fleetControl) fleetControlInstance = fleetControl;
+  if (createFleetWindow) createFleetWindowImpl = createFleetWindow;
+  wireIpc();
+}
+
 function wireIpc() {
   if (ipcWired) return;
   ipcWired = true;
   ipcMain.handle("desk:command-send", (_event, text) => getAgent(fleetControlInstance).run(text, { source: "command-window" }));
   ipcMain.handle("desk:command-history", (_event, limit) => getAgent(fleetControlInstance).history(limit ?? 50));
   ipcMain.on("desk:command-close", () => {
-    if (commandWindow && !commandWindow.isDestroyed()) commandWindow.close();
+    if (commandWindow && !commandWindow.isDestroyed()) { commandWindow.close(); return; }
+    // No standalone window means the sender is the console's Command PANE, whose
+    // close button would otherwise be dead: the handler existed, found nothing to
+    // close, and returned -- a button that does nothing and says nothing.
+    if (typeof closeFallback === "function") closeFallback();
   });
   ipcMain.on("desk:command-open-fleet", () => {
     if (createFleetWindowImpl) createFleetWindowImpl();
@@ -85,4 +111,20 @@ function createCommandWindow(fleetControl, { createFleetWindow = null } = {}) {
   return commandWindow;
 }
 
-module.exports = { createCommandWindow, getAgent };
+/** Close the standalone window (the console's "reattach"). No-op when absent. */
+function closeCommandWindow() {
+  if (commandWindow && !commandWindow.isDestroyed()) commandWindow.close();
+}
+
+function isCommandWindowOpen() {
+  return Boolean(commandWindow && !commandWindow.isDestroyed());
+}
+
+module.exports = {
+  createCommandWindow,
+  ensureCommandIpc,
+  setCloseFallback,
+  closeCommandWindow,
+  isCommandWindowOpen,
+  getAgent,
+};

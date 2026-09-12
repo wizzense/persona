@@ -470,6 +470,124 @@ body {
   color: var(--bead-badge);
 }
 
+/* ── Avatar picker (owner, 2026-09-10: a 66-row text column is "just a long
+   list of avatars… not pleasant"). Cards on a scrollable grid, a stable hue
+   per character so the roster is scannable by shape and colour, and the whole
+   list lives inside the panel instead of pushing every section below it off
+   an 8000px page. ── */
+.deck-add-character {
+  margin-left: 8px;
+  vertical-align: middle;
+}
+
+.deck-avatar-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+  gap: 8px;
+  max-height: 42vh;
+  overflow-y: auto;
+  padding: 2px 2px 4px;
+  margin-bottom: 8px;
+}
+
+.deck-avatar-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 6px 8px;
+  background: var(--deck-panel);
+  border: 1px solid var(--deck-edge);
+  border-radius: 12px;
+  color: var(--deck-text);
+  cursor: pointer;
+  text-align: center;
+  transition: border-color 0.1s ease, transform 0.1s ease;
+}
+
+.deck-avatar-card:hover {
+  border-color: var(--deck-accent);
+  transform: translateY(-1px);
+}
+
+.deck-avatar-card.is-active {
+  border-color: var(--deck-accent);
+  box-shadow: inset 0 0 0 1px var(--deck-accent);
+}
+
+.deck-avatar-tile {
+  position: relative;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: 0.5px;
+  color: #fff;
+  background: linear-gradient(
+    135deg,
+    hsl(var(--avatar-hue, 220) 55% 46%),
+    hsl(calc(var(--avatar-hue, 220) + 38) 60% 30%)
+  );
+}
+
+/* The rendered preview IS the tile: it already carries the same hue gradient
+   (thumbnails.ts paints it), so it fills the square edge to edge. */
+.deck-avatar-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.deck-avatar-name {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: 10.5px;
+  line-height: 1.25;
+  color: var(--deck-soft);
+  overflow-wrap: anywhere;
+}
+
+.deck-avatar-agent {
+  font-size: 9px;
+  color: var(--deck-muted);
+}
+
+.deck-avatar-live {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  font-size: 8.5px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--deck-accent-fg);
+  background: var(--deck-accent);
+  border-radius: 999px;
+  padding: 1px 5px;
+}
+
+.deck-avatar-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  background: var(--deck-panel);
+  border: 1px dashed var(--deck-edge);
+  border-radius: 10px;
+  color: var(--deck-soft);
+  font-size: 12px;
+}
+
 .deck-icon-btn {
   border: none;
   background: transparent;

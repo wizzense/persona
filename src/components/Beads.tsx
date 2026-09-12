@@ -145,7 +145,7 @@ export function Beads() {
       <Bead label="Browse models" onLeftClick={() => void deck?.action('models')}>
         <ChipIcon />
       </Bead>
-      <Bead label="Talk to Aither" onLeftClick={() => void deck?.action('talk')}>
+      <Bead label="Chat" onLeftClick={() => void deck?.action('chat')}>
         <ChatIcon />
       </Bead>
       <Bead label="Desk panel" onLeftClick={() => deck?.open()}>

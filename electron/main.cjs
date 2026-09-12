@@ -39,8 +39,30 @@ const {
   getAnimationEventName,
   ANIMATION_EVENT_NAMES,
 } = require("./mcp-server.cjs");
-const { createFleetWindow, getControl: getFleetControl, fleetSummaryCached } = require("./fleet-window.cjs");
-const { createCommandWindow, getAgent: getCommandAgent } = require("./command-window.cjs");
+const {
+  createFleetWindow,
+  ensureFleetIpc,
+  setCloseFallback: setFleetCloseFallback,
+  closeFleetWindow,
+  isFleetWindowOpen,
+  getControl: getFleetControl,
+  fleetSummaryCached,
+} = require("./fleet-window.cjs");
+const {
+  createCommandWindow,
+  ensureCommandIpc,
+  setCloseFallback: setCommandCloseFallback,
+  closeCommandWindow,
+  isCommandWindowOpen,
+  getAgent: getCommandAgent,
+} = require("./command-window.cjs");
+const { showConsole, focusPane, closeConsole } = require("./console-window.cjs");
+const {
+  ensureSessionsIpc,
+  createSessionsWindow,
+  closeSessionsWindow,
+  isSessionsWindowOpen,
+} = require("./sessions-window.cjs");
 // The company room, both halves: the awdk daemon room (local, fleet-independent)
 // and the relay channels (#command / #agents) that the poller executes from.
 const { RoomPublisher } = require("./room-publisher.cjs");
@@ -62,6 +84,7 @@ const {
   listCharacters,
 } = require("./character-roster.cjs");
 const { invalidateGate, isHidden } = require("./content-rating.cjs");
+const { packContentDir } = require("./content-rating-loader.cjs");
 const fs = require("node:fs");
 const {
   getAgentAvatar,
@@ -77,6 +100,9 @@ const {
   setDeskStateProvider,
   showDesktopApp,
   showLivingDesktop,
+  closeDesktopApp,
+  desktopAppUrl,
+  isAppOpen,
 } = require("./living-desktop-window.cjs");
 const { openDetachedAvatar } = require("./detached-avatar-window.cjs");
 
@@ -177,6 +203,7 @@ const startInBackground = process.argv.includes("--background");
 /** "Open the Desk panel at startup" — the owner's quick path into the panel, and a
  *  deterministic way to verify the deck live (restart with this flag, screenshot). */
 const deckIsRequested = process.argv.includes("--open-deck");
+const consoleIsRequested = process.argv.includes("--console");
 const protocolScheme = "desk";
 const debugEnabled = process.env.DESK_DEBUG === "1";
 
@@ -577,6 +604,7 @@ function handleProtocolUrl(rawUrl) {
     else if (command.type === "toggle") toggleOverlay();
     else if (command.type === "fleet") createFleetWindow();
     else if (command.type === "command") createCommandWindow(getFleetControl(), { createFleetWindow });
+    else if (command.type === "console") openConsole();
     else if (command.type === "overlay") showLivingDesktop();
     else if (command.type === "desktop") showDesktopApp();
     else if (command.type === "event") handleBridgeEvent(command.event);
@@ -770,6 +798,7 @@ function popupAvatarMenu(slotId) {
     { label: agent ? `Talk to ${agent}` : "Talk to Aither", click: () => openTalkWindow() },
     { label: "Open agent tools", click: () => createDeckWindow() },
     { type: "separator" },
+    { label: "Aither Console…", click: () => openConsole() },
     { label: "Aither Command…", click: () => createCommandWindow(getFleetControl(), { createFleetWindow }) },
     { label: "Fleet control…", click: () => createFleetWindow() },
   ];
@@ -903,16 +932,59 @@ function buildCharacterMenu() {
 }
 
 /** Where characters come from (owner decision, 2026-09-10: Desk ships none).
- *  One function so the tray, the About box and any first-run prompt point at
- *  the SAME front door instead of three half-remembered URLs. */
+ *  One function so the tray, the About box, the first-run prompt and the
+ *  deck's "+ Add" all point at the SAME front door. */
 function openVroidHub() {
   void shell.openExternal("https://hub.vroid.com/en/");
+}
+
+/** Renderer-supplied character names address files under the roster, so they
+ *  are validated as SLUGS here: no separators, no traversal, no NUL. Every
+ *  caller treats a rejected name as "no such character". */
+function isValidCharacterName(name) {
+  return (
+    typeof name === "string" &&
+    name.length > 0 &&
+    name.length <= 128 &&
+    !name.includes("/") &&
+    !name.includes("\\") &&
+    !name.includes("\0") &&
+    name !== "." &&
+    name !== ".."
+  );
+}
+
+/** Where a visible character's model file lives (roster dir first, then the
+ *  content pack), as a file:// URL — the deck's preview renderer loads it.
+ *  Only main knows the real roster root, so the deck never builds these. */
+function characterModelUrl(name) {
+  if (!isValidCharacterName(name)) return null;
+  const candidates = [path.join(ROSTER_DIR, name, "model.vrm")];
+  try {
+    const packDir = packContentDir("persona:characters-mature", "persona");
+    if (packDir) candidates.push(path.join(packDir, "characters", name, "model.vrm"));
+  } catch {
+    /* no pack configured — roster only */
+  }
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate)) return pathToFileURL(candidate).href;
+    } catch {
+      /* an unreadable candidate is simply not this one */
+    }
+  }
+  return null;
+}
+
+/** Cached preview for a character (written by the deck after it renders one). */
+function characterThumbPath(name) {
+  return path.join(ROSTER_DIR, name, "thumbnail.jpg");
 }
 
 /** First run with an empty roster: Desk has nothing to render and — until now —
  *  said so nowhere. Asked ONCE per install (a marker file), never on every
  *  boot, and never blocking: the dialog is fire-and-forget. "Later" is a real
- *  answer; the tray keeps the same two entries forever. */
+ *  answer; the tray keeps the same entries forever. */
 function maybePromptForFirstCharacter() {
   try {
     if (listCharacters().length > 0) return;
@@ -1032,6 +1104,12 @@ function refreshTrayMenu() {
           : "Open the Desk panel",
         click: () => createDeckWindow(),
       },
+      {
+        // First on purpose (2026-09-08): the console is the front door, and the
+        // single-pane entries below it are now the DETACHED way in, not the only one.
+        label: "Aither Console (everything in one window)…",
+        click: () => openConsole(),
+      },
       { label: "Talk to Aither…", click: openTalkWindow },
       { label: "Browse models…", click: openModelBrowser },
       { label: "Media Forge", click: openMediaForge },
@@ -1112,6 +1190,15 @@ function deckState() {
     // agents WITH their assigned avatars, and the installed character roster
     // count — one stop for fleet/roster/avatars/settings, not a launch button.
     characters: listCharacters(),
+    // Where each character's model file actually LIVES, as a file:// URL the
+    // renderer can load. Only main knows the real roster root (it moves with
+    // DESK_ROSTER_DIR and differs in a packaged app), so the deck never
+    // constructs these paths itself — the thumbnail renderer consumes them.
+    characterModels: Object.fromEntries(
+      listCharacters()
+        .map((name) => [name, characterModelUrl(name)])
+        .filter(([, url]) => Boolean(url)),
+    ),
     activeCharacter: getActiveCharacter() || "",
     agentCharacters: Object.fromEntries(
       listAgents().map((agent) => [agent, getAgentAvatar(agent) || ""]),
@@ -1328,6 +1415,96 @@ async function commandAction(text, { source = "unknown" } = {}) {
   return agentInstance.run(text, { source });
 }
 
+/**
+ * The unified console: Command | Fleet | Cards | Chat in ONE window.
+ *
+ * Owner, 2026-09-08: "i would like a unified window with option to detach these
+ * including the decision cards -- cant seem to get a wrangle on all of these pop
+ * ups". Every creator below already existed; what did not exist was a host for
+ * them. The console does not replace them -- it hands each pane BACK to its own
+ * window on demand, and takes it back on reattach, which is why every entry
+ * carries all three of open/close/isOpen. A detach with no way back would leave
+ * the owner exactly where this started.
+ */
+function openConsole() {
+  // 🚩 Wire the pane handlers FIRST. Both pages talk to main the moment they load
+  // -- fleet-control.html probes on load, command.html sends on the first Enter --
+  // and their handlers used to be installed only as a side effect of creating the
+  // standalone window. Opening the console without ever having opened those
+  // windows produced a Fleet pane of em-dashes (identical to a fleet that is down)
+  // and a Command pane that failed with "No handler registered for
+  // 'desk:command-send'". Both surfaces LOOK finished while answering nothing.
+  ensureFleetIpc();
+  ensureCommandIpc(getFleetControl(), { createFleetWindow });
+  ensureSessionsIpc();
+  // And "close" inside a pane now closes the console, rather than looking for a
+  // standalone window that does not exist and silently doing nothing.
+  setFleetCloseFallback(closeConsole);
+  setCommandCloseFallback(closeConsole);
+  return showConsole({
+    rendererUrl,
+    windows: {
+      command: {
+        open: () => createCommandWindow(getFleetControl(), { createFleetWindow }),
+        close: closeCommandWindow,
+        isOpen: isCommandWindowOpen,
+      },
+      fleet: {
+        open: () => createFleetWindow(),
+        close: closeFleetWindow,
+        isOpen: isFleetWindowOpen,
+      },
+      sessions: {
+        open: () => createSessionsWindow(),
+        close: closeSessionsWindow,
+        isOpen: isSessionsWindowOpen,
+      },
+      cards: {
+        open: () => createDeckWindow(),
+        close: () => {
+          if (deckWindow && !deckWindow.isDestroyed()) deckWindow.close();
+        },
+        isOpen: () => Boolean(deckWindow && !deckWindow.isDestroyed()),
+      },
+      chat: {
+        open: () => createChatWindow(),
+        close: () => {
+          if (chatWindow && !chatWindow.isDestroyed()) chatWindow.close();
+        },
+        isOpen: () => Boolean(chatWindow && !chatWindow.isDestroyed()),
+      },
+      // The AitherDesktop shell -- the SAME aitherium.com desktop the standalone
+      // app window shows, hosted here on its own session partition so the two are
+      // one login rather than two. The OVERLAY is deliberately not a pane: it is a
+      // transparent, click-through surface over the whole Windows desktop, and a
+      // rectangle inside a window is not that. It stays a tray/protocol launcher.
+      desktop: {
+        open: () => showDesktopApp(),
+        close: () => closeDesktopApp(),
+        isOpen: () => isAppOpen(),
+      },
+    },
+    urls: { desktop: desktopAppUrl },
+  });
+}
+
+// The LAST independent popup source folds in (owner, 2026-09-08: "I WANT TO
+// CONSOLIDATE AND DEDUPE"). A decision card had three unrelated homes -- awask's
+// own Tk window, the deck panel, and now the console's Cards pane -- and none of
+// them knew the others existed, so answering a card in one left it sitting open
+// in another. The ladder is now explicit and every rung is a surface that already
+// exists: the deck window if the Cards pane is DETACHED into it, otherwise the
+// console, and awask's popup only when neither is there to take it.
+decisionCards.setWindowRouter((_kind, id) => {
+  if (deckWindow && !deckWindow.isDestroyed()) {
+    deckWindow.show();
+    deckWindow.focus();
+    return true;
+  }
+  openConsole();
+  return focusPane("cards", id);
+});
+
 function createTray() {
   const iconPath = path.join(__dirname, "..", "build", "icon.png");
   const icon = nativeImage.createFromPath(iconPath).resize({ width: 20, height: 20 });
@@ -1349,6 +1526,10 @@ if (!app.requestSingleInstanceLock()) {
     }
     if (argv.includes("--fleet")) {
       createFleetWindow();
+      return;
+    }
+    if (argv.includes("--console")) {
+      openConsole();
       return;
     }
     if (argv.includes("--command")) {
@@ -1448,6 +1629,37 @@ if (!app.requestSingleInstanceLock()) {
     // (MCP to the local gateway, session bearer — same story as relay).
     ipcMain.handle("desk:market-browse", (_event, query) =>
       marketClient.browse(typeof query === "string" ? query : "", "", 24));
+    // Avatar previews (owner, 2026-09-10: "let it give real previews"): the
+    // deck asks for a character's cached preview and hands back one it just
+    // rendered offscreen. Names are slug-validated — the renderer never names
+    // a path. A thumb read/write failure is never fatal: the card falls back
+    // to its monogram tile.
+    ipcMain.handle("desk:character-thumb", (_event, name) => {
+      if (!isValidCharacterName(name)) return null;
+      try {
+        const file = characterThumbPath(name);
+        if (!fs.existsSync(file)) return null;
+        return `data:image/jpeg;base64,${fs.readFileSync(file).toString("base64")}`;
+      } catch {
+        return null;
+      }
+    });
+    ipcMain.handle("desk:save-character-thumb", (_event, name, dataUrl) => {
+      if (!isValidCharacterName(name)) return false;
+      const prefix = "data:image/jpeg;base64,";
+      if (typeof dataUrl !== "string" || !dataUrl.startsWith(prefix)) return false;
+      const base64 = dataUrl.slice(prefix.length);
+      // A 256x256 JPEG of a face is ~10-30 KB; 2 MB is a generous ceiling that
+      // still refuses a renderer bug trying to write a model file here.
+      if (base64.length === 0 || base64.length > 2 * 1024 * 1024) return false;
+      try {
+        fs.writeFileSync(characterThumbPath(name), Buffer.from(base64, "base64"));
+        return true;
+      } catch (error) {
+        debugLog("thumbnail write failed", name, error);
+        return false;
+      }
+    });
     // The per-avatar direct chat READ side: every reply under one message
     // (the thread = the conversation with that agent). [] on any failure.
     ipcMain.handle("desk:relay-thread", (_event, messageId) =>
@@ -1560,8 +1772,39 @@ if (!app.requestSingleInstanceLock()) {
           void shell.openExternal(arg);
           return true;
         }
+        case "add-character": {
+          // One place that answers "how do I get another avatar?" (owner,
+          // 2026-09-10). Desk ships no models, so this IS the first-run path
+          // too: the empty-roster card and the tray menu both land here.
+          const win = BrowserWindow.fromWebContents(_event.sender);
+          const addMenu = Menu.buildFromTemplate([
+            {
+              label: "Enroll newest Downloads .vrm",
+              click: () => {
+                const name = enrollNewestDownload();
+                if (name) applyCharacter(name);
+                else debugLog("no .vrm found in Downloads to enroll");
+              },
+            },
+            { label: "Get a model from VRoid Hub…", click: openVroidHub },
+            {
+              label: "Open characters folder",
+              click: () => {
+                fsMkdirSafe(ROSTER_DIR);
+                void shell.openPath(ROSTER_DIR);
+              },
+            },
+          ]);
+          if (win && !win.isDestroyed()) addMenu.popup({ window: win });
+          return true;
+        }
         case "chat":
           createChatWindow();
+          return true;
+        // The unified console -- Command | Fleet | Cards | Chat in one window,
+        // each pane detachable (owner, 2026-09-08).
+        case "console":
+          openConsole();
           return true;
         // The two control-plane windows, one click from the deck (owner,
         // 2026-09-08: "no way for me to easily launch aither command").
@@ -1924,6 +2167,7 @@ if (!app.requestSingleInstanceLock()) {
       showOverlay({ focus: true });
     }
     if (deckIsRequested) createDeckWindow();
+    if (consoleIsRequested) openConsole();
   });
 }
 

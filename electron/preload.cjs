@@ -35,6 +35,12 @@ contextBridge.exposeInMainWorld("deskBridge", {
     marketBrowse: (query) => ipcRenderer.invoke("desk:market-browse", query ?? ""),
     // Per-avatar direct chat: the thread under an agent's message.
     relayThread: (messageId) => ipcRenderer.invoke("desk:relay-thread", messageId ?? ""),
+    // Avatar previews: read a character's cached thumbnail (data URL or null),
+    // and store one the deck just rendered offscreen. Names are validated as
+    // slugs on the main side.
+    characterThumb: (name) => ipcRenderer.invoke("desk:character-thumb", name ?? ""),
+    saveCharacterThumb: (name, dataUrl) =>
+      ipcRenderer.invoke("desk:save-character-thumb", name ?? "", dataUrl ?? ""),
   },
   // Full system awareness (#9): the five snapshot sources the System section
   // renders. Read-only; every one fails soft to ok:true + ERROR notes.

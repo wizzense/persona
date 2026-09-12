@@ -150,11 +150,19 @@ function classify(status) {
 }
 
 class FleetControl extends EventEmitter {
-  constructor({ spawnImpl = spawn, script, distro, gpuHolders = null, surfaces = null } = {}) {
+  constructor({ spawnImpl = spawn, script, distro, gpuHolders = null, surfaces = null,
+    statusRetries = 1, retryDelayMs = 8000 } = {}) {
     super();
     this.spawnImpl = spawnImpl;
     this.script = script;
     this.distro = distro;
+    // Patience for the STATUS probe only (actions are long and deliberate by
+    // design; retrying those would be retrying the owner's click). The probe is
+    // load-sensitive -- podman ps has a 60 s timeout INSIDE the distro script,
+    // and on 2026-09-12 a load-54 window held the Fleet pane at "?" while the
+    // fleet was up with 91 containers. A spike usually passes within seconds.
+    this.statusRetries = Math.max(0, Number(statusRetries) || 0);
+    this.retryDelayMs = Math.max(0, Number(retryDelayMs) || 0);
     // Host-side enrichment of a `status` verdict: who holds the VRAM (Windows
     // counters — invisible from inside the distro) and whether the control-plane
     // doors answer. Injectable; a fake spawn gets no host probes unless asked.
@@ -193,13 +201,25 @@ class FleetControl extends EventEmitter {
     this.current = { action, startedAt: Date.now() };
     this.emit("progress", { action, line: `> ${action}`, phase: "start" });
     this.inflight = new Promise((resolve) => {
-      let child;
       const finish = (verdict) => {
         this.current = null;
         this.inflight = null;
         if (action === "status" && !verdict.cannotJudge) {
           this.lastStatus = verdict;
           this.lastStatusAt = Date.now();
+        }
+        if (action === "status" && verdict.cannotJudge && this.lastStatus) {
+          // NEVER a number without its age. The counts ride along from the last
+          // GOOD probe, labeled with how old they are and why the fresh one
+          // failed; `cannotJudge` STAYS TRUE so every consumer (tray, MCP, awsh)
+          // still reads "could not judge" loudly. "Could not look" must not
+          // read as "healthy" -- that rule is why this class exists.
+          verdict.stale = {
+            age_ms: Date.now() - this.lastStatusAt,
+            at: this.lastStatusAt,
+            reason: verdict.error || null,
+            verdict: this.lastStatus,
+          };
         }
         this.emit("progress", {
           action,
@@ -209,51 +229,64 @@ class FleetControl extends EventEmitter {
         });
         resolve(verdict);
       };
-      try {
-        child = this.spawnImpl(cmd.file, cmd.args, { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
-      } catch (error) {
-        finish({ ok: false, cannotJudge: true, error: error?.message || String(error) });
-        return;
-      }
-      let stdout = "";
-      let stderrTail = "";
-      let stderrBuf = "";
-      const timer = setTimeout(() => {
-        try { child.kill(); } catch { /* already gone */ }
-        stderrTail += `\n[timeout after ${TIMEOUT_MS[action] / 1000} s]`;
-      }, TIMEOUT_MS[action] ?? 600_000);
-      timer.unref?.();
-      child.stdout?.on("data", (chunk) => { stdout += chunk.toString("utf8"); });
-      child.stderr?.on("data", (chunk) => {
-        stderrBuf += chunk.toString("utf8");
-        const lines = stderrBuf.split(/\r?\n/);
-        stderrBuf = lines.pop() ?? "";
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          stderrTail = (stderrTail + "\n" + line).slice(-2000);
-          this.emit("progress", { action, line, phase: "run" });
-        }
-      });
-      child.on("error", (error) => {
-        clearTimeout(timer);
-        finish({ ok: false, cannotJudge: true, error: error?.message || String(error) });
-      });
-      child.on("close", (code) => {
-        clearTimeout(timer);
-        if (stderrBuf.trim()) {
-          stderrTail = (stderrTail + "\n" + stderrBuf).slice(-2000);
-          this.emit("progress", { action, line: stderrBuf.trim(), phase: "run" });
-        }
-        const verdict = parseVerdict(stdout, code ?? 1, stderrTail);
-        if (action !== "status") {
-          finish(verdict);
+      const attempt = (retriesLeft) => {
+        let child;
+        try {
+          child = this.spawnImpl(cmd.file, cmd.args, { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+        } catch (error) {
+          finish({ ok: false, cannotJudge: true, error: error?.message || String(error) });
           return;
         }
-        // Enrich a status verdict from the HOST before it lands anywhere: the
-        // window, the bridge, awsh, adk and the MCP tool all read this one
-        // object, so the holders and the doors show up everywhere at once.
-        this._enrichStatus(verdict).then(finish, () => finish(verdict));
-      });
+        let stdout = "";
+        let stderrTail = "";
+        let stderrBuf = "";
+        const timer = setTimeout(() => {
+          try { child.kill(); } catch { /* already gone */ }
+          stderrTail += `\n[timeout after ${TIMEOUT_MS[action] / 1000} s]`;
+        }, TIMEOUT_MS[action] ?? 600_000);
+        timer.unref?.();
+        child.stdout?.on("data", (chunk) => { stdout += chunk.toString("utf8"); });
+        child.stderr?.on("data", (chunk) => {
+          stderrBuf += chunk.toString("utf8");
+          const lines = stderrBuf.split(/\r?\n/);
+          stderrBuf = lines.pop() ?? "";
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            stderrTail = (stderrTail + "\n" + line).slice(-2000);
+            this.emit("progress", { action, line, phase: "run" });
+          }
+        });
+        child.on("error", (error) => {
+          clearTimeout(timer);
+          finish({ ok: false, cannotJudge: true, error: error?.message || String(error) });
+        });
+        child.on("close", (code) => {
+          clearTimeout(timer);
+          if (stderrBuf.trim()) {
+            stderrTail = (stderrTail + "\n" + stderrBuf).slice(-2000);
+            this.emit("progress", { action, line: stderrBuf.trim(), phase: "run" });
+          }
+          const verdict = parseVerdict(stdout, code ?? 1, stderrTail);
+          if (action === "status" && verdict.cannotJudge && retriesLeft > 0) {
+            this.emit("progress", {
+              action,
+              line: `status: cannot judge (${verdict.error || "no verdict"}) — retrying in ${Math.round(this.retryDelayMs / 1000)} s`,
+              phase: "run",
+            });
+            setTimeout(() => attempt(retriesLeft - 1), this.retryDelayMs).unref?.();
+            return;
+          }
+          if (action !== "status") {
+            finish(verdict);
+            return;
+          }
+          // Enrich a status verdict from the HOST before it lands anywhere: the
+          // window, the bridge, awsh, adk and the MCP tool all read this one
+          // object, so the holders and the doors show up everywhere at once.
+          this._enrichStatus(verdict).then(finish, () => finish(verdict));
+        });
+      };
+      attempt(action === "status" ? this.statusRetries : 0);
     });
     return this.inflight;
   }

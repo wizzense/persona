@@ -234,17 +234,50 @@ function runAwask(args, spawnFn = spawn) {
 }
 
 /**
- * Open the shared queue window. Detached so Desk never holds the window's
- * lifetime, windowless spawn so nothing flashes (the gate-1t class).
+ * Where a card surface should OPEN.
+ *
+ * Owner, 2026-09-08, on being shown the console: "I WANT TO CONSOLIDATE AND DEDUPE".
+ * The awask Tk window was the last independent popup source on this box -- a third
+ * place decision cards could appear, alongside the deck panel and the console's
+ * Cards pane, none of which knew about the others. So these two functions no longer
+ * decide; they ASK. main.cjs installs a router that lands the card in the console,
+ * and only if the router declines (no console, or it failed) does the Tk window
+ * spawn. Nothing is removed: the popup is still the fallback and still what awask
+ * itself opens for other sessions.
+ */
+let windowRouter = null;
+
+/** @param fn (kind: "queue"|"card", id: string|null) => boolean -- true = handled. */
+function setWindowRouter(fn) {
+  windowRouter = typeof fn === "function" ? fn : null;
+}
+
+function routed(kind, id) {
+  if (!windowRouter) return false;
+  try {
+    return windowRouter(kind, id) === true;
+  } catch {
+    // A throwing router must not swallow the card: fall through to the popup,
+    // which is the whole reason the fallback was kept.
+    return false;
+  }
+}
+
+/**
+ * Open the shared queue. The console's Cards pane first; the detached Tk window
+ * only if nothing hosted it. Detached so Desk never holds the window's lifetime,
+ * windowless spawn so nothing flashes (the gate-1t class).
  */
 function openQueueWindow() {
+  if (routed("queue", null)) return true;
   return runAwask(["window"]);
 }
 
-/** Open ONE card's own pop-out answer window (the flipper's "Pop out" button —
- *  the Tk surface stays reachable FROM the deck, one card at a time). */
+/** Open ONE card. Same ladder: the console's Cards pane, else that card's own Tk
+ *  pop-out (the flipper's "Pop out" button, one card at a time). */
 function openCardWindow(id) {
   if (typeof id !== "string" || id.length === 0) return false;
+  if (routed("card", id)) return true;
   return runAwask(["window", id]);
 }
 
@@ -325,6 +358,7 @@ module.exports = {
   listOpen,
   triageCard,
   actionableCount,
+  setWindowRouter,
   openQueueWindow,
   openCardWindow,
   answerCard,

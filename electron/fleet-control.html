@@ -66,7 +66,7 @@
   #log { margin: 0 18px 10px; background: #0a0c11; border: 1px solid var(--line); border-radius: 10px;
     padding: 10px 12px; overflow: auto; font: 12px/1.5 ui-monospace, Consolas, monospace; color: #b8c0d0;
     white-space: pre-wrap; min-height: 80px; }
-  #log .err { color: #ff8b8f; } #log .ok { color: #7ee2a8; } #log .cmd { color: #9ec1ff; }
+  #log .err { color: #ff8b8f; } #log .warn { color: #f5a524; } #log .ok { color: #7ee2a8; } #log .cmd { color: #9ec1ff; }
   footer { padding: 8px 18px 12px; color: var(--muted); font-size: 11px; display: flex; gap: 12px; }
   footer code { color: #b8c0d0; }
   @media (max-width: 520px) { .stats { grid-template-columns: repeat(2, 1fr); } }
@@ -151,6 +151,11 @@
     log.scrollTop = log.scrollHeight;
   }
 
+  let probing = false;
+  let everProbed = false;
+  /** What an empty box should say: nothing has run, or something is running now. */
+  function emptyState() { return probing ? "probing…" : "not probed yet"; }
+
   function classify(st) {
     if (!st || st.cannotJudge) return "UNKNOWN";
     const fl = st.fleet || {};
@@ -174,7 +179,7 @@
     const box = $("holders");
     while (box.childElementCount > 1) box.removeChild(box.lastChild);
     if (!Array.isArray(holders)) {
-      box.appendChild(el("div", "none", error ? `not readable: ${error}` : "not probed yet"));
+      box.appendChild(el("div", "none", error ? `not readable: ${error}` : emptyState()));
       return;
     }
     if (holders.length === 0) {
@@ -196,7 +201,7 @@
     const box = $("surfaces");
     while (box.childElementCount > 1) box.removeChild(box.lastChild);
     if (!Array.isArray(rows) || rows.length === 0) {
-      box.appendChild(el("span", "surface", "not probed yet"));
+      box.appendChild(el("span", "surface", emptyState()));
       return;
     }
     for (const s of rows) {
@@ -212,18 +217,29 @@
   }
 
   function render(st) {
-    const fl = (st && st.fleet) || {};
-    $("s-running").textContent = fl.running == null ? "?" : fl.running;
-    $("s-masked").innerHTML = fl.masked == null ? "?" : `${fl.masked} <small>/ ${fl.units ?? "?"}</small>`;
-    const v = st && st.vram;
-    $("s-vram").innerHTML = v ? `${(v.used_mib / 1024).toFixed(1)} <small>/ ${(v.total_mib / 1024).toFixed(0)} GiB</small>` : "?";
-    $("s-hold").textContent = st && st.cannotJudge ? "?" : (st && st.held ? "HELD" : "free");
-    renderHolders(st && st.gpu_holders, st && st.gpu_holders_error);
-    renderSurfaces(st && st.surfaces);
+    // A stale verdict carries the last GOOD numbers with their age and the
+    // reason the fresh probe failed. Bare "?" with no context was the owner's
+    // 2026-09-12 screenshot: the pane read as broken while the fleet was UP --
+    // the numbers exist even when the newest probe could not fetch them.
+    const stale = st && st.cannotJudge && st.stale ? st.stale : null;
+    const src = stale ? stale.verdict : st;
+    const fl = (src && src.fleet) || {};
+    const age = stale ? ` <small>· ${Math.round(stale.age_ms / 1000)} s ago</small>` : "";
+    $("s-running").innerHTML = fl.running == null ? "?" : `${fl.running}${age}`;
+    $("s-masked").innerHTML = fl.masked == null ? "?" : `${fl.masked} <small>/ ${fl.units ?? "?"}</small>${age}`;
+    const v = src && src.vram;
+    $("s-vram").innerHTML = v ? `${(v.used_mib / 1024).toFixed(1)} <small>/ ${(v.total_mib / 1024).toFixed(0)} GiB</small>${age}` : "?";
+    $("s-hold").textContent = src && src.cannotJudge ? "?" : (src && src.held ? "HELD" : "free");
+    renderHolders(src && src.gpu_holders, src && src.gpu_holders_error);
+    renderSurfaces(src && src.surfaces);
     const state = busy ? "BUSY" : classify(st);
     pill.dataset.state = state;
     pill.textContent = busy ? `RUNNING: ${busy.toUpperCase()}` : state;
-    if (st && st.cannotJudge) line(`CANNOT JUDGE: ${st.error || "no verdict"}`, "err");
+    if (stale) {
+      line(`STALE (${Math.round(stale.age_ms / 1000)} s old — fresh probe failed: ${stale.reason || "cannot judge"})`, "warn");
+    } else if (st && st.cannotJudge) {
+      line(`CANNOT JUDGE: ${st.error || "no verdict"}`, "err");
+    }
     // Adopt only makes sense when masks exist but nothing recorded them.
     // Adopt = masks exist that no record explains (a hand-stopped fleet).
     const rec = (st && st.state) || {};
@@ -245,11 +261,22 @@
     clearTimeout(armTimer);
   }
 
+  // 🚩 "not probed yet" and "a probe is running RIGHT NOW" are different states and
+  // read identically. The first probe walks the distro, seven doors and the GPU
+  // counters -- seconds -- and a window of em-dashes with no sign of life reads as
+  // broken (owner screenshot, 2026-09-08). One flag, and the empty states say which.
   async function refresh(force) {
-    const st = await window.fleet.status(force ? { maxAgeMs: 0 } : {});
-    if (st && st.busy && st.busy !== "status" && !busy) setBusy(st.busy);
-    render(st);
-    return st;
+    probing = true;
+    if (!everProbed) render(null);
+    try {
+      const st = await window.fleet.status(force ? { maxAgeMs: 0 } : {});
+      everProbed = true;
+      if (st && st.busy && st.busy !== "status" && !busy) setBusy(st.busy);
+      render(st);
+      return st;
+    } finally {
+      probing = false;
+    }
   }
 
   async function run(action) {

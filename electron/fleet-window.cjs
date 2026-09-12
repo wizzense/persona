@@ -20,6 +20,26 @@ let fleetWindow = null;
 let control = null;
 let ipcWired = false;
 
+/** What "close" means when there is no standalone window -- set by main to close
+ *  the console, the only other surface fleet-control.html can be living in. */
+let closeFallback = null;
+
+function setCloseFallback(fn) {
+  closeFallback = typeof fn === "function" ? fn : null;
+}
+
+/**
+ * Wire the IPC without opening a window.
+ *
+ * 🚩 The console's Fleet pane loads fleet-control.html directly and calls
+ * `desk:fleet-status` on load, so a handler must exist BEFORE any standalone
+ * window is created. Without it the pane renders its full layout and every field
+ * stays an em-dash -- indistinguishable from a fleet that is genuinely down.
+ */
+function ensureFleetIpc() {
+  wireIpc();
+}
+
 function getControl() {
   if (!control) {
     control = new FleetControl();
@@ -39,7 +59,10 @@ function wireIpc() {
     getControl().status(opts && typeof opts === "object" ? opts : {}));
   ipcMain.handle("desk:fleet-run", (_event, action) => getControl().run(String(action)));
   ipcMain.on("desk:fleet-close", () => {
-    if (fleetWindow && !fleetWindow.isDestroyed()) fleetWindow.close();
+    if (fleetWindow && !fleetWindow.isDestroyed()) { fleetWindow.close(); return; }
+    // No standalone window means the sender is the console's Fleet PANE, whose
+    // close button (and Escape) would otherwise be dead.
+    if (typeof closeFallback === "function") closeFallback();
   });
   // A door chip was clicked. Only the probed SURFACES may be opened — a
   // renderer-supplied URL never reaches the shell.
@@ -92,4 +115,21 @@ function fleetSummaryCached() {
   return `${classify(c.lastStatus)} — ${summarize(c.lastStatus)}`;
 }
 
-module.exports = { createFleetWindow, getControl, fleetSummaryCached };
+/** Close the standalone window (the console's "reattach"). No-op when absent. */
+function closeFleetWindow() {
+  if (fleetWindow && !fleetWindow.isDestroyed()) fleetWindow.close();
+}
+
+function isFleetWindowOpen() {
+  return Boolean(fleetWindow && !fleetWindow.isDestroyed());
+}
+
+module.exports = {
+  createFleetWindow,
+  ensureFleetIpc,
+  setCloseFallback,
+  closeFleetWindow,
+  isFleetWindowOpen,
+  getControl,
+  fleetSummaryCached,
+};

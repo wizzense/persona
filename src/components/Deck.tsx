@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 
 import { setDragMode, useDragMode } from '../hooks/useDragMode';
+import { renderVrmThumbnail } from '../thumbnails';
 import {
   EMPTY_DECK_STATE,
   cardWhere,
@@ -370,13 +371,33 @@ interface MarketListing {
   tags?: string[];
 }
 
+/** Stable per-character hue so the roster reads as tiles instead of a text
+ *  dump: the same name always gets the same colour, across restarts and
+ *  machines (owner, 2026-09-10: "just a long list of avatars… not pleasant"). */
+function avatarHue(name: string): number {
+  let hash = 0;
+  for (let i = 0; i < name.length; i += 1) hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
+  return hash % 360;
+}
+
+/** One or two glyphs for the tile — the first letters of the first two
+ *  slug segments ("fdl-1-0-vrm1---downloadable" -> "FD"), falling back to the
+ *  first character for short or CJK names. */
+function avatarInitials(name: string): string {
+  const parts = name.split(/[-_\s]+/).filter(Boolean);
+  const letters = parts.slice(0, 2).map((part) => part[0]).join('');
+  return (letters || name.slice(0, 2)).toUpperCase();
+}
+
 function ModelsMarketSection({
   characters,
+  characterModels,
   activeCharacter,
   agentCharacters,
   onAction,
 }: {
   characters: string[];
+  characterModels: Record<string, string>;
   activeCharacter: string;
   agentCharacters: Record<string, string>;
   onAction: (name: string, arg?: string) => void;
@@ -388,6 +409,7 @@ function ModelsMarketSection({
     reason?: string;
   }>({ ok: false, listings: [] });
   const [marketBusy, setMarketBusy] = useState(false);
+  const [thumbs, setThumbs] = useState<Record<string, string>>({});
 
   const runMarket = useCallback((q: string) => {
     const deck = window.deskBridge as unknown as {
@@ -404,6 +426,44 @@ function ModelsMarketSection({
   useEffect(() => {
     runMarket('');
   }, [runMarket]);
+
+  // Real previews (owner, 2026-09-10): cached thumbnail if one exists, else
+  // render the character's own model offscreen ONCE and store it beside the
+  // model. Serialized by thumbnails.ts; failed names stay on the monogram
+  // tile for this session rather than retrying in a loop.
+  const previewsAttempted = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const bridge = window.deskBridge as unknown as {
+      deck?: {
+        characterThumb?: (name: string) => Promise<string | null>;
+        saveCharacterThumb?: (name: string, dataUrl: string) => Promise<boolean>;
+      };
+    } | undefined;
+    const api = bridge?.deck;
+    if (!api?.characterThumb) return;
+    let cancelled = false;
+    for (const name of characters) {
+      if (previewsAttempted.current.has(name)) continue;
+      const modelUrl = characterModels[name];
+      previewsAttempted.current.add(name);
+      void (async () => {
+        const cached = await api.characterThumb!(name).catch(() => null);
+        if (cancelled) return;
+        if (cached) {
+          setThumbs((prev) => ({ ...prev, [name]: cached }));
+          return;
+        }
+        if (!modelUrl) return;
+        const rendered = await renderVrmThumbnail(name, modelUrl);
+        if (cancelled || !rendered) return;
+        setThumbs((prev) => ({ ...prev, [name]: rendered }));
+        void api.saveCharacterThumb?.(name, rendered);
+      })();
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [characters, characterModels]);
 
   const needle = query.trim().toLowerCase();
   const filtered = characters.filter((c) => c.toLowerCase().includes(needle));
@@ -435,31 +495,55 @@ function ModelsMarketSection({
       />
       <p className="deck-empty">
         Installed — {filtered.length} of {characters.length} characters
+        <button
+          className="deck-chip deck-add-character"
+          title="Add a character — enroll a downloaded .vrm, get one from VRoid Hub, or open the characters folder"
+          onClick={() => onAction('add-character')}
+        >
+          + Add
+        </button>
       </p>
-      {filtered.slice(0, 40).map((name) => {
-        const owner = ownedBy(name);
-        return (
-          <button
-            key={name}
-            className="deck-row"
-            title={owner
-              ? `Switch the desk to ${name} (assigned to ${owner})`
-              : `Switch the desk to ${name}`}
-            onClick={() => onAction('switch-character', name)}
-          >
-            <span className="deck-row-label">
-              {name}
-              {owner ? <span className="deck-card-age"> · {owner}</span> : null}
-            </span>
-            {name === activeCharacter ? (
-              <span className="deck-count-live">active</span>
-            ) : null}
+      {characters.length === 0 ? (
+        <div className="deck-avatar-empty">
+          <p>No characters yet — Desk ships none.</p>
+          <button className="deck-chip" onClick={() => onAction('add-character')}>
+            Get one from VRoid Hub…
           </button>
-        );
-      })}
-      {filtered.length > 40 ? (
-        <p className="deck-empty">+{filtered.length - 40} more — narrow the filter</p>
-      ) : null}
+        </div>
+      ) : filtered.length === 0 ? (
+        <p className="deck-empty">Nothing matches “{query.trim()}”.</p>
+      ) : (
+        <div className="deck-avatar-grid" role="list">
+          {filtered.map((name) => {
+            const owner = ownedBy(name);
+            return (
+              <button
+                key={name}
+                role="listitem"
+                className={`deck-avatar-card${name === activeCharacter ? ' is-active' : ''}`}
+                title={owner
+                  ? `Switch the desk to ${name} (assigned to ${owner})`
+                  : `Switch the desk to ${name}`}
+                onClick={() => onAction('switch-character', name)}
+              >
+                <span
+                  className="deck-avatar-tile"
+                  style={{ '--avatar-hue': String(avatarHue(name)) } as CSSProperties}
+                >
+                  {thumbs[name] ? (
+                    <img className="deck-avatar-img" src={thumbs[name]} alt="" draggable={false} />
+                  ) : (
+                    avatarInitials(name)
+                  )}
+                </span>
+                <span className="deck-avatar-name">{name}</span>
+                {owner ? <span className="deck-avatar-agent">{owner}</span> : null}
+                {name === activeCharacter ? <span className="deck-avatar-live">active</span> : null}
+              </button>
+            );
+          })}
+        </div>
+      )}
       <p className="deck-empty">
         Aitherium market {marketBusy ? '— searching…' : market.ok ? `— ${(market.listings ?? []).length} packs` : `— ${market.reason ?? 'unreachable'}`}
       </p>
@@ -899,6 +983,7 @@ export function Deck() {
           slots: (event.slots as DeckState['slots']) ?? [],
           agents: (event.agents as string[]) ?? [],
           characters: (event.characters as string[]) ?? [],
+          characterModels: (event.characterModels as Record<string, string>) ?? {},
           activeCharacter: (event.activeCharacter as string) ?? '',
           agentCharacters: (event.agentCharacters as Record<string, string>) ?? {},
           relay: (event.relay as DeckState['relay']) ?? [],
@@ -1245,6 +1330,7 @@ export function Deck() {
 
         <ModelsMarketSection
           characters={state.characters}
+          characterModels={state.characterModels ?? {}}
           activeCharacter={state.activeCharacter}
           agentCharacters={state.agentCharacters}
           onAction={runAction}

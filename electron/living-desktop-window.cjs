@@ -623,8 +623,14 @@ function desktopStatus() {
   };
 }
 
+/** Close the AitherDesktop app window (the console's "reattach"). No-op when absent. */
+function closeDesktopApp() {
+  if (appWin && !appWin.isDestroyed()) appWin.close();
+}
+
 module.exports = {
   openLivingDesktop: showLivingDesktop, // kept for older callers
+  closeDesktopApp,
   showLivingDesktop,
   showDesktopApp,
   desktopStatus,
