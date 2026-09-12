@@ -28,6 +28,12 @@ function parseProtocolUrl(rawUrl, protocolScheme = "desk") {
     if (action === "command") {
       return [{ type: "command" }];
     }
+    // desk://console -> the unified console (Command | Fleet | Cards | Chat in ONE
+    // window, each pane detachable). The front door as of 2026-09-08; the single-pane
+    // links above stay, because a detached pane must still have a way to be opened.
+    if (action === "console") {
+      return [{ type: "console" }];
+    }
     // desk://overlay -> the AitherOS overlay (aitherium.com Living Desktop over the
     // Windows desktop); desk://desktop -> the AitherDesktop app window.
     if (action === "overlay" || action === "living-desktop") {

@@ -151,6 +151,11 @@
     log.scrollTop = log.scrollHeight;
   }
 
+  let probing = false;
+  let everProbed = false;
+  /** What an empty box should say: nothing has run, or something is running now. */
+  function emptyState() { return probing ? "probing…" : "not probed yet"; }
+
   function classify(st) {
     if (!st || st.cannotJudge) return "UNKNOWN";
     const fl = st.fleet || {};
@@ -174,7 +179,7 @@
     const box = $("holders");
     while (box.childElementCount > 1) box.removeChild(box.lastChild);
     if (!Array.isArray(holders)) {
-      box.appendChild(el("div", "none", error ? `not readable: ${error}` : "not probed yet"));
+      box.appendChild(el("div", "none", error ? `not readable: ${error}` : emptyState()));
       return;
     }
     if (holders.length === 0) {
@@ -196,7 +201,7 @@
     const box = $("surfaces");
     while (box.childElementCount > 1) box.removeChild(box.lastChild);
     if (!Array.isArray(rows) || rows.length === 0) {
-      box.appendChild(el("span", "surface", "not probed yet"));
+      box.appendChild(el("span", "surface", emptyState()));
       return;
     }
     for (const s of rows) {
@@ -245,11 +250,22 @@
     clearTimeout(armTimer);
   }
 
+  // 🚩 "not probed yet" and "a probe is running RIGHT NOW" are different states and
+  // read identically. The first probe walks the distro, seven doors and the GPU
+  // counters -- seconds -- and a window of em-dashes with no sign of life reads as
+  // broken (owner screenshot, 2026-09-08). One flag, and the empty states say which.
   async function refresh(force) {
-    const st = await window.fleet.status(force ? { maxAgeMs: 0 } : {});
-    if (st && st.busy && st.busy !== "status" && !busy) setBusy(st.busy);
-    render(st);
-    return st;
+    probing = true;
+    if (!everProbed) render(null);
+    try {
+      const st = await window.fleet.status(force ? { maxAgeMs: 0 } : {});
+      everProbed = true;
+      if (st && st.busy && st.busy !== "status" && !busy) setBusy(st.busy);
+      render(st);
+      return st;
+    } finally {
+      probing = false;
+    }
   }
 
   async function run(action) {

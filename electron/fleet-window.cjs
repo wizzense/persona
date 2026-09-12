@@ -92,4 +92,19 @@ function fleetSummaryCached() {
   return `${classify(c.lastStatus)} — ${summarize(c.lastStatus)}`;
 }
 
-module.exports = { createFleetWindow, getControl, fleetSummaryCached };
+/** Close the standalone window (the console's "reattach"). No-op when absent. */
+function closeFleetWindow() {
+  if (fleetWindow && !fleetWindow.isDestroyed()) fleetWindow.close();
+}
+
+function isFleetWindowOpen() {
+  return Boolean(fleetWindow && !fleetWindow.isDestroyed());
+}
+
+module.exports = {
+  createFleetWindow,
+  closeFleetWindow,
+  isFleetWindowOpen,
+  getControl,
+  fleetSummaryCached,
+};

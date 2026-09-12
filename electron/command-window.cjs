@@ -85,4 +85,13 @@ function createCommandWindow(fleetControl, { createFleetWindow = null } = {}) {
   return commandWindow;
 }
 
-module.exports = { createCommandWindow, getAgent };
+/** Close the standalone window (the console's "reattach"). No-op when absent. */
+function closeCommandWindow() {
+  if (commandWindow && !commandWindow.isDestroyed()) commandWindow.close();
+}
+
+function isCommandWindowOpen() {
+  return Boolean(commandWindow && !commandWindow.isDestroyed());
+}
+
+module.exports = { createCommandWindow, closeCommandWindow, isCommandWindowOpen, getAgent };
