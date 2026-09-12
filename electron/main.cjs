@@ -57,6 +57,12 @@ const {
   getAgent: getCommandAgent,
 } = require("./command-window.cjs");
 const { showConsole, focusPane, closeConsole } = require("./console-window.cjs");
+const {
+  ensureSessionsIpc,
+  createSessionsWindow,
+  closeSessionsWindow,
+  isSessionsWindowOpen,
+} = require("./sessions-window.cjs");
 // The company room, both halves: the awdk daemon room (local, fleet-independent)
 // and the relay channels (#command / #agents) that the poller executes from.
 const { RoomPublisher } = require("./room-publisher.cjs");
@@ -1430,6 +1436,7 @@ function openConsole() {
   // 'desk:command-send'". Both surfaces LOOK finished while answering nothing.
   ensureFleetIpc();
   ensureCommandIpc(getFleetControl(), { createFleetWindow });
+  ensureSessionsIpc();
   // And "close" inside a pane now closes the console, rather than looking for a
   // standalone window that does not exist and silently doing nothing.
   setFleetCloseFallback(closeConsole);
@@ -1446,6 +1453,11 @@ function openConsole() {
         open: () => createFleetWindow(),
         close: closeFleetWindow,
         isOpen: isFleetWindowOpen,
+      },
+      sessions: {
+        open: () => createSessionsWindow(),
+        close: closeSessionsWindow,
+        isOpen: isSessionsWindowOpen,
       },
       cards: {
         open: () => createDeckWindow(),
