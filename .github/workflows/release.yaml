@@ -120,7 +120,4 @@ jobs:
           test -n "$(ls -A release-artifacts)" || { echo "no artifacts to release"; exit 1; }
           extra=""
           case "${GITHUB_REF_NAME}" in *-*) extra="--prerelease" ;; esac
-          gh release create "${GITHUB_REF_NAME}" release-artifacts/* \
-            --repo "${GITHUB_REPOSITORY}" \
-            --title "Desk ${GITHUB_REF_NAME}" \
-            --generate-notes ${extra}
+          gh release create "${GITHUB_REF_NAME}" release-artifacts/* --repo "${GITHUB_REPOSITORY}" --title "Desk ${GITHUB_REF_NAME}" --generate-notes ${extra}
