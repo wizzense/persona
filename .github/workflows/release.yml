@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - "v*.*.*"
+  # The tag path startup-failed twice with ZERO jobs (2026-09-12, the first
+  # release attempt in this repo's history) while CI on the same tag/event ran
+  # fine, and this file is duplicate-key-free and the workflow active -- so the
+  # release must not depend on that path alone. Dispatch on the tag ref:
+  # GITHUB_REF_NAME is then the tag itself, which is what the version gate reads.
+  workflow_dispatch:
 
 permissions:
   contents: write
