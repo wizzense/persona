@@ -1,8 +1,8 @@
 # Changelog
 
-## 0.1.0-beta.0 - In progress
+## 0.1.0 - 2026-09-12
 
-Persona's first beta is under active development.
+Desk's first release.
 
 - Realtime character animation and amplitude-driven lip sync.
 - PipeWire, WASAPI process-loopback, and Core Audio process-tap listeners.
