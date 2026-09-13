@@ -55,5 +55,11 @@ contextBridge.exposeInMainWorld("aitherConsole", {
     ipcRenderer.on("desk:console-focus", handler);
     return () => ipcRenderer.off("desk:console-focus", handler);
   },
+  /** The inbox count for the Inbox tab (the same number the tray and taskbar show). */
+  onInboxCount: (listener) => {
+    const handler = (_event, payload) => listener(Number(payload?.count) || 0);
+    ipcRenderer.on("desk:console-inbox-count", handler);
+    return () => ipcRenderer.off("desk:console-inbox-count", handler);
+  },
   close: () => ipcRenderer.send("desk:console-close"),
 });

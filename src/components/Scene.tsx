@@ -10,6 +10,8 @@ import { calculateFullBodyFraming } from '../camera-framing';
 import { useAvatarLayout, type AvatarTransform } from '../hooks/useAvatarLayout';
 import { useAvatarDrag } from '../hooks/useAvatarDrag';
 import { getDragMode } from '../hooks/useDragMode';
+import type { VRM } from '@pixiv/three-vrm';
+import { applySpringScale } from '../hooks/useVrmLoader';
 
 const MIN_SCALE = 0.3;
 const MAX_SCALE = 3;
@@ -164,6 +166,10 @@ function PlacedAvatar({ slotId, transform, onDrag, onScale, onFocus, avatarProps
   // avatar) from a DRAG (move/rotate) — the same 5-6px band the drag hook uses.
   const clickStartRef = useRef<{ x: number; y: number } | null>(null);
 
+  // The VRM behind this slot, once loaded: the spring compensation below needs
+  // it, and only the loader hangs it on the scene (scene.userData.vrm).
+  const vrmRef = useRef<VRM | null>(null);
+
   // Committed transform -> group, EXCEPT while a drag owns the group imperatively.
   useLayoutEffect(() => {
     if (draggingRef.current) return;
@@ -171,6 +177,11 @@ function PlacedAvatar({ slotId, transform, onDrag, onScale, onFocus, avatarProps
     if (!group) return;
     group.position.set(...transform.position);
     group.scale.setScalar(transform.scale);
+    // The layout scale is what the springs cannot see (applySpringScale): a
+    // persisted 0.4 shoved every hair chain out over a 2.5x-too-big head
+    // collider on every boot (owner, 2026-09-13). Re-derive the spring
+    // constants from the SAME number that scaled the group, in the same effect.
+    if (vrmRef.current) applySpringScale(vrmRef.current, transform.scale);
   }, [transform]);
 
   const { beginDrag } = useAvatarDrag(
@@ -198,7 +209,11 @@ function PlacedAvatar({ slotId, transform, onDrag, onScale, onFocus, avatarProps
   // raycastable on every three.js version.
   const [ready, setReady] = useState(false);
   const handleReady = useCallback(
-    (scene: THREE.Object3D) => {
+    (scene: THREE.Object3D, vrm?: VRM) => {
+      // The model usually lands AFTER the layout effect restored the scale, so
+      // the compensation must also run here, with the scale the group already has.
+      vrmRef.current = vrm ?? null;
+      if (vrm) applySpringScale(vrm, transformRef.current.scale);
       setReady(true);
       onReady(scene);
     },

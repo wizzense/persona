@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.1.1 - 2026-09-13
+
+- Hair no longer floats after a reboot: the avatar's saved SCALE was the cause.
+  three-vrm's spring bones compare collider radii in model units against world
+  distances, so a 0.3x avatar wore a 3x head collider that shoved every hair
+  chain outward. Spring constants and collider radii now follow the scale.
+- One command center. The Aither Console is the front door (tray: double-click
+  or "Aither Console…"); its first pane is the Inbox — decision cards and the
+  agents' #agents messages. The tray, the avatar's right-click menu and the
+  floating beads each list only what lives nowhere else: the tray is console /
+  inbox / show-hide / characters; the avatar menu is talk, camera, its window
+  and characters; the beads are inbox, talk, console, drag mode.
+- A real notification area: the inbox count is drawn on the tray icon, on the
+  console's taskbar button (overlay badge) and on its Inbox tab — the same
+  number everywhere, from one source.
+
 ## 0.1.0 - 2026-09-12
 
 Desk's first release.
