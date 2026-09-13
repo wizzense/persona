@@ -164,6 +164,15 @@ function placeholderFor(pane) {
   return node;
 }
 
+// The inbox count rides the Inbox tab, pushed by main whenever it changes.
+let inboxCount = 0;
+if (window.aitherConsole && typeof window.aitherConsole.onInboxCount === "function") {
+  window.aitherConsole.onInboxCount((count) => {
+    inboxCount = count;
+    render();
+  });
+}
+
 function render() {
   for (const pane of panes) {
     const isSelected = pane.id === selected;
@@ -172,7 +181,9 @@ function render() {
     const tab = document.getElementById("tab-" + pane.id);
     if (tab) {
       tab.setAttribute("aria-selected", String(isSelected));
-      tab.querySelector(".badge").textContent = isDetached ? "detached" : "";
+      tab.querySelector(".badge").textContent = isDetached
+        ? "detached"
+        : (pane.id === "cards" && inboxCount > 0 ? String(inboxCount) : "");
     }
 
     // A DETACHED pane's iframe is destroyed, not merely hidden. Two live copies of

@@ -23,14 +23,6 @@ function BellIcon() {
   );
 }
 
-function ChipIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <rect x="6" y="6" width="12" height="12" rx="2" />
-      <path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3" />
-    </svg>
-  );
-}
 
 function ChatIcon() {
   return (
@@ -74,12 +66,12 @@ function Bead({ label, count, onLeftClick, children }: BeadProps) {
     <button
       type="button"
       className="bead"
-      title={count && count > 0 ? `${label} — ${count} waiting (right-click for the panel)` : `${label} (right-click for the panel)`}
+      title={count && count > 0 ? `${label} — ${count} waiting` : label}
       aria-label={label}
       onClick={onLeftClick}
       onContextMenu={(event) => {
         event.preventDefault();
-        bridgeDeck()?.open();
+        void bridgeDeck()?.action('inbox');
       }}
     >
       {children}
@@ -90,7 +82,10 @@ function Bead({ label, count, onLeftClick, children }: BeadProps) {
   );
 }
 
-/** The floating bead cluster — bell (decisions), models, talk, panel. */
+/** The floating bead cluster — bell (inbox), talk, console, drag mode.
+ *  CONSOLIDATED 2026-09-13: the bell and the grid used to open the same deck
+ *  panel and the chip duplicated a tray item; every bead now names ONE door
+ *  that exists nowhere else on the avatar. */
 export function Beads() {
   const [openCount, setOpenCount] = useState(0);
 
@@ -134,21 +129,18 @@ export function Beads() {
   const dragMode = useDragMode();
   const deck = bridgeDeck();
   return (
-    <div className="beads" aria-label="Desk quick actions">
+    <div className="beads" aria-label="Desk beads">
       <Bead
-        label="Notifications"
+        label="Inbox"
         count={openCount}
-        onLeftClick={() => deck?.open()}
+        onLeftClick={() => void deck?.action('inbox')}
       >
         <BellIcon />
       </Bead>
-      <Bead label="Browse models" onLeftClick={() => void deck?.action('models')}>
-        <ChipIcon />
-      </Bead>
-      <Bead label="Chat" onLeftClick={() => void deck?.action('chat')}>
+      <Bead label="Talk to Aither" onLeftClick={() => void deck?.action('talk')}>
         <ChatIcon />
       </Bead>
-      <Bead label="Desk panel" onLeftClick={() => deck?.open()}>
+      <Bead label="Aither Console" onLeftClick={() => void deck?.action('console')}>
         <GridIcon />
       </Bead>
       {/* The VISIBLE drag-mode toggle — the resolution of the three-way gesture
@@ -169,7 +161,7 @@ export function Beads() {
           so it never nags twice. */}
       {hintDismissed ? null : (
         <div className="bead-hint" role="note">
-          <span>Drag the avatar to rotate · click the ROT/MOVE bead to switch to moving it · right-click for controls</span>
+          <span>Drag the avatar to rotate · ROT/MOVE switches to moving it · right-click the avatar for its controls · the grid opens the console</span>
           <button
             type="button"
             className="bead-hint-x"

@@ -7,6 +7,7 @@ import {
 } from 'react';
 import { useFrame } from '@react-three/fiber';
 import type * as THREE from 'three';
+import type { VRM } from '@pixiv/three-vrm';
 import { useVrmLoader } from '../hooks/useVrmLoader';
 import { useVrmAnimation } from '../hooks/useVrmAnimation';
 import { useAmplitudeLipSync } from '../hooks/useAmplitudeLipSync';
@@ -20,7 +21,9 @@ export interface AvatarProps {
   onAnimationComplete: () => void;
   playback: 'loop' | 'once';
   speaking: boolean;
-  onReady?: (scene: THREE.Object3D) => void;
+  /** The loaded scene and, second, the VRM itself — the placement layer needs
+   *  the spring manager (applySpringScale) and must not reach it by mutation. */
+  onReady?: (scene: THREE.Object3D, vrm?: VRM) => void;
   modelUrl?: string;
 }
 
@@ -44,7 +47,7 @@ function AvatarModel({
   }, [animation, animationRequest, onAnimationComplete, play, playback]);
 
   useLayoutEffect(() => {
-    if (vrm) onReady?.(vrm.scene);
+    if (vrm) onReady?.(vrm.scene, vrm);
   }, [onReady, vrm]);
 
   useFrame((_, delta) => {

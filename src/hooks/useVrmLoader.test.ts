@@ -45,3 +45,71 @@ describe('applyDefaultSpringGravity', () => {
     expect(() => applyDefaultSpringGravity({ springBoneManager: {} } as unknown as VRM)).not.toThrow();
   });
 });
+
+import { applySpringScale } from './useVrmLoader';
+
+/** A VRM with joints AND colliders, the two things applySpringScale rescales. */
+function scaledVrm() {
+  const joints = new Set([
+    { settings: { stiffness: 1.0, gravityPower: 1.0, hitRadius: 0.02 } },
+    { settings: { stiffness: 0.5, gravityPower: 0.3, hitRadius: 0 } },
+  ]);
+  const colliderGroups = [
+    { colliders: [{ shape: { radius: 0.1 } }, { shape: { radius: 0.05 } }] },
+    { colliders: [{ shape: {} }] }, // a plane collider: no radius, must be skipped
+  ];
+  return { springBoneManager: { joints, colliderGroups } } as unknown as VRM;
+}
+type Manager = {
+  joints: Set<{ settings: { stiffness: number; gravityPower: number; hitRadius: number } }>;
+  colliderGroups: Array<{ colliders: Array<{ shape: { radius?: number } }> }>;
+};
+
+describe('applySpringScale', () => {
+  it('scales collider radii, hitRadius, stiffness and gravity by the world scale', () => {
+    // The 2026-09-13 reboot regression: a persisted layout scale of 0.4 with
+    // three-vrm comparing MODEL-unit radii against WORLD-unit distances.
+    const vrm = scaledVrm();
+    applySpringScale(vrm, 0.4);
+    const m = vrm.springBoneManager as unknown as Manager;
+    const [j0, j1] = [...m.joints];
+    expect(j0.settings.stiffness).toBeCloseTo(0.4);
+    expect(j0.settings.gravityPower).toBeCloseTo(0.4);
+    expect(j0.settings.hitRadius).toBeCloseTo(0.008);
+    expect(j1.settings.gravityPower).toBeCloseTo(0.12);
+    expect(m.colliderGroups[0].colliders[0].shape.radius).toBeCloseTo(0.04);
+    expect(m.colliderGroups[0].colliders[1].shape.radius).toBeCloseTo(0.02);
+    expect(m.colliderGroups[1].colliders[0].shape.radius).toBeUndefined();
+  });
+
+  it('is idempotent: every call derives from the AUTHORED values, never the last call', () => {
+    const vrm = scaledVrm();
+    applySpringScale(vrm, 0.4);
+    applySpringScale(vrm, 0.4);
+    applySpringScale(vrm, 2);
+    applySpringScale(vrm, 1);
+    const m = vrm.springBoneManager as unknown as Manager;
+    const [j0] = [...m.joints];
+    expect(j0.settings.stiffness).toBe(1.0);
+    expect(j0.settings.gravityPower).toBe(1.0);
+    expect(m.colliderGroups[0].colliders[0].shape.radius).toBe(0.1);
+  });
+
+  it('records the authored values AFTER the gravity floor, so a floored 1.0 scales, not the 0 it replaced', () => {
+    const vrm = vrmWith([{ gravityPower: 0 }]);
+    applyDefaultSpringGravity(vrm);
+    applySpringScale(vrm, 1);
+    applySpringScale(vrm, 0.5);
+    const joint = [...(vrm.springBoneManager as unknown as { joints: Set<{ settings: { gravityPower: number } }> }).joints][0];
+    expect(joint.settings.gravityPower).toBeCloseTo(0.5);
+  });
+
+  it('treats a degenerate scale as 1 and tolerates a vrm without a manager', () => {
+    const vrm = scaledVrm();
+    applySpringScale(vrm, 0);
+    applySpringScale(vrm, Number.NaN);
+    const m = vrm.springBoneManager as unknown as Manager;
+    expect([...m.joints][0].settings.stiffness).toBe(1.0);
+    expect(() => applySpringScale({} as VRM, 0.4)).not.toThrow();
+  });
+});

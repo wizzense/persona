@@ -42,6 +42,63 @@ export function applyDefaultSpringGravity(vrm: VRM) {
   }
 }
 
+/** three-vrm's spring bones are SCALE-BLIND, and the avatar's layout scale is
+ *  what made the hair "float" again after every reboot (owner, 2026-09-13 —
+ *  the 09-12 "fix" was a layout reset, which only worked because it put the
+ *  scale back to 1). Measured in @pixiv/three-vrm-springbone 3.5.5:
+ *    - collider shapes compare `this.radius` (MODEL units) against a distance
+ *      taken from world matrices, so at group scale 0.4 the head sphere is
+ *      2.5x too large for the model and shoves every hair chain outward;
+ *    - `stiffness * delta` and `gravityPower * delta` are world-unit
+ *      displacements against a bone length that DOES scale, so the feel
+ *      changes with size (snappy when small, floppy when large);
+ *    - `hitRadius` is likewise unscaled.
+ *  Bone length itself is recomputed from world matrices every frame, so it is
+ *  the ONLY quantity the library gets right under scale. This compensates the
+ *  other three. The authored values are recorded on first call (after the
+ *  gravity floor above has run) so the function is idempotent — call it with
+ *  every scale change, never with a delta. */
+interface DeskSpringAuthored { stiffness: number; gravityPower: number; hitRadius: number }
+
+export function applySpringScale(vrm: VRM, worldScale: number) {
+  const s = Number.isFinite(worldScale) && worldScale > 0 ? worldScale : 1;
+  const manager = vrm.springBoneManager as unknown as {
+    joints?: Set<{
+      settings?: {
+        stiffness?: number; gravityPower?: number; hitRadius?: number;
+        __deskAuthored?: DeskSpringAuthored;
+      };
+    }>;
+    colliderGroups?: Array<{
+      colliders?: Array<{ shape?: { radius?: number; __deskAuthoredRadius?: number } }>;
+    }>;
+  } | null;
+  if (!manager) return;
+  for (const joint of manager.joints ?? []) {
+    const settings = joint.settings;
+    if (!settings) continue;
+    if (!settings.__deskAuthored) {
+      settings.__deskAuthored = {
+        stiffness: Number(settings.stiffness) || 0,
+        gravityPower: Number(settings.gravityPower) || 0,
+        hitRadius: Number(settings.hitRadius) || 0,
+      };
+    }
+    const a = settings.__deskAuthored;
+    settings.stiffness = a.stiffness * s;
+    settings.gravityPower = a.gravityPower * s;
+    settings.hitRadius = a.hitRadius * s;
+  }
+  for (const group of manager.colliderGroups ?? []) {
+    for (const collider of group.colliders ?? []) {
+      const shape = collider.shape;
+      if (!shape || typeof shape.radius !== 'number') continue;
+      if (shape.__deskAuthoredRadius == null) shape.__deskAuthoredRadius = shape.radius;
+      shape.radius = shape.__deskAuthoredRadius * s;
+    }
+  }
+}
+
 export function useVrmLoader(url: string): VRM | null {
   const gltf = useLoader(GLTFLoader, url, (loader) => {
     loader.register((parser) => new VRMLoaderPlugin(parser));
@@ -55,6 +112,10 @@ export function useVrmLoader(url: string): VRM | null {
     VRMUtils.combineMorphs(loaded);
     VRMUtils.rotateVRM0(loaded);
     applyDefaultSpringGravity(loaded);
+    // Record the (floored) authored spring values now, at scale 1, so the
+    // placement layer (Scene.tsx, handed the VRM through Avatar's onReady)
+    // can rescale them idempotently.
+    applySpringScale(loaded, 1);
     return loaded;
   }, [gltf]);
 

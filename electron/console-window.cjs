@@ -54,6 +54,14 @@ function electron() {
  * comes up blank in the other.
  */
 const PANES = Object.freeze([
+  // FIRST on purpose (owner, 2026-09-13: "no proper notification area"): the
+  // inbox — decision cards and the agents' messages — is what the tray badge,
+  // the taskbar overlay and the bell all open. Same renderer as the old "Desk
+  // panel" (?deck=1), so a detached inbox is that window.
+  Object.freeze({
+    id: "cards", label: "Inbox", hint: "Decisions and messages",
+    kind: "view", query: "deck=1",
+  }),
   Object.freeze({
     id: "command", label: "Command", hint: "Say it in a sentence",
     kind: "file", file: "command.html",
@@ -70,10 +78,6 @@ const PANES = Object.freeze([
   Object.freeze({
     id: "sessions", label: "Sessions", hint: "Every Claude session, live",
     kind: "file", file: "sessions.html",
-  }),
-  Object.freeze({
-    id: "cards", label: "Cards", hint: "Decisions waiting on you",
-    kind: "view", query: "deck=1",
   }),
   Object.freeze({
     id: "chat", label: "Chat", hint: "The company room",
@@ -304,6 +308,7 @@ function showConsole({ windows = {}, rendererUrl = null, urls = {}, autoShow = t
   // window steals the owner's focus mid-game, which is how a useful check becomes
   // one nobody is willing to run.
   consoleWindow.once("ready-to-show", () => {
+    applyInboxBadge();
     if (!autoShow) return;
     consoleWindow.show();
     consoleWindow.focus();
@@ -355,6 +360,30 @@ function closeConsole() {
   if (consoleWindow && !consoleWindow.isDestroyed()) consoleWindow.close();
 }
 
+/** The inbox count, on the surfaces this window owns: its Inbox tab and its
+ *  taskbar button (setOverlayIcon — the Windows-native badge). Remembered, so a
+ *  console opened later starts with the right number. */
+let lastInbox = { count: 0, image: null, tooltip: "" };
+function setInboxBadge({ count = 0, image = null, tooltip = "" } = {}) {
+  lastInbox = { count: Number(count) || 0, image, tooltip };
+  applyInboxBadge();
+}
+function applyInboxBadge() {
+  if (!consoleWindow || consoleWindow.isDestroyed()) return;
+  try {
+    consoleWindow.setOverlayIcon(lastInbox.count > 0 ? lastInbox.image : null, lastInbox.count > 0 ? lastInbox.tooltip : "");
+  } catch {
+    /* not every platform draws overlays; the tab still carries the number */
+  }
+  const send = () => {
+    if (consoleWindow && !consoleWindow.isDestroyed()) {
+      consoleWindow.webContents.send("desk:console-inbox-count", { count: lastInbox.count });
+    }
+  };
+  if (consoleWindow.webContents.isLoading()) consoleWindow.webContents.once("did-finish-load", send);
+  else send();
+}
+
 /** Test seam: inject window impls without constructing a BrowserWindow. */
 function __setWindowsForTest(windows) {
   windowsImpl = windows || {};
@@ -363,6 +392,7 @@ function __setWindowsForTest(windows) {
 module.exports = {
   showConsole,
   focusPane,
+  setInboxBadge,
   placeHosted,
   closeConsole,
   isConsoleOpen,

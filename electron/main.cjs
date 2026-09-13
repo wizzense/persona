@@ -56,7 +56,8 @@ const {
   isCommandWindowOpen,
   getAgent: getCommandAgent,
 } = require("./command-window.cjs");
-const { showConsole, focusPane, closeConsole } = require("./console-window.cjs");
+const { showConsole, focusPane, closeConsole, setInboxBadge } = require("./console-window.cjs");
+const { badgeBitmap, badgeTooltip, drawBadge } = require("./badge.cjs");
 const {
   ensureSessionsIpc,
   createSessionsWindow,
@@ -94,7 +95,6 @@ const {
 } = require("./agent-avatars.cjs");
 const { exportToAitherShell } = require("./aithershell-export.cjs");
 const {
-  buildLivingDesktopMenu,
   desktopStatus,
   pushDeskState,
   setDeskStateProvider,
@@ -650,40 +650,6 @@ function openModelBrowser() {
   return win;
 }
 
-/** Open Forge Studio — media-forge's web UI, served by a HOST process
- *  (D:\media-forge, `python run.py` at 127.0.0.1:8200), not by a script inside
- *  this app. Unlike the model browser it does not open the page itself on boot,
- *  so this polls /health after spawning and opens the tab once it answers. */
-function openMediaForge() {
-  const url = "http://127.0.0.1:8200/";
-  const probe = require("node:http").get(url, () => {
-    probe.destroy();
-    void shell.openExternal(url);
-  });
-  probe.on("error", () => {
-    const { spawn } = require("node:child_process");
-    spawn("python", [path.join("D:\\media-forge", "run.py")], {
-      detached: true,
-      stdio: "ignore",
-      cwd: "D:\\media-forge",
-      windowsHide: true,
-    }).unref();
-    const deadline = Date.now() + 15000;
-    const poll = setInterval(() => {
-      const check = require("node:http").get(url, (resp) => {
-        if (resp.statusCode === 200) {
-          clearInterval(poll);
-          check.destroy();
-          void shell.openExternal(url);
-        }
-      });
-      check.on("error", () => {});
-      check.setTimeout(750, () => check.destroy());
-      if (Date.now() > deadline) clearInterval(poll);
-    }, 500);
-  });
-  probe.setTimeout(1500, () => probe.destroy());
-}
 
 /** Open the talk surface. The deck panel IS the chat window: its relay section
  *  posts to #agents (the channel Aither and every connected session read and
@@ -692,7 +658,91 @@ function openMediaForge() {
  *  2026-08-25: "STILL just opens a terminal tab instead of a chat window right
  *  there". One chat surface, in the app, no terminal. */
 function openTalkWindow() {
-  createDeckWindow();
+  // "Talk to Aither" used to open the deck panel — a list of buttons, not a
+  // conversation. The conversation is the console's Chat pane.
+  openConsole();
+  focusPane("chat");
+}
+
+/** The ONE way to the inbox (decision cards + agent messages): the detached
+ *  Inbox window if the owner pulled it out, else the console on its Inbox pane.
+ *  Every bell, badge and menu item lands here, so there is exactly one place a
+ *  notification can be found (owner, 2026-09-13: "no proper notification area").
+ *  A card id focuses that card. */
+function openInbox(cardId = null) {
+  if (deckWindow && !deckWindow.isDestroyed()) {
+    deckWindow.show();
+    deckWindow.focus();
+    return true;
+  }
+  openConsole();
+  return focusPane("cards", cardId);
+}
+
+/** Toggleable "invisible glass" boundary: a dashed edge + faint tint so the
+ *  avatar window's borders are visible while arranging it (owner 2026-08-25).
+ *  Persisted per-window; restored on every renderer load by ensureRendererLoadHook. */
+function toggleWindowOutline() {
+  if (!avatarWindow || avatarWindow.isDestroyed()) return;
+  void avatarWindow.webContents.executeJavaScript(
+    "(() => {"
+    + "const KEY = 'desk.window-outline';"
+    + "const on = localStorage.getItem(KEY) !== '1';"
+    + "localStorage.setItem(KEY, on ? '1' : '0');"
+    + "document.getElementById('desk-window-outline')?.remove();"
+    + "if (on) {"
+    + "const d = document.createElement('div');"
+    + "d.id = 'desk-window-outline';"
+    + "d.style.cssText = 'position:fixed;inset:0;border:2px dashed"
+    + " rgba(120,160,255,.5);pointer-events:none;z-index:9999;"
+    + "background:rgba(120,160,255,.06);box-sizing:border-box;"
+    + "border-radius:10px;';"
+    + "document.body.appendChild(d);"
+    + "}"
+    + "return on;"
+    + "})();")
+    .catch(() => {});
+}
+
+/** Drop the persisted per-slot transforms (every invisible-avatar artifact of
+ *  2026-08-25 lived in that key — and the 2026-09-13 floating hair was its
+ *  SCALE, since fixed in applySpringScale) and reload the avatar window, which
+ *  re-frames with the default placement. Owner: "need like a reset button". */
+function resetAvatarLayout() {
+  if (!avatarWindow || avatarWindow.isDestroyed()) return;
+  void avatarWindow.webContents
+    .executeJavaScript("localStorage.removeItem('desk.avatar-layout.v1'); true;")
+    .finally(() => avatarWindow.reloadIgnoringCache());
+}
+
+/** Every place Windows reserves for a count, from ONE number: the tray icon
+ *  (a drawn disc — the notification area), the console's taskbar button
+ *  (overlay icon) and its Inbox tab, and the tooltip. Native toasts stay
+ *  removed (owner decision 2026-08-31); a badge is a fact, a toast is noise. */
+let trayBaseIcon = null;
+function badgedImage(base, count) {
+  const { width, height } = base.getSize();
+  const bmp = Buffer.from(base.toBitmap());
+  drawBadge(bmp, width, height, count, { diameter: Math.round(Math.min(width, height) * 0.6) });
+  return nativeImage.createFromBitmap(bmp, { width, height });
+}
+function refreshNotificationBadges(cards = openDecisions) {
+  const waiting = decisionCards.actionableCount(cards);
+  const tooltip = badgeTooltip(waiting, cards.length);
+  if (tray) {
+    tray.setToolTip(tooltip);
+    if (trayBaseIcon) tray.setImage(badgedImage(trayBaseIcon, waiting));
+  }
+  setInboxBadge({
+    count: waiting,
+    image: waiting > 0
+      ? nativeImage.createFromBitmap(badgeBitmap(waiting, 16), { width: 16, height: 16 })
+      : null,
+    tooltip,
+  });
+  // The dock (macOS) and Unity launcher draw their own numeral; on Windows the
+  // overlay above IS the taskbar badge, and setBadgeCount would fight it.
+  if (process.platform !== "win32") app.setBadgeCount?.(waiting);
 }
 
 /** If the gate closed while an adult character was ON SCREEN, swap it off.
@@ -793,19 +843,29 @@ function popupAvatarMenu(slotId) {
     }
   };
 
+  // CONSOLIDATED 2026-09-13 (owner: "all 3 of these menus so full of
+  // duplication"). This menu is about THIS AVATAR and the window it lives in —
+  // nothing here launches a fleet surface, because the console does that and
+  // the tray opens the console. One escape hatch at the bottom.
   const template = [
     { label: `${displayName}${agent ? " — " + agent : ""}`, enabled: false },
+    { type: "separator" },
+    { label: agent ? `Talk to ${agent}` : "Talk to Aither", click: () => openTalkWindow() },
     { type: "separator" },
     { label: "Focus camera here", click: () => sendToAvatar("focus-avatar", { slotId }) },
     { label: "Frame everyone", click: () => sendToAvatar("focus-avatar", { slotId: null }) },
     { label: "Reset position & size", click: () => sendToAvatar("reset-avatar-layout", { slotId }) },
     { type: "separator" },
-    { label: agent ? `Talk to ${agent}` : "Talk to Aither", click: () => openTalkWindow() },
-    { label: "Open agent tools", click: () => createDeckWindow() },
-    { type: "separator" },
-    { label: "Aither Console…", click: () => openConsole() },
-    { label: "Aither Command…", click: () => createCommandWindow(getFleetControl(), { createFleetWindow }) },
-    { label: "Fleet control…", click: () => createFleetWindow() },
+    {
+      label: "Avatar window",
+      submenu: [
+        ...buildSizeMenu(),
+        { type: "separator" },
+        { label: "Show / hide window boundary", click: () => toggleWindowOutline() },
+        { label: "Reset every avatar's layout (reload)", click: () => resetAvatarLayout() },
+      ],
+    },
+    { label: "Characters", submenu: buildCharacterMenu() },
   ];
   if (!isDefault) {
     template.push(
@@ -813,6 +873,10 @@ function popupAvatarMenu(slotId) {
       { label: "Remove Avatar", click: () => removeAvatarSlot(slotId) },
     );
   }
+  template.push(
+    { type: "separator" },
+    { label: "Aither Console…", click: () => openConsole() },
+  );
   if (avatarWindow && !avatarWindow.isDestroyed()) {
     Menu.buildFromTemplate(template).popup({ window: avatarWindow });
   }
@@ -1098,41 +1162,27 @@ function refreshTrayMenu() {
   // submenu. Characters stays as the single deliberate exception: a 70+
   // character roster needs a picker with more than a row of chips, and that
   // picker moves into the deck next.
+  // CONSOLIDATED 2026-09-13 (owner: "where is the unified command center …
+  // all 3 of these menus so full of duplication"). The tray is the DOORBELL:
+  // it opens the console (every surface lives there as a pane), shows the
+  // inbox count, toggles the avatar and picks a character. Nothing that is a
+  // console pane is listed here a second time.
+  const waiting = decisionCards.actionableCount(openDecisions);
+  const avatarShown = Boolean(avatarWindow && !avatarWindow.isDestroyed() && avatarWindow.isVisible());
   tray?.setContextMenu(
     Menu.buildFromTemplate([
-      { label: "Show Desk", click: () => showOverlay({ focus: true }) },
-      { label: "Hide Desk", click: () => void hideOverlay() },
+      { label: "Aither Console…", click: () => openConsole() },
+      {
+        label: waiting > 0
+          ? `Inbox — ${waiting} decision${waiting === 1 ? "" : "s"} waiting`
+          : openDecisions.length > 0
+            ? `Inbox — ${openDecisions.length} card${openDecisions.length === 1 ? "" : "s"}`
+            : "Inbox",
+        click: () => openInbox(),
+      },
       { type: "separator" },
-      {
-        label: openDecisions.length > 0
-          ? `Desk panel — ${openDecisions.length} decision${openDecisions.length === 1 ? "" : "s"} waiting`
-          : "Open the Desk panel",
-        click: () => createDeckWindow(),
-      },
-      {
-        // First on purpose (2026-09-08): the console is the front door, and the
-        // single-pane entries below it are now the DETACHED way in, not the only one.
-        label: "Aither Console (everything in one window)…",
-        click: () => openConsole(),
-      },
-      { label: "Talk to Aither…", click: openTalkWindow },
-      { label: "Browse models…", click: openModelBrowser },
-      { label: "Media Forge", click: openMediaForge },
-      {
-        // The fleet's on/off switch as a real window (2026-09-07, owner:
-        // "a real program I can launch and interact with to control this").
-        label: `Fleet control… (${fleetSummaryCached().split(" — ")[0]})`,
-        click: () => createFleetWindow(),
-      },
-      {
-        label: "Command…",
-        click: () => createCommandWindow(getFleetControl(), { createFleetWindow }),
-      },
-      { label: "AitherOS overlay (Aitheros Online)", submenu: buildLivingDesktopMenu() },
-      { label: "AitherDesktop app (full desktop)…", click: () => showDesktopApp() },
-      { type: "separator" },
+      { label: avatarShown ? "Hide avatar" : "Show avatar", click: () => toggleOverlay() },
       { label: "Characters", submenu: buildCharacterMenu() },
-      { label: "Window Size", submenu: buildSizeMenu() },
       { type: "separator" },
       {
         label: "About Desk",
@@ -1500,23 +1550,18 @@ function openConsole() {
 // in another. The ladder is now explicit and every rung is a surface that already
 // exists: the deck window if the Cards pane is DETACHED into it, otherwise the
 // console, and awask's popup only when neither is there to take it.
-decisionCards.setWindowRouter((_kind, id) => {
-  if (deckWindow && !deckWindow.isDestroyed()) {
-    deckWindow.show();
-    deckWindow.focus();
-    return true;
-  }
-  openConsole();
-  return focusPane("cards", id);
-});
+decisionCards.setWindowRouter((_kind, id) => openInbox(id));
 
 function createTray() {
   const iconPath = path.join(__dirname, "..", "build", "icon.png");
   const icon = nativeImage.createFromPath(iconPath).resize({ width: 20, height: 20 });
+  trayBaseIcon = icon;
   tray = new Tray(icon);
-  tray.setToolTip("Desk — click to show/hide the avatar; right-click for decisions, avatars and surfaces");
   refreshTrayMenu();
+  refreshNotificationBadges();
   tray.on("click", toggleOverlay);
+  // The console is the front door; the tray is the doorbell.
+  tray.on("double-click", () => openConsole());
 }
 
 /** `--smoke`: boot the REAL overlay window against the built renderer, then exit.
@@ -1888,47 +1933,15 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
         case "shrink":
           shrinkWindow();
           return true;
-        case "toggle-window-outline": {
-          // Toggleable "invisible glass" boundary: a dashed edge + faint tint
-          // so the avatar window's borders are visible while arranging it
-          // (owner 2026-08-25: had to expand the window and move the avatar
-          // left with no way to see the boundaries). Persisted per-window;
-          // restored on every renderer load by ensureRendererLoadHook.
-          if (avatarWindow && !avatarWindow.isDestroyed()) {
-            void avatarWindow.webContents.executeJavaScript(
-              "(() => {"
-              + "const KEY = 'desk.window-outline';"
-              + "const on = localStorage.getItem(KEY) !== '1';"
-              + "localStorage.setItem(KEY, on ? '1' : '0');"
-              + "document.getElementById('desk-window-outline')?.remove();"
-              + "if (on) {"
-              + "const d = document.createElement('div');"
-              + "d.id = 'desk-window-outline';"
-              + "d.style.cssText = 'position:fixed;inset:0;border:2px dashed"
-              + " rgba(120,160,255,.5);pointer-events:none;z-index:9999;"
-              + "background:rgba(120,160,255,.06);box-sizing:border-box;"
-              + "border-radius:10px;';"
-              + "document.body.appendChild(d);"
-              + "}"
-              + "return on;"
-              + "})();")
-              .catch(() => {});
-          }
+        case "toggle-window-outline":
+          toggleWindowOutline();
           return true;
-        }
         case "reset-layout":
-          // "Reset" the desk: drop the persisted per-slot transforms (every
-          // invisible-avatar artifact of 2026-08-25 lived in that key) and
-          // reload the avatar window, which re-frames with the default
-          // placement. The deck window stays open. Requested live by the
-          // owner after the D:\desk move window knocked the avatars off
-          // screen: "need like a reset button".
-          if (avatarWindow && !avatarWindow.isDestroyed()) {
-            void avatarWindow.webContents
-              .executeJavaScript(
-                "localStorage.removeItem('desk.avatar-layout.v1'); true;")
-              .finally(() => avatarWindow.reloadIgnoringCache());
-          }
+          resetAvatarLayout();
+          return true;
+        // The bell, the badge and every "N waiting" label land HERE.
+        case "inbox":
+          openInbox(typeof arg === "string" && arg ? arg : null);
           return true;
         case "quit":
           isQuitting = true;
@@ -2150,20 +2163,12 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
       onChange: (cards) => {
         openDecisions = cards;
         refreshTrayMenu();
-        // The bell counts cards actually WAITING on the owner (options or
+        // The badge counts cards actually WAITING on the owner (options or
         // credential asks), never info digests — "3 decisions waiting" must
         // not turn out to be one ask and two facts (owner report 2026-08-31,
         // the same noise class as the removed toasts). The total rides the
-        // tooltip so the deck's full view stays discoverable.
-        const waiting = decisionCards.actionableCount(cards);
-        tray?.setToolTip(
-          waiting > 0
-            ? `Desk — ${waiting} decision${waiting === 1 ? "" : "s"} waiting`
-                + (cards.length > waiting ? ` · ${cards.length} cards in deck` : "")
-            : cards.length > 0
-              ? `Desk — ${cards.length} info card${cards.length === 1 ? "" : "s"} (nothing to answer)`
-              : "Desk",
-        );
+        // tooltip so the inbox's full view stays discoverable.
+        refreshNotificationBadges(cards);
         sendDeckState();
         sendDecisionBadge();
       },

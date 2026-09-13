@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 
-import { setDragMode, useDragMode } from '../hooks/useDragMode';
 import { renderVrmThumbnail } from '../thumbnails';
 import {
   EMPTY_DECK_STATE,
@@ -64,16 +63,6 @@ function TerminalIcon() {
   );
 }
 
-function GridIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <rect x="4" y="4" width="7" height="7" rx="1.5" />
-      <rect x="13" y="4" width="7" height="7" rx="1.5" />
-      <rect x="4" y="13" width="7" height="7" rx="1.5" />
-      <rect x="13" y="13" width="7" height="7" rx="1.5" />
-    </svg>
-  );
-}
 
 function CloseIcon() {
   return (
@@ -186,7 +175,7 @@ function RelaySection({
     <section className="deck-section" aria-label="Relay">
       <h2 className="deck-section-head">
         <span className="deck-section-icon"><ChatIcon /></span>
-        {channel} — the sessions' channel
+        Messages — {channel}
       </h2>
       <div className="deck-relay-compose">
         <input
@@ -566,25 +555,6 @@ function ModelsMarketSection({
   );
 }
 
-/** The panel-side drag-mode toggle — same state plane as the bead
- *  (useDragMode), so both surfaces always agree. Default rotate; move is one
- *  labeled click away, and the row's label names the CURRENT mode so nothing
- *  is ever a hidden modifier again. */
-function DragModeRow() {
-  const mode = useDragMode();
-  return (
-    <button
-      className="deck-row"
-      title={mode === 'rotate'
-        ? 'Plain drag rotates the camera. Click to make plain drag MOVE the avatar instead.'
-        : 'Plain drag moves the avatar. Click to make plain drag ROTATE the camera instead.'}
-      onClick={() => setDragMode(mode === 'rotate' ? 'move' : 'rotate')}
-    >
-      <span className="deck-row-icon"><MonitorIcon /></span>
-      <span className="deck-row-label">Drag mode: {mode === 'rotate' ? 'Rotate' : 'Move'} — click to switch</span>
-    </button>
-  );
-}
 
 function ChevronLeftIcon() {
   return (
@@ -1118,14 +1088,14 @@ export function Deck() {
       ) : null}
       <header className="deck-header">
         <span className="deck-header-icon"><DeskIcon /></span>
-        <h1 className="deck-title">Desk</h1>
+        <h1 className="deck-title">Inbox</h1>
         <span className={`deck-count ${state.openCount > 0 ? 'deck-count-live' : ''}`}>
           {state.openCount > 0 ? `${state.openCount} waiting` : 'all clear'}
         </span>
         <button
           className="deck-close"
           aria-label="Close panel"
-          title="Close this panel (right-click a bead or the avatar to reopen it)"
+          title="Close the inbox (the bell, the tray badge and the console's Inbox tab reopen it)"
           onClick={() => bridgeDeck()?.close()}
         >
           <CloseIcon />
@@ -1156,74 +1126,16 @@ export function Deck() {
             ))}
           </section>
         ) : null}
-        {/* Ordering IS the UX: quick actions come FIRST (the owner had to scroll
-            past relay + notifications to reach them -- "you have to scroll all
-            the way down to get to quick actions", 2026-08-25). Scroll-heavy
-            content (the relay feed) goes last; the terminal action (quit) sits
-            at the very bottom where a destructive button belongs. */}
-        <section className="deck-section" aria-label="Quick actions">
-          <h2 className="deck-section-head">
-            <span className="deck-section-icon"><GridIcon /></span>
-            Quick actions
-          </h2>
-          <button className="deck-row" title="Aither Command — type a sentence, an agent does the work (fleet verbs, Claude Code headless)" onClick={() => runAction('command')}>
-            <span className="deck-row-icon"><TerminalIcon /></span>
-            <span className="deck-row-label">Aither Command</span>
-          </button>
-          <button className="deck-row" title="Fleet control — the whole fleet up / down / GPU quiet, held against restarts" onClick={() => runAction('fleet')}>
-            <span className="deck-row-icon"><MonitorIcon /></span>
-            <span className="deck-row-label">Fleet control</span>
-          </button>
-          <button className="deck-row" title="AitherOS overlay — the aitherium.com Living Desktop taskbar over your Windows desktop (click-through where it draws nothing; Esc hides). The same overlay AitherConnect puts over any web page (Alt+O)." onClick={() => runAction('living-desktop')}>
-            <span className="deck-row-icon"><MonitorIcon /></span>
-            <span className="deck-row-label">AitherOS overlay (on top of the desktop)</span>
-          </button>
-          <button className="deck-row" title="AitherDesktop app — the full aitherium.com desktop (Desktop Anywhere shell) in its own maximised window; signed in with the same session as the overlay" onClick={() => runAction('aither-desktop')}>
-            <span className="deck-row-icon"><MonitorIcon /></span>
-            <span className="deck-row-label">AitherDesktop app (full desktop)</span>
-          </button>
-          <button className="deck-row" title="Open a chat with Aither" onClick={() => runAction('talk')}>
-            <span className="deck-row-icon"><ChatIcon /></span>
-            <span className="deck-row-label">Talk to Aither</span>
-          </button>
-          <button className="deck-row" title="Open the model browser" onClick={() => runAction('models')}>
-            <span className="deck-row-icon"><ChipIcon /></span>
-            <span className="deck-row-label">Browse models</span>
-          </button>
-          <button className="deck-row" title="Agent packs and avatars on aitherium" onClick={() => runAction('marketplace')}>
-            <span className="deck-row-icon"><GridIcon /></span>
-            <span className="deck-row-label">Agent marketplace</span>
-          </button>
-          <button className="deck-row" title="Open the decision queue window" onClick={() => runAction('popup')}>
-            <span className="deck-row-icon"><TerminalIcon /></span>
-            <span className="deck-row-label">Decision queue (answer window)</span>
-          </button>
-          <button className="deck-row" title="Show or hide the floating beads on your desktop" onClick={() => runAction('toggle-desk')}>
-            <span className="deck-row-icon"><MonitorIcon /></span>
-            <span className="deck-row-label">
-              {state.deskVisible ? 'Hide the desk' : 'Show the desk'}
-            </span>
-          </button>
-          <div className="deck-row deck-row-static">
-            <span className="deck-row-label">Avatar window size</span>
-            <button className="deck-chip" title="Shrink the avatar window" onClick={() => runAction('shrink')}>Smaller</button>
-            <button className="deck-chip" title="Enlarge the avatar window" onClick={() => runAction('grow')}>Bigger</button>
-          </div>
-          <button className="deck-row" title="Reset the avatar layout and reload — clears every saved position and size, back to default placement" onClick={() => runAction('reset-layout')}>
-            <span className="deck-row-icon"><DeskIcon /></span>
-            <span className="deck-row-label">Reset avatar layout</span>
-          </button>
-          <button className="deck-row" title="Show or hide a dashed boundary around the avatar window so you can see its edges while arranging it" onClick={() => runAction('toggle-window-outline')}>
-            <span className="deck-row-icon"><MonitorIcon /></span>
-            <span className="deck-row-label">Show window boundaries</span>
-          </button>
-          <DragModeRow />
-        </section>
-
-        <section className="deck-section" aria-label="Notifications">
+        {/* CONSOLIDATED 2026-09-13 (owner: "notifications in the middle of this
+            desk menu wtf"). This pane IS the inbox: what needs an answer first,
+            then what the agents are saying, then the room. The launchers that
+            used to sit above it are console panes and tray items now; the
+            avatar controls moved to the avatar's own right-click menu. */}
+        <section className="deck-section" aria-label="Decisions">
           <h2 className="deck-section-head">
             <span className="deck-section-icon"><BellIcon /></span>
-            Notifications
+            Decisions
+            {state.openCount > 0 ? <span className="deck-section-count">{state.openCount}</span> : null}
           </h2>
           {state.decisions.length === 0 ? (
             <p className="deck-empty">Nothing waiting — every session is unblocked.</p>
@@ -1235,17 +1147,20 @@ export function Deck() {
               onPopout={(id) => runAction('popout-card', id)}
             />
           )}
-          {/* The overlay/app launchers live under Quick actions (top of the deck);
-              this section keeps the notification-area shortcut to the same overlay. */}
-          <button
-            className="deck-row"
-            title="Opens the AitherOS overlay (aitherium.com Living Desktop) with the notification area"
-            onClick={() => runAction('living-desktop')}
-          >
-            <span className="deck-row-icon"><MonitorIcon /></span>
-            <span className="deck-row-label">Notification area in the AitherOS overlay</span>
-          </button>
+          {state.decisions.length > 0 ? (
+            <button className="deck-row" title="Every waiting card in its own answer window" onClick={() => runAction('popup')}>
+              <span className="deck-row-icon"><TerminalIcon /></span>
+              <span className="deck-row-label">Answer window</span>
+            </button>
+          ) : null}
         </section>
+
+        <RelaySection
+          relay={state.relay}
+          channel={state.relayChannel}
+          nowMs={nowMs}
+          onPost={(text) => runAction('relay-post', text)}
+        />
 
         <SystemSection />
 
@@ -1336,26 +1251,10 @@ export function Deck() {
           onAction={runAction}
         />
 
-        <RelaySection
-          relay={state.relay}
-          channel={state.relayChannel}
-          nowMs={nowMs}
-          onPost={(text) => runAction('relay-post', text)}
-        />
-
-        <section className="deck-section" aria-label="Desk">
-          <h2 className="deck-section-head">
-            <span className="deck-section-icon"><MonitorIcon /></span>
-            Desk
-          </h2>
-          <button className="deck-row deck-row-danger" title="Quit Desk entirely — tray icon and all windows close" onClick={() => runAction('quit')}>
-            <span className="deck-row-label">Quit Desk</span>
-          </button>
-        </section>
       </div>
 
       <footer className="deck-footer">
-        desk · decision cards: {state.openCount}
+        inbox · {state.openCount} waiting · {state.relay.length} in {state.relayChannel}
       </footer>
     </main>
   );
