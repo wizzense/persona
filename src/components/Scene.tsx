@@ -241,7 +241,11 @@ function PlacedAvatar({ slotId, transform, onDrag, onScale, onRotate, onFocus, a
     // collider on every boot (owner, 2026-09-13). Re-derive the spring
     // constants from the SAME number that scaled the group, in the same effect.
     if (vrmRef.current) applySpringScale(vrmRef.current, transform.scale);
-  }, [transform]);
+    // Keyed on the VALUES: a slot with no stored layout gets a fresh default
+    // object every render, and an identity dep re-ran this (and the spring
+    // rescale over every joint) on each one.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [transform.position[0], transform.position[1], transform.position[2], transform.scale, transform.yaw]);
 
   const { beginDrag } = useAvatarDrag(
     (nx, nz) => {
@@ -267,6 +271,8 @@ function PlacedAvatar({ slotId, transform, onDrag, onScale, onRotate, onFocus, a
   // opacity-0 material rather than visible=false so the proxy is unambiguously
   // raycastable on every three.js version.
   const [ready, setReady] = useState(false);
+  const onReadyRef = useRef(onReady);
+  onReadyRef.current = onReady;
   const handleReady = useCallback(
     (scene: THREE.Object3D, vrm?: VRM) => {
       // The model usually lands AFTER the layout effect restored the scale, so
@@ -274,9 +280,9 @@ function PlacedAvatar({ slotId, transform, onDrag, onScale, onRotate, onFocus, a
       vrmRef.current = vrm ?? null;
       if (vrm) applySpringScale(vrm, transformRef.current.scale);
       setReady(true);
-      onReady(scene);
+      onReadyRef.current(scene);
     },
-    [onReady],
+    [],
   );
 
   return (
@@ -441,7 +447,13 @@ export function Scene(props: SceneProps) {
   // out rather than leaving a stale entry.
   const [extraScenes, setExtraScenes] = useState<Record<string, THREE.Object3D>>({});
   const handleExtraReady = useCallback((slotId: string, scene: THREE.Object3D) => {
-    setExtraScenes((current) => ({ ...current, [slotId]: scene }));
+    // BAIL OUT when nothing changed. This used to return a fresh object every
+    // call, and it is called from a ready-effect that re-fired on every render
+    // (the inline onReady below was a new closure each time): render -> effect
+    // -> setState(new object) -> render, forever. Measured 2026-09-18 with three
+    // stage bodies idle: R3F's commitUpdate/configure/deep-equal plus
+    // applySpringScale burned ~1.4 s of every 6 s doing nothing.
+    setExtraScenes((current) => (current[slotId] === scene ? current : { ...current, [slotId]: scene }));
   }, []);
   // Drop scenes for slots that no longer exist (remove_avatar) — otherwise a removed
   // avatar's LAST bounding box keeps being unioned into the camera framing forever.
@@ -502,6 +514,8 @@ export function Scene(props: SceneProps) {
       // On a loaded box that supersampling is the difference between smooth and janky.
       dpr={1}
       gl={{
+        // MSAA stays ON: off saves ~1.1 s of GL wait per 6 s under software present
+        // (3.8 -> 2.65, measured 2026-09-18) and visibly staircases every outline.
         antialias: true,
         alpha: true,
         powerPreference: 'high-performance',

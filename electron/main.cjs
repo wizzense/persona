@@ -15,6 +15,51 @@ const {
   Tray,
 } = require("electron");
 
+// A transparent always-on-top overlay must never be treated as "in the
+// background". Measured 2026-09-18 over CDP with an IDLE renderer (0.7 s of work
+// per 6 s): frame gaps of almost exactly 1000 ms, several per 10 s -- Chromium's
+// 1 fps requestAnimationFrame throttle, applied whenever Windows' native
+// occlusion tracker judged the overlay covered (it sits under/over other
+// windows all day) or the renderer "backgrounded". On screen that is the avatar
+// freezing for a second at a time. The window-level half is
+// `backgroundThrottling: false` on the avatar BrowserWindow below.
+app.commandLine.appendSwitch("disable-features", "CalculateNativeWinOcclusion");
+// How frames reach the screen (software present + the integrated adapter on
+// Windows): the measurement and the knobs live in present-policy.cjs.
+const presentState = require("./present-policy.cjs").applyPresentPolicy(app, {
+  execFile: require("node:child_process").execFile,
+});
+app.commandLine.appendSwitch("disable-renderer-backgrounding");
+app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");
+
+// Main-process event-loop lag, measured not guessed: a 50 ms ticker records how
+// late each tick fires. A block here (sync fs, execFileSync, a big JSON.parse)
+// stalls IPC and frame delivery for every window. Reported on /health as
+// `mainLag` {maxMs, over100, windowS}; the window resets every 10 s.
+const mainLag = { maxMs: 0, over100: 0, windowS: 10, worst: [] };
+{
+  let expected = Date.now() + 50;
+  let windowStart = Date.now();
+  let cur = { maxMs: 0, over100: 0 };
+  setInterval(() => {
+    const now = Date.now();
+    const late = now - expected;
+    expected = now + 50;
+    if (late > cur.maxMs) cur.maxMs = late;
+    if (late > 100) {
+      cur.over100 += 1;
+      mainLag.worst.push({ at: new Date(now).toISOString().slice(11, 19), ms: late });
+      if (mainLag.worst.length > 8) mainLag.worst.shift();
+    }
+    if (now - windowStart >= mainLag.windowS * 1000) {
+      mainLag.maxMs = cur.maxMs;
+      mainLag.over100 = cur.over100;
+      cur = { maxMs: 0, over100: 0 };
+      windowStart = now;
+    }
+  }, 50).unref();
+}
+
 // Opt-in diagnostics door: DESK_CDP_PORT=9223 exposes the renderer over CDP so
 // scripts/perf-gate.cjs (and cdp-probe / cdp-profile) can measure the running
 // app from outside. Must be set before the app is ready; off by default.
@@ -396,6 +441,8 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      // Never throttle the overlay's animation loop (see the switches at the top).
+      backgroundThrottling: false,
     },
   });
 
@@ -2151,7 +2198,7 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
         openConsole();
         return { ok: focusPane(pane) !== false, pane };
       },
-      stageStatusProvider: () => (roomStage ? roomStage.status() : null),
+      stageStatusProvider: () => ({ ...(roomStage ? roomStage.status() : { room: false }), mainLag, present: { mode: presentState.present, gpu: presentState.gpu } }),
       avatarBoundsProvider: () =>
         avatarWindow && !avatarWindow.isDestroyed() && avatarWindow.isVisible()
           ? avatarWindow.getBounds()

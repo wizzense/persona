@@ -18,15 +18,23 @@
  * (no CDP, no bridge, no roster) — never 0 on silence.
  */
 
-const { execFileSync } = require("node:child_process");
+const { execFileSync, spawn } = require("node:child_process");
 const { avatarTarget, busyOver, connect, frameGaps, workOver } = require("./cdp-client.cjs");
 
 // One table. A number here is a promise; change it with a measurement in the commit.
 const THRESHOLDS = {
-  busySecondsPer6s: 3.0, // sampled non-idle CPU with the bodies on stage (one speaking)
+  // Sampled non-idle main-thread time, bodies on stage, one speaking. Under software
+  // present this INCLUDES the blocking GL readback wait ((program), ~3 s of the
+  // measured 3.8 s) -- so it bounds the whole thread, and `script` below bounds OUR code.
+  busySecondsPer6s: 4.5,
+  scriptSecondsPer6s: 1.5, // JS alone (measured 0.63 s with three bodies)
   heapMb: 450, // renderer JS heap with the bodies on stage
   heapLeakMb: 40, // heap after removal minus baseline (absolute: the baseline is ~8 MB)
   stallsPer10s: 1, // frame gaps > 250 ms (one tolerated: a foreign GPU hiccup)
+  // Frame gaps > 250 ms while an nvidia-smi poller holds the WDDM driver lock 4x a
+  // second -- the real condition on a box whose dGPU serves the fleet. Measured
+  // 2026-09-18: 3-6 with a GPU swap chain, 0 with software present on the iGPU.
+  stallsUnderPollerPer10s: 0,
 };
 
 const CDP_PORT = Number(process.env.DESK_CDP_PORT || 9223);
@@ -60,6 +68,18 @@ function deskVramMb() {
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** One long-lived poller; null when this box has no nvidia-smi (arm skipped, said so). */
+function startPoller() {
+  try {
+    execFileSync("nvidia-smi", ["-L"], { timeout: 15000, stdio: "ignore" });
+  } catch {
+    return null;
+  }
+  const child = spawn("nvidia-smi", ["--query-gpu=utilization.gpu", "--format=csv,noheader", "-lms", "250"], { stdio: "ignore" });
+  child.on("error", () => {});
+  return child;
+}
 
 async function heapAfterGc(cdp) {
   await cdp.send("HeapProfiler.enable");
@@ -107,9 +127,16 @@ async function main() {
       body: JSON.stringify({ text: "Performance gate: one body speaks while the others idle.", slot: slots[0] }),
     }).catch(() => {});
     const busy = await busyOver(cdp, 6);
-    const work = await workOver(cdp, 1);
+    const work = await workOver(cdp, 6);
     const gaps = await frameGaps(cdp, 10);
     const vramStage = deskVramMb();
+    const poller = startPoller();
+    let polled = null;
+    if (poller) {
+      await sleep(1000);
+      polled = await frameGaps(cdp, 10);
+      poller.kill();
+    }
 
     for (const slot of slots) await mcp("remove_avatar", { slot_id: slot });
     await sleep(8000);
@@ -118,6 +145,7 @@ async function main() {
     const result = {
       bodies: slots.length,
       busySecondsPer6s: Number(busy.busy.toFixed(2)),
+      scriptSecondsPer6s: Number(work.script.toFixed(2)),
       heapMb: work.heapMb,
       baselineHeapMb: baselineHeap,
       heapAfterRemovalMb: heapAfter,
@@ -127,12 +155,17 @@ async function main() {
       p95Ms: Number(gaps.p95.toFixed(1)),
       maxMs: Math.round(gaps.max),
       stallsPer10s: gaps.stalls,
+      stallsUnderPollerPer10s: polled ? polled.stalls : "skipped: no nvidia-smi on this box",
+      maxUnderPollerMs: polled ? Math.round(polled.max) : null,
       deskVramMb: { before: vramBefore, onStage: vramStage },
     };
     const breaches = [];
     if (result.busySecondsPer6s > THRESHOLDS.busySecondsPer6s) breaches.push(`busy ${result.busySecondsPer6s}s > ${THRESHOLDS.busySecondsPer6s}s`);
+    if (result.scriptSecondsPer6s > THRESHOLDS.scriptSecondsPer6s) breaches.push(`script ${result.scriptSecondsPer6s}s > ${THRESHOLDS.scriptSecondsPer6s}s`);
     if (result.heapMb > THRESHOLDS.heapMb) breaches.push(`heap ${result.heapMb}MB > ${THRESHOLDS.heapMb}MB`);
     if (result.heapLeakMb > THRESHOLDS.heapLeakMb) breaches.push(`heap did not return: +${result.heapLeakMb}MB over baseline (> ${THRESHOLDS.heapLeakMb}MB)`);
+    if (polled && polled.stalls > THRESHOLDS.stallsUnderPollerPer10s)
+      breaches.push(`stalls under a GPU poller ${polled.stalls} > ${THRESHOLDS.stallsUnderPollerPer10s} (max ${Math.round(polled.max)} ms)`);
     if (result.stallsPer10s > THRESHOLDS.stallsPer10s) breaches.push(`stalls ${result.stallsPer10s} > ${THRESHOLDS.stallsPer10s}`);
 
     if (asJson) console.log(JSON.stringify({ result, breaches, thresholds: THRESHOLDS }, null, 2));
