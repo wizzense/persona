@@ -1905,9 +1905,14 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
         let wav = tmp;
         if (isWebm) {
           wav = path.join(os.tmpdir(), `desk-ptt-${Date.now()}.wav`);
-          const { execFileSync } = require("child_process");
-          execFileSync("ffmpeg", ["-y", "-i", tmp, "-ar", "16000", "-ac", "1", wav],
-            { stdio: "ignore", timeout: 30000 });
+          // Off the event loop: execFileSync here held the main process -- IPC,
+          // every window's input, the room stage -- for the whole conversion
+          // (up to its 30 s timeout) on every push-to-talk.
+          const { execFile } = require("child_process");
+          await new Promise((resolve, reject) => {
+            execFile("ffmpeg", ["-y", "-i", tmp, "-ar", "16000", "-ac", "1", wav],
+              { windowsHide: true, timeout: 30000 }, (error) => (error ? reject(error) : resolve()));
+          });
           fs.unlink(tmp, () => {});
         }
         // THE BRIDGE (drop-router doctrine, measured 2026-08-29): a HOST
