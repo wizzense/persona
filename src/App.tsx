@@ -98,14 +98,17 @@ export function App() {
   // used to live here after a conditional early-return, which violates the
   // rules of hooks — a window that ever flipped modes would have corrupted
   // hook state (measured lint class, 2026-08-25).
-  const [isDeck] = useState(
-    () => new URLSearchParams(window.location.search).get('deck') === '1',
-  );
-  if (isDeck) return <Deck />;
-  const [isChat] = useState(
-    () => new URLSearchParams(window.location.search).get('chat') === '1',
-  );
-  if (isChat) return <ChatView />;
+  // ONE hook, then the returns: a second useState after `if (isDeck) return`
+  // was itself the conditional-hook shape this comment warns about (lint
+  // measured it again 2026-09-18).
+  const [mode] = useState<'deck' | 'chat' | 'avatar'>(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('deck') === '1') return 'deck';
+    if (params.get('chat') === '1') return 'chat';
+    return 'avatar';
+  });
+  if (mode === 'deck') return <Deck />;
+  if (mode === 'chat') return <ChatView />;
   return <AvatarSceneApp />;
 }
 
