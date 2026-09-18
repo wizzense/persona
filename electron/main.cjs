@@ -570,6 +570,25 @@ function handleBridgeEvent(event) {
   emitToRenderer(event);
 }
 
+/** The avatar says `text` through AitherVoice, lip-synced by the renderer.
+ *  ONE path for every caller -- the drop lane, POST /speak, the MCP `speak`
+ *  tool -- so the orchestrator, a routine, awvoice and a Claude Code session
+ *  all sound the same. Owner, 2026-09-18: "we have AitherVoice + awvoice +
+ *  aither-orchestrator -- integrate this." Fail-soft: {ok:false, reason}. */
+async function speakAloud(text, voice = "nova") {
+  const tts = await synthesizeVerdict(text, voice);
+  if (!tts.ok) return { ok: false, reason: tts.reason || "voice service unavailable" };
+  let delivered = 0;
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) {
+      win.webContents.send("desk:event", { type: "speak", audioBase64: tts.audioBase64 });
+      delivered += 1;
+    }
+  }
+  if (delivered === 0) return { ok: false, reason: "no avatar window to speak from" };
+  return { ok: true, chars: text.length, windows: delivered };
+}
+
 function handleListenerStatus(status) {
   const availabilityChanged = latestListenerStatus?.available !== status?.available;
   latestListenerStatus = status;
@@ -1816,14 +1835,7 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
       const speakText = verdict.kind === "doc" ? verdict.summary : String(verdict.summary).slice(0, 220);
       // The avatar SPEAKS the verdict (fail-soft: a dead voice service must
       // never fail the drop itself).
-      void synthesizeVerdict(speakText).then((tts) => {
-        if (!tts.ok) return;
-        for (const win of BrowserWindow.getAllWindows()) {
-          if (!win.isDestroyed()) {
-            win.webContents.send("desk:event", { type: "speak", audioBase64: tts.audioBase64 });
-          }
-        }
-      });
+      void speakAloud(speakText);
       // GAP-4 agent pass: post the notice to the cockpit channel; the deck's
       // own relay feed picks it up via refreshRelayFeed. Fire-and-forget —
       // a refused post must not fail the drop.
@@ -2069,6 +2081,7 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
       onRemoveAvatar: (slotId) => removeAvatarSlot(slotId),
       onFleet: (action, opts) => fleetAction(action, opts),
       onCommand: (text, opts) => commandAction(text, opts),
+      onSpeak: ({ text, voice }) => speakAloud(text, voice),
       onDesktop: (surface) => {
         if (surface === "overlay") showLivingDesktop();
         else if (surface === "app") showDesktopApp();
@@ -2083,8 +2096,9 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
       // /api/decisions is a build stub — this loopback read is how its bell
       // sees the queue at all. Read-only; answering stays in the queue window.
       decisionsProvider: () => decisionCards.listOpen(),
-      fleetHandler: (verb) => fleetAction(verb === "open" ? "open_panel" : verb, { fresh: false }),
+      fleetHandler: (verb, { fresh = false } = {}) => fleetAction(verb === "open" ? "open_panel" : verb, { fresh }),
       // awsh /desktop, adk desk desktop, awconnect's popup and `desk://` all land here.
+      speakHandler: ({ text, voice }) => speakAloud(text, voice),
       desktopHandler: (mode) => {
         if (mode === "overlay") showLivingDesktop();
         else if (mode === "app") showDesktopApp();

@@ -394,6 +394,23 @@ test("bearer: the right bearer reaches the fleet handler", async (context) => {
   assert.deepEqual(JSON.parse(ok.body), { ok: true, verb: "down" });
 });
 
+test("GET /fleet/status?maxAgeMs=0 reaches the handler as fresh; a bare status does not", async (context) => {
+  const seen = [];
+  const address = await fleetBridge(context, {
+    fleetHandler: (verb, opts) => { seen.push({ verb, fresh: !!opts?.fresh }); return { ok: true, verb }; },
+  });
+  assert.equal((await requestServer(address, { path: "/fleet/status" })).status, 200);
+  assert.equal((await requestServer(address, { path: "/fleet/status?maxAgeMs=0" })).status, 200);
+  assert.equal((await requestServer(address, { path: "/fleet/status?fresh=1" })).status, 200);
+  assert.equal((await requestServer(address, { path: "/fleet/status?maxAgeMs=5000" })).status, 200);
+  assert.deepEqual(seen, [
+    { verb: "status", fresh: false },
+    { verb: "status", fresh: true },
+    { verb: "status", fresh: true },
+    { verb: "status", fresh: false },
+  ]);
+});
+
 test("bearer: GET /fleet/status and POST /fleet/open stay open on loopback", async (context) => {
   const address = await fleetBridge(context);
   const status = await requestServer(address, { path: "/fleet/status" });

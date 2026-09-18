@@ -198,6 +198,8 @@ function createBridgeServer({
   // The two desktop surfaces: POST /desktop/overlay | /desktop/app raise a
   // window (no bearer — same class as /fleet/open); GET /desktop/status reads.
   desktopHandler = null,
+  // POST /speak {text, voice?}: the avatar says it through AitherVoice.
+  speakHandler = null,
   // undefined = resolve from env/file at start; null = none configured (mutators 503).
   bridgeToken = undefined,
 }) {
@@ -305,6 +307,53 @@ function createBridgeServer({
       return;
     }
 
+    // The avatar SPEAKS (owner, 2026-09-18: "we have AitherVoice + awvoice +
+    // aither-orchestrator -- integrate this"). POST /speak {text, voice?}:
+    // main synthesises through AitherVoice and the renderer plays it with
+    // lip-sync -- the same path the drop lane already used, opened to every
+    // agent: the orchestrator's replies, a routine, awvoice, a Claude Code
+    // session. Same trust class as /desktop: loopback, no foreign Origin,
+    // no bearer -- speaking on the owner's own desk mutates nothing.
+    if (request.url === "/speak") {
+      if (!originAllowed(origin)) {
+        response.writeHead(403);
+        response.end();
+        return;
+      }
+      if (speakHandler == null) {
+        response.writeHead(404);
+        response.end();
+        return;
+      }
+      if (request.method !== "POST") {
+        response.writeHead(405, { allow: "POST" });
+        response.end();
+        return;
+      }
+      readJsonBody(request)
+        .then((body) => {
+          const text = typeof body?.text === "string" ? body.text.trim() : "";
+          if (!text) {
+            response.writeHead(400, { "content-type": "application/json" });
+            response.end(JSON.stringify({ ok: false, error: "text required" }));
+            return null;
+          }
+          const voice = typeof body?.voice === "string" && body.voice ? body.voice : undefined;
+          return speakHandler({ text: text.slice(0, 2000), voice });
+        })
+        .then((result) => {
+          if (result == null || response.headersSent) return;
+          response.writeHead(result.ok === false ? 502 : 200, { "content-type": "application/json" });
+          response.end(JSON.stringify(result));
+        })
+        .catch((error) => {
+          if (response.headersSent) return;
+          response.writeHead(500, { "content-type": "application/json" });
+          response.end(JSON.stringify({ ok: false, error: error?.message || String(error) }));
+        });
+      return;
+    }
+
     // prefetch away from an outage.
     if (request.url === "/fleet/status" || request.url.startsWith("/fleet/")) {
       if (!originAllowed(origin)) {
@@ -317,8 +366,13 @@ function createBridgeServer({
         response.end();
         return;
       }
-      const verb = request.url.slice("/fleet/".length).split("?")[0];
+      const [verb, query = ""] = request.url.slice("/fleet/".length).split("?");
       const isStatus = verb === "status";
+      // GET /fleet/status?maxAgeMs=0 (or ?fresh=1) forces a live probe; without
+      // it the 15 s cache answers. Measured 2026-09-18: the query was stripped
+      // here and every caller got the cache while believing it had forced one.
+      const params = new URLSearchParams(query);
+      const fresh = isStatus && (params.get("maxAgeMs") === "0" || params.get("fresh") === "1");
       if ((isStatus && request.method !== "GET") || (!isStatus && request.method !== "POST")) {
         response.writeHead(405, { allow: isStatus ? "GET" : "POST" });
         response.end();
@@ -330,7 +384,7 @@ function createBridgeServer({
         return;
       }
       Promise.resolve()
-        .then(() => fleetHandler(verb))
+        .then(() => fleetHandler(verb, { fresh }))
         .then((verdict) => {
           const status = verdict?.unknown ? 404 : verdict?.busy ? 409 : verdict?.cannotJudge ? 503 : 200;
           response.writeHead(status, { "content-type": "application/json" });
