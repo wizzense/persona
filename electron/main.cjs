@@ -134,7 +134,8 @@ const {
   enrollNewestDownload,
   getActiveCharacter,
   installCharacter,
-  installCharacterToSlot,
+  planSlotInstall,
+  queueInstall,
   listCharacters,
 } = require("./character-roster.cjs");
 const { invalidateGate, isHidden } = require("./content-rating.cjs");
@@ -903,20 +904,30 @@ function spawnAvatarSlot(slotId, name, agent) {
   // Refuse slot IDs reserved for the default avatar
   if (slotId === "slot0" || slotId === "default" || slotId === "") return false;
 
-  const modelUrl = installCharacterToSlot(name, slotId);
-  if (!modelUrl) return false;
+  // The refusal is synchronous (hidden / no such model); the BYTES move off the
+  // event loop, and the renderer hears about the body only once its file exists.
+  const plan = planSlotInstall(name, slotId);
+  if (!plan) return false;
+  const modelUrl = plan.url;
 
   avatarSlots.set(slotId, { name, modelUrl, agent: agent || null });
   debugLog("avatar slot spawned", slotId, name, agent ? `(agent: ${agent})` : "");
   showOverlay();
-  if (avatarWindow && !avatarWindow.isDestroyed()) {
-    avatarWindow.webContents.send("desk:event", {
-      type: "spawn-avatar",
-      slotId,
-      modelUrl,
-    });
-  }
   sendDeckState();
+  queueInstall(plan.copies).then(
+    () => {
+      // Removed (or re-spawned as someone else) while the copy ran: say nothing.
+      if (avatarSlots.get(slotId)?.modelUrl !== modelUrl || avatarSlots.get(slotId)?.name !== name) return;
+      if (avatarWindow && !avatarWindow.isDestroyed()) {
+        avatarWindow.webContents.send("desk:event", { type: "spawn-avatar", slotId, modelUrl });
+      }
+    },
+    (error) => {
+      debugLog("avatar slot install failed", slotId, name, error?.message || error);
+      if (avatarSlots.get(slotId)?.name === name) avatarSlots.delete(slotId);
+      sendDeckState();
+    },
+  );
   return true;
 }
 

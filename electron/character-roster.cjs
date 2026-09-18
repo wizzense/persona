@@ -202,14 +202,19 @@ function enrollNewestDownload(preferredName = null) {
   return base;
 }
 
-/** Copy a character's model (and optional animation overrides) into asset trees
- *  for a spawned slot (not the default slot). Returns the relative asset URL
- *  to load (e.g. './assets/model-slot1.vrm') on success, or null on failure.
+/** Where a spawned slot's model comes from and where it must land -- decided
+ *  synchronously and CHEAPLY (existence checks only), so the caller can refuse a
+ *  bad spawn at once. The bytes move in `copyIfChanged`, off the event loop.
  *
- *  Unlike installCharacter(), this does NOT write ACTIVE_FILE or call
- *  rememberCharacter() — those are roster-wide concepts for slot 0, not
- *  per-slot. Refuses a hidden character (same gate as installCharacter). */
-function installCharacterToSlot(name, slotId) {
+ *  Measured 2026-09-18 (`/health.stage.mainLag`): the old synchronous
+ *  `copyFileSync` of an 18-66 MB model into two asset trees blocked the main
+ *  process for 516 ms and 949 ms on consecutive spawns -- IPC and every window's
+ *  input stall with it.
+ *
+ *  Does NOT write ACTIVE_FILE or call rememberCharacter() (slot-0 concepts).
+ *  Refuses a hidden character (same gate as installCharacter). Returns
+ *  `{ url, copies: [{ from, to }] }` or null. */
+function planSlotInstall(name, slotId) {
   if (isHidden(name)) return null;
 
   // Try dev tree first, then pack
@@ -217,7 +222,6 @@ function installCharacterToSlot(name, slotId) {
   let model = path.join(source, "model.vrm");
 
   if (!fs.existsSync(model)) {
-    // Try loading from pack
     const packDir = packContentDir("persona:characters-mature", "persona");
     if (packDir) {
       source = path.join(packDir, "characters", name);
@@ -228,22 +232,46 @@ function installCharacterToSlot(name, slotId) {
   if (!fs.existsSync(model)) return null;
 
   const modelFilename = `model-${slotId}.vrm`;
+  const animations = path.join(source, "animations");
+  const clips = fs.existsSync(animations) ? fs.readdirSync(animations).filter((file) => file.endsWith(".vrma")) : [];
+  const copies = [];
   for (const assetDir of ASSET_DIRS) {
-    fs.mkdirSync(path.join(assetDir, "animations"), { recursive: true });
-    fs.copyFileSync(model, path.join(assetDir, modelFilename));
-    const animations = path.join(source, "animations");
-    if (fs.existsSync(animations)) {
-      for (const file of fs.readdirSync(animations)) {
-        if (file.endsWith(".vrma")) {
-          fs.copyFileSync(
-            path.join(animations, file),
-            path.join(assetDir, "animations", file),
-          );
-        }
-      }
-    }
+    copies.push({ from: model, to: path.join(assetDir, modelFilename) });
+    for (const file of clips) copies.push({ from: path.join(animations, file), to: path.join(assetDir, "animations", file) });
   }
-  return `./assets/${modelFilename}`;
+  return { url: `./assets/${modelFilename}`, copies };
+}
+
+/** Copy each pair without blocking the event loop, skipping a destination that
+ *  already holds the same bytes (same size, not older than the source) -- the
+ *  same character re-spawned, or a clip shared by every character, costs a stat.
+ *  Resolves `{ copied, skipped }`; rejects on the first real failure. */
+async function copyIfChanged(copies, fsp = fs.promises) {
+  let copied = 0;
+  let skipped = 0;
+  for (const { from, to } of copies) {
+    const src = await fsp.stat(from);
+    const dst = await fsp.stat(to).catch(() => null);
+    if (dst && dst.size === src.size && dst.mtimeMs >= src.mtimeMs) {
+      skipped += 1;
+      continue;
+    }
+    await fsp.mkdir(path.dirname(to), { recursive: true });
+    await fsp.copyFile(from, to);
+    copied += 1;
+  }
+  return { copied, skipped };
+}
+
+/** One install at a time. Every character shares the clip files under
+ *  `animations/`, so two spawns copying concurrently write the SAME destination
+ *  and Windows answers EBUSY -- measured 2026-09-18: three quick spawns, the
+ *  second body never appeared. A failed install does not poison the queue. */
+let installChain = Promise.resolve();
+function queueInstall(copies, fsp = fs.promises) {
+  const run = installChain.then(() => copyIfChanged(copies, fsp));
+  installChain = run.catch(() => {});
+  return run;
 }
 
 module.exports = {
@@ -252,7 +280,9 @@ module.exports = {
   enrollNewestDownload,
   getActiveCharacter,
   installCharacter,
-  installCharacterToSlot,
+  copyIfChanged,
+  planSlotInstall,
+  queueInstall,
   listAllCharacters,
   listCharacters,
 };

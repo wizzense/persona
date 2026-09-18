@@ -30,6 +30,10 @@ const THRESHOLDS = {
   scriptSecondsPer6s: 1.5, // JS alone (measured 0.63 s with three bodies)
   heapMb: 450, // renderer JS heap with the bodies on stage
   heapLeakMb: 40, // heap after removal minus baseline (absolute: the baseline is ~8 MB)
+  // Worst main-process event-loop block while the bodies spawn and load
+  // (/health.stage.mainLag). Sync model copies measured 516 and 949 ms; the
+  // queued async install measures 133 ms.
+  mainLagMsDuringSpawn: 300,
   stallsPer10s: 1, // frame gaps > 250 ms (one tolerated: a foreign GPU hiccup)
   // Frame gaps > 250 ms while an nvidia-smi poller holds the WDDM driver lock 4x a
   // second -- the real condition on a box whose dGPU serves the fleet. Measured
@@ -120,7 +124,13 @@ async function main() {
       console.error("COULD NOT RUN: no body spawned. Exit 2.");
       return 2;
     }
-    await sleep(25000); // models load + first frames
+    // models load + first frames -- and watch the main process while they do
+    let mainLagMs = null;
+    for (let i = 0; i < 12; i += 1) {
+      await sleep(2000);
+      const lag = await fetch(`${BRIDGE}/health`).then((r) => r.json()).then((h) => h?.stage?.mainLag?.maxMs).catch(() => undefined);
+      if (typeof lag === "number") mainLagMs = Math.max(mainLagMs ?? 0, lag);
+    }
     await fetch(`${BRIDGE}/speak`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -154,6 +164,7 @@ async function main() {
       medianMs: Number(gaps.median.toFixed(1)),
       p95Ms: Number(gaps.p95.toFixed(1)),
       maxMs: Math.round(gaps.max),
+      mainLagMsDuringSpawn: mainLagMs ?? "unreported: this desk build has no /health.stage.mainLag",
       stallsPer10s: gaps.stalls,
       stallsUnderPollerPer10s: polled ? polled.stalls : "skipped: no nvidia-smi on this box",
       maxUnderPollerMs: polled ? Math.round(polled.max) : null,
@@ -166,6 +177,7 @@ async function main() {
     if (result.heapLeakMb > THRESHOLDS.heapLeakMb) breaches.push(`heap did not return: +${result.heapLeakMb}MB over baseline (> ${THRESHOLDS.heapLeakMb}MB)`);
     if (polled && polled.stalls > THRESHOLDS.stallsUnderPollerPer10s)
       breaches.push(`stalls under a GPU poller ${polled.stalls} > ${THRESHOLDS.stallsUnderPollerPer10s} (max ${Math.round(polled.max)} ms)`);
+    if (typeof mainLagMs === "number" && mainLagMs > THRESHOLDS.mainLagMsDuringSpawn) breaches.push(`main process blocked ${mainLagMs} ms during spawn > ${THRESHOLDS.mainLagMsDuringSpawn} ms`);
     if (result.stallsPer10s > THRESHOLDS.stallsPer10s) breaches.push(`stalls ${result.stallsPer10s} > ${THRESHOLDS.stallsPer10s}`);
 
     if (asJson) console.log(JSON.stringify({ result, breaches, thresholds: THRESHOLDS }, null, 2));
