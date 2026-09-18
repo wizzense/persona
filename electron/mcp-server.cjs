@@ -22,7 +22,7 @@ const WINDOW_ACTIONS = ["show", "hide", "toggle"];
 // for the owner; the rest run the same FleetControl the window's buttons do.
 const FLEET_ACTIONS = ["down", "up", "gaming", "resume", "adopt", "open_panel"];
 const SERVER_INSTRUCTIONS =
-  "Desk controls the installed local desktop character. Use play_animation when the user asks for a visual reaction or it clearly supports their request. Use control_window to show, hide, or toggle Desk. Desk never speaks or plays audio. get_status is read-only.";
+  "Desk controls the installed local desktop character. Use play_animation when the user asks for a visual reaction or it clearly supports their request. Use control_window to show, hide, or toggle Desk. Use speak to have the avatar say a short line aloud through AitherVoice with lip-sync. get_status is read-only.";
 
 function textResult(text) {
   return {
@@ -49,6 +49,7 @@ function createDeskMcpServer({
   onFleet = null,
   onCommand = null,
   onDesktop = null,
+  onSpeak = null,
 }) {
   const server = new McpServer(
     {
@@ -421,6 +422,27 @@ function createDeskMcpServer({
       },
       async ({ surface }) => {
         const result = await onDesktop(surface);
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], isError: result?.ok === false };
+      },
+    );
+  }
+
+  if (onSpeak != null) {
+    server.registerTool(
+      "speak",
+      {
+        title: "Have the avatar say something aloud",
+        description:
+          "Synthesises the text through AitherVoice and plays it on the owner's desk with lip-sync. Keep it to a sentence or two (2000 chars max). Fails with ok:false when the voice service is unreachable; the avatar stays silent rather than showing a broken mouth.",
+        inputSchema: {
+          text: z.string().min(1).max(2000).describe("What the avatar says."),
+          voice: z.string().optional().describe("AitherVoice voice name (default nova)."),
+          speed: z.number().min(0.25).max(4).optional().describe("Playback rate (default 1.35x, or DESK_VOICE_SPEED)."),
+        },
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+      },
+      async ({ text, voice, speed }) => {
+        const result = await onSpeak({ text, voice, speed });
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], isError: result?.ok === false };
       },
     );

@@ -339,7 +339,10 @@ function createBridgeServer({
             return null;
           }
           const voice = typeof body?.voice === "string" && body.voice ? body.voice : undefined;
-          return speakHandler({ text: text.slice(0, 2000), voice });
+          const speed = Number.isFinite(Number(body?.speed)) && body?.speed != null
+            ? Number(body.speed)
+            : undefined;
+          return speakHandler({ text: text.slice(0, 2000), voice, speed });
         })
         .then((result) => {
           if (result == null || response.headersSent) return;

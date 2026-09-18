@@ -575,8 +575,8 @@ function handleBridgeEvent(event) {
  *  tool -- so the orchestrator, a routine, awvoice and a Claude Code session
  *  all sound the same. Owner, 2026-09-18: "we have AitherVoice + awvoice +
  *  aither-orchestrator -- integrate this." Fail-soft: {ok:false, reason}. */
-async function speakAloud(text, voice = "nova") {
-  const tts = await synthesizeVerdict(text, voice);
+async function speakAloud(text, voice = "nova", speed = undefined) {
+  const tts = await synthesizeVerdict(text, voice || "nova", { speed, maxChars: 2000 });
   if (!tts.ok) return { ok: false, reason: tts.reason || "voice service unavailable" };
   let delivered = 0;
   for (const win of BrowserWindow.getAllWindows()) {
@@ -2081,7 +2081,7 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
       onRemoveAvatar: (slotId) => removeAvatarSlot(slotId),
       onFleet: (action, opts) => fleetAction(action, opts),
       onCommand: (text, opts) => commandAction(text, opts),
-      onSpeak: ({ text, voice }) => speakAloud(text, voice),
+      onSpeak: ({ text, voice, speed }) => speakAloud(text, voice, speed),
       onDesktop: (surface) => {
         if (surface === "overlay") showLivingDesktop();
         else if (surface === "app") showDesktopApp();
@@ -2098,7 +2098,7 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
       decisionsProvider: () => decisionCards.listOpen(),
       fleetHandler: (verb, { fresh = false } = {}) => fleetAction(verb === "open" ? "open_panel" : verb, { fresh }),
       // awsh /desktop, adk desk desktop, awconnect's popup and `desk://` all land here.
-      speakHandler: ({ text, voice }) => speakAloud(text, voice),
+      speakHandler: ({ text, voice, speed }) => speakAloud(text, voice, speed),
       desktopHandler: (mode) => {
         if (mode === "overlay") showLivingDesktop();
         else if (mode === "app") showDesktopApp();

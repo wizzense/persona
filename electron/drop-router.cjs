@@ -365,11 +365,26 @@ async function routeDrop({ filePath, mime = "" }, deps = {}) {
  * the gateway synthesize_speech tool is ledgered D-2296). Fail-soft:
  * {ok:false, reason} when the voice service is unreachable.
  */
-async function synthesizeVerdict(text, voice = "nova") {
-  const short = String(text || "").slice(0, 220);
+// Playback rate for everything the avatar says. The fleet voices read slow
+// (owner, 2026-09-18: "the speech rate is too slow"); awsh already defaults to
+// 1.25x for the same reason. DESK_VOICE_SPEED overrides per host; the
+// service accepts 0.25-4.0.
+const SPEED_MIN = 0.25;
+const SPEED_MAX = 4.0;
+const SPEED_DEFAULT = 1.35;
+function voiceSpeed(requested, env = process.env) {
+  const raw = Number.isFinite(Number(requested)) && requested !== "" && requested != null
+    ? Number(requested)
+    : Number(env.DESK_VOICE_SPEED);
+  const speed = Number.isFinite(raw) && raw > 0 ? raw : SPEED_DEFAULT;
+  return Math.max(SPEED_MIN, Math.min(SPEED_MAX, speed));
+}
+
+async function synthesizeVerdict(text, voice = "nova", { speed, maxChars = 220 } = {}) {
+  const short = String(text || "").slice(0, maxChars);
   if (!short) return { ok: false, reason: "nothing to say" };
   return await new Promise((resolve) => {
-    const body = JSON.stringify({ text: short, voice, return_base64: true });
+    const body = JSON.stringify({ text: short, voice, speed: voiceSpeed(speed), return_base64: true });
     const req = http.request(
       {
         host: "127.0.0.1",
@@ -405,6 +420,8 @@ async function synthesizeVerdict(text, voice = "nova") {
 module.exports = {
   routeDrop,
   synthesizeVerdict,
+  voiceSpeed,
+  SPEED_DEFAULT,
   stagePath,
   cleanupStage,
   kindOf,
