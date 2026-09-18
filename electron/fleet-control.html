@@ -41,11 +41,19 @@
   #pill[data-state="GPU QUIET"] { background: var(--quiet); }
   #pill[data-state="MIXED"] { background: var(--mixed); }
   #pill[data-state="BUSY"] { background: #3b82f6; color: #fff; }
+  /* PROBING is BUSY's sibling: blue = "something is running", pulsing = "right now".
+     The 2026-09-18 07:20 screenshot was a grey UNKNOWN pill over four "?" for the
+     whole first probe, and it read as broken. */
+  #pill[data-state="PROBING"] { background: #3b82f6; color: #fff; animation: pulse 1.2s ease-in-out infinite; }
+  #pill[data-state="CANNOT JUDGE"] { background: var(--down); color: #fff; }
+  #pill[data-state="STALE"] { background: var(--quiet); }
+  @keyframes pulse { 50% { opacity: .5; } }
   .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; padding: 6px 18px 10px; }
   .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
   .stat .k { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
   .stat .v { font-size: 20px; font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; }
   .stat .v small { font-size: 12px; color: var(--muted); font-weight: 400; }
+  .stat .v.probing { font-size: 14px; font-weight: 500; color: var(--muted); animation: pulse 1.2s ease-in-out infinite; }
   .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 4px 18px 10px; }
   button { appearance: none; border: 1px solid var(--line); background: var(--btn); color: var(--fg);
     border-radius: 10px; padding: 14px 12px; font: inherit; font-weight: 600; cursor: pointer;
@@ -153,8 +161,12 @@
 
   let probing = false;
   let everProbed = false;
-  /** What an empty box should say: nothing has run, or something is running now. */
-  function emptyState() { return probing ? "probing…" : "not probed yet"; }
+  /** What an empty box should say: nothing has run, something is running now,
+   *  or a probe DID finish and this verdict simply does not carry the field. */
+  function emptyState() {
+    if (probing) return "probing…";
+    return everProbed ? "not in this verdict" : "not probed yet";
+  }
 
   function classify(st) {
     if (!st || st.cannotJudge) return "UNKNOWN";
@@ -216,6 +228,17 @@
     }
   }
 
+  /** The pill's word. BUSY (an action runs) > PROBING (no verdict yet, one is
+   *  being fetched) > CANNOT JUDGE / STALE (the probe failed, with or without
+   *  older numbers to show) > the fleet's real state. "UNKNOWN" is left for a
+   *  verdict that classifies as nothing -- never for "we have not looked yet". */
+  function stateFor(st, stale) {
+    if (busy) return "BUSY";
+    if (!st) return probing ? "PROBING" : "UNKNOWN";
+    if (st.cannotJudge) return stale ? "STALE" : "CANNOT JUDGE";
+    return classify(st);
+  }
+
   function render(st) {
     // A stale verdict carries the last GOOD numbers with their age and the
     // reason the fresh probe failed. Bare "?" with no context was the owner's
@@ -225,14 +248,27 @@
     const src = stale ? stale.verdict : st;
     const fl = (src && src.fleet) || {};
     const age = stale ? ` <small>· ${Math.round(stale.age_ms / 1000)} s ago</small>` : "";
-    $("s-running").innerHTML = fl.running == null ? "?" : `${fl.running}${age}`;
-    $("s-masked").innerHTML = fl.masked == null ? "?" : `${fl.masked} <small>/ ${fl.units ?? "?"}</small>${age}`;
+    // No verdict at all: either the first probe is in flight (say so -- it walks
+    // the distro, the doors and the GPU counters, measured 24-73 s on 2026-09-18)
+    // or nothing has been asked. "?" is reserved for a verdict that DID come back
+    // without the number; a placeholder that cannot tell those apart is the
+    // owner's 07:20 screenshot.
+    const blank = src ? null : (probing ? "probing…" : "?");
+    const stat = (id, html) => {
+      const node = $(id);
+      node.classList.toggle("probing", blank === "probing…");
+      node.innerHTML = blank != null ? blank : html;
+    };
+    stat("s-running", fl.running == null ? "?" : `${fl.running}${age}`);
+    stat("s-masked", fl.masked == null ? "?" : `${fl.masked} <small>/ ${fl.units ?? "?"}</small>${age}`);
     const v = src && src.vram;
-    $("s-vram").innerHTML = v ? `${(v.used_mib / 1024).toFixed(1)} <small>/ ${(v.total_mib / 1024).toFixed(0)} GiB</small>${age}` : "?";
-    $("s-hold").textContent = src && src.cannotJudge ? "?" : (src && src.held ? "HELD" : "free");
+    stat("s-vram", v ? `${(v.used_mib / 1024).toFixed(1)} <small>/ ${(v.total_mib / 1024).toFixed(0)} GiB</small>${age}` : "?");
+    // GPU hold is a yes/no that must never DEFAULT to "free": with no verdict the
+    // answer is unknown. `null && x` reading as "free" was exactly that lie.
+    stat("s-hold", !src || src.cannotJudge ? "?" : (src.held ? "HELD" : "free"));
     renderHolders(src && src.gpu_holders, src && src.gpu_holders_error);
     renderSurfaces(src && src.surfaces);
-    const state = busy ? "BUSY" : classify(st);
+    const state = stateFor(st, stale);
     pill.dataset.state = state;
     pill.textContent = busy ? `RUNNING: ${busy.toUpperCase()}` : state;
     if (stale) {
@@ -267,16 +303,30 @@
   // broken (owner screenshot, 2026-09-08). One flag, and the empty states say which.
   async function refresh(force) {
     probing = true;
-    if (!everProbed) render(null);
+    if (!everProbed) {
+      render(null);
+      line("probing the fleet: distro, doors and GPU counters (the first pass can take a minute)…", "cmd");
+    } else if (!busy) {
+      $("hint").textContent = "refreshing…";
+    }
+    let st;
     try {
-      const st = await window.fleet.status(force ? { maxAgeMs: 0 } : {});
-      everProbed = true;
-      if (st && st.busy && st.busy !== "status" && !busy) setBusy(st.busy);
-      render(st);
-      return st;
+      st = await window.fleet.status(force ? { maxAgeMs: 0 } : {});
+    } catch (error) {
+      // The IPC itself failed (no handler, window torn down mid-probe). That is a
+      // verdict too -- leaving "probing…" up forever is the old silence.
+      st = { ok: false, cannotJudge: true, error: (error && error.message) || String(error) };
     } finally {
+      // 🚩 Cleared BEFORE render, not after: render() reads it to label the empty
+      // boxes, and a verdict without holders used to render as "probing…" for
+      // the next 30 s because the flag was still up when it painted.
       probing = false;
     }
+    everProbed = true;
+    if (!busy) $("hint").textContent = "auto-refresh every 30 s";
+    if (st && st.busy && st.busy !== "status" && !busy) setBusy(st.busy);
+    render(st);
+    return st;
   }
 
   async function run(action) {
