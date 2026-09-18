@@ -620,6 +620,7 @@ function startRoomStage() {
     },
     {
       idleMs: Math.max(60, Number(process.env.DESK_ROOM_IDLE_S) || 600) * 1000,
+      maxBodies: Math.max(0, Number(process.env.DESK_ROOM_MAX_BODIES) || 3),
       log: (...args) => debugLog(...args),
     },
   );

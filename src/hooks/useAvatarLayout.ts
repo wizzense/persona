@@ -145,5 +145,5 @@ export function useAvatarLayout(defaultFor: (slotId: string) => AvatarTransform)
     });
   }, []);
 
-  return { getTransform, setPosition, setScale, setYaw, clearSlot };
+  return { layout, getTransform, setPosition, setScale, setYaw, clearSlot };
 }

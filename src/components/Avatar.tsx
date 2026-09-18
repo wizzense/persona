@@ -1,4 +1,4 @@
-import {
+import { useRef,
   Component,
   Suspense,
   useEffect,
@@ -41,6 +41,8 @@ function AvatarModel({
   const { play, update: updateAnimation } = useVrmAnimation(vrm);
   const updateLipSync = useAmplitudeLipSync(vrm);
   const updateBlink = useBlink(vrm);
+  const frameRef = useRef(0);
+  const accRef = useRef(0);
 
   useEffect(() => {
     void play(animation, { onComplete: onAnimationComplete, playback });
@@ -61,10 +63,23 @@ function AvatarModel({
     // as broken physics, not as a stall. 1/30 s is the largest step that still
     // integrates stably; anything longer is a stall, not elapsed time.
     const step = Math.min(delta, 1 / 30);
-    updateAnimation(step);
-    updateBlink(step);
-    updateLipSync(step, audioLevel, speaking);
-    vrm.update(step);
+    // THROTTLE an idle body (measured 2026-09-18 with four bodies on stage:
+    // the main thread ran 7.2 s of work per 6 s, three-vrm's spring-bone and
+    // mixer updates on top -- "it keeps freezing"). A body that is not
+    // speaking integrates every SECOND frame with the accumulated step
+    // (30 Hz at 60 fps, still inside the stable step), which halves the
+    // physics bill per idle body. The speaking body stays at full rate so its
+    // mouth and hair track the voice.
+    const active = speaking || audioLevel > 0.02;
+    frameRef.current += 1;
+    accRef.current += step;
+    if (!active && frameRef.current % 2 !== 0) return;
+    const dt = Math.min(accRef.current, 1 / 30);
+    accRef.current = 0;
+    updateAnimation(dt);
+    updateBlink(dt);
+    updateLipSync(dt, audioLevel, speaking);
+    vrm.update(dt);
   });
 
   return vrm ? <primitive object={vrm.scene} /> : null;

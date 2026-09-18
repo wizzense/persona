@@ -32,6 +32,12 @@ const MAX_QUEUE = 6;
 const MAX_UTTERANCE_CHARS = 320;
 const GAP_MS = 350;
 const DEFAULT_COOLDOWN_MS = 20000;
+//: Bodies on stage at once, slot0 excluded. Measured 2026-09-18: one VRM per
+//: parallel terminal session put four bodies up, the renderer heap reached
+//: 2.36 GB and two one-second stalls landed in four seconds ("it keeps
+//: freezing"). Past the cap a newcomer is still HEARD -- from the resident
+//: avatar, named -- it just does not get a body until someone leaves.
+const DEFAULT_MAX_BODIES = 3;
 
 //: AitherVoice voices, and who sounds like what. The eight core agents get a
 //: fixed voice so the owner learns them; anyone else hashes onto the six.
@@ -169,12 +175,13 @@ class RoomStage {
    * @param {(agent) => string|null} io.assignedAvatar
    * @param {() => string|null} io.residentCharacter
    */
-  constructor(io, { idleMs = DEFAULT_IDLE_MS, pollMs = DEFAULT_POLL_MS, gapMs = GAP_MS, cooldownMs = DEFAULT_COOLDOWN_MS, now = Date.now, voices = {}, log = () => {} } = {}) {
+  constructor(io, { idleMs = DEFAULT_IDLE_MS, pollMs = DEFAULT_POLL_MS, gapMs = GAP_MS, cooldownMs = DEFAULT_COOLDOWN_MS, maxBodies = DEFAULT_MAX_BODIES, now = Date.now, voices = {}, log = () => {} } = {}) {
     this.io = io;
     this.idleMs = idleMs;
     this.pollMs = pollMs;
     this.gapMs = gapMs;
     this.cooldownMs = cooldownMs;
+    this.maxBodies = maxBodies;
     this.lastVoiced = {}; // slotId -> ms of the last voiced transcript line
     this.now = now;
     this.voices = voices;
@@ -239,8 +246,15 @@ class RoomStage {
   }
 
   enqueue(u) {
-    const slotId = this.ensureSlot(u.author, u);
-    if (!slotId) return;
+    let slotId = this.ensureSlot(u.author, u);
+    let text = u.text;
+    if (!slotId) {
+      // No body available (stage full / nothing to wear): the resident says
+      // it on their behalf, so the words are never lost.
+      slotId = "slot0";
+      text = `${u.author} says: ${u.text}`;
+    }
+    u = { ...u, text };
     const now = this.now();
     // A chatty actor is heard once per cooldown; the body stays, the stream of
     // lines does not. Addressed messages are exempt: a reply is never dropped.
@@ -259,6 +273,10 @@ class RoomStage {
     const slotId = slotFor(author, { actorId, actorKind });
     if (slotId === "slot0") return slotId;
     if (this.slots.has(slotId)) return slotId;
+    if (this.slots.size >= this.maxBodies) {
+      this.lastError = `stage full (${this.maxBodies}); ${author} speaks through the resident`;
+      return null;
+    }
     const taken = [...this.slots.values()].map((s) => s.character);
     // A session's body is picked by its id, so two tabs of one repo differ.
     const seed = actorKind === "claude_code" && actorId ? `${author}:${actorId}` : author;
@@ -312,6 +330,7 @@ class RoomStage {
 module.exports = {
   AGENT_VOICES,
   DEFAULT_IDLE_MS,
+  DEFAULT_MAX_BODIES,
   DEFAULT_ROOM,
   MAX_QUEUE,
   MAX_UTTERANCE_CHARS,

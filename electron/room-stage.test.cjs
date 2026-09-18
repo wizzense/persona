@@ -91,7 +91,7 @@ function harness({ rows = [], durationMs = 0 } = {}) {
     assignedAvatar: (agent) => (agent === "lyra" ? "cara" : null),
     residentCharacter: () => "resident",
   };
-  const stage = new RoomStage(io, { idleMs: 5000, gapMs: 0, cooldownMs: 1000, now: () => clock });
+  const stage = new RoomStage(io, { idleMs: 5000, gapMs: 0, cooldownMs: 1000, maxBodies: 2, now: () => clock });
   return { stage, calls, io, tick: (ms) => { clock += ms; } };
 }
 
@@ -194,4 +194,21 @@ test("RoomStage: two sessions named alike are two bodies", async () => {
   assert.equal(h.calls.spawn.length, 2);
   assert.notEqual(h.calls.spawn[0][0], h.calls.spawn[1][0]);
   assert.notEqual(h.calls.spawn[0][1], h.calls.spawn[1][1], "different characters");
+});
+
+test("RoomStage: past the body cap a newcomer is heard through the resident, not given a body", async () => {
+  const h = harness();
+  await h.stage.tick();
+  h.io.recentChat = async () => [
+    { seq: 6, agent: true, author: "atlas", kind: "agent_message", text: "one" },
+    { seq: 7, agent: true, author: "lyra", kind: "agent_message", text: "two" },
+    { seq: 8, agent: true, author: "hydra", kind: "agent_message", text: "three" },
+  ];
+  await h.stage.tick();
+  await new Promise((r) => setTimeout(r, 40));
+  assert.equal(h.calls.spawn.length, 2, "only two bodies");
+  const last = h.calls.speak[h.calls.speak.length - 1];
+  assert.equal(last[2], "slot0");
+  assert.equal(last[0], "hydra says: three");
+  assert.match(h.stage.status().lastError, /stage full/);
 });

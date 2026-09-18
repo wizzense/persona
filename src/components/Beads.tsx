@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 
-import { setDragMode, useDragMode } from '../hooks/useDragMode';
 
 /**
  * Floating beads — the notification + quick-action layer that floats over the
@@ -126,7 +125,11 @@ export function Beads() {
     try { window.localStorage.setItem('desk.beads-hint-dismissed', '1'); } catch { /* best-effort */ }
   };
 
-  const dragMode = useDragMode();
+  // Gestures v5 (2026-09-18): no drag-mode state. One button, one meaning.
+  const showHint = () => {
+    setHintDismissed(false);
+    try { window.localStorage.removeItem('desk.beads-hint-dismissed'); } catch { /* best-effort */ }
+  };
   const deck = bridgeDeck();
   return (
     <div className="beads" aria-label="Desk beads">
@@ -143,17 +146,16 @@ export function Beads() {
       <Bead label="Aither Console" onLeftClick={() => void deck?.action('console')}>
         <GridIcon />
       </Bead>
-      {/* The VISIBLE drag-mode toggle — the resolution of the three-way gesture
-          fight (v1 move-only, v2 Shift-move, v3 Shift-rotate all failed with
-          the owner, 2026-08-25). Plain drag does exactly what this says;
-          clicking flips it. Default: rotate. */}
+      {/* Gestures v5 (2026-09-18): the ROT/MOVE toggle was the fourth gesture
+          design and the owner's verdict was "I'm confused". One button, one
+          meaning — left-drag MOVES a body, right-drag TURNS it, the wheel SIZES
+          it, right-click opens its menu; empty space orbits. This bead only
+          re-shows the legend. */}
       <Bead
-        label={`Drag mode: ${dragMode === 'rotate' ? 'Rotate' : 'Move'} — click to switch`}
-        onLeftClick={() => setDragMode(dragMode === 'rotate' ? 'move' : 'rotate')}
+        label="Gestures: left-drag moves a body · right-drag turns it · wheel sizes it · right-click its menu · empty space orbits"
+        onLeftClick={showHint}
       >
-        <span className="bead-mode-label">
-          {dragMode === 'rotate' ? 'ROT' : 'MOVE'}
-        </span>
+        <span className="bead-mode-label">?</span>
       </Bead>
       {/* First-run discoverability: the owner asked "where are the buttons" with
           the cluster live on screen (2026-08-25) -- an edge-corner column of
@@ -161,7 +163,7 @@ export function Beads() {
           so it never nags twice. */}
       {hintDismissed ? null : (
         <div className="bead-hint" role="note">
-          <span>Drag the avatar to rotate · ROT/MOVE switches to moving it · right-click the avatar for its controls · the grid opens the console</span>
+          <span>Left-drag a body to move it · right-drag to turn it · scroll to size it · right-click for its menu · drag empty space to look around · the grid opens the console</span>
           <button
             type="button"
             className="bead-hint-x"

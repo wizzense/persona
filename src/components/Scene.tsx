@@ -7,9 +7,9 @@ import * as THREE from 'three';
 import { Avatar, type AvatarProps } from './Avatar';
 import type { AnimationType } from '../animation-catalog';
 import { calculateFullBodyFraming } from '../camera-framing';
-import { useAvatarLayout, type AvatarTransform } from '../hooks/useAvatarLayout';
+import { POSITION_BOUND, useAvatarLayout, type AvatarTransform } from '../hooks/useAvatarLayout';
 import { useAvatarDrag } from '../hooks/useAvatarDrag';
-import { getDragMode } from '../hooks/useDragMode';
+import { freeSpot } from '../hooks/stagePlacement';
 import type { VRM } from '@pixiv/three-vrm';
 import { applySpringScale } from '../hooks/useVrmLoader';
 
@@ -169,6 +169,9 @@ function PlacedAvatar({ slotId, transform, onDrag, onScale, onRotate, onFocus, a
   // Where the left button went down, so pointerup can tell a CLICK (focus the
   // avatar) from a DRAG (move/rotate) — the same 5-6px band the drag hook uses.
   const clickStartRef = useRef<{ x: number; y: number } | null>(null);
+  // How far a right-button press travelled: a right-DRAG turns the body and
+  // must not also open the menu on release; a right-CLICK (no travel) does.
+  const rightTravelRef = useRef(0);
 
   // The VRM behind this slot, once loaded: the spring compensation below needs
   // it, and only the loader hangs it on the scene (scene.userData.vrm).
@@ -250,29 +253,28 @@ function PlacedAvatar({ slotId, transform, onDrag, onScale, onRotate, onFocus, a
                 y: event.nativeEvent.clientY,
               };
             }
-            if (event.button !== 0) return; // left button only -- right-click stays the context menu
-            // Gesture split, FINAL iteration (2026-08-25): v1 move-only, v2
-            // Shift-move and v3 Shift-rotate all failed with the owner, because
-            // one button cannot serve two intents on the same pixels and every
-            // hidden modifier is undiscoverable. The intent is now EXPLICIT,
-            // VISIBLE state: the drag-mode toggle (useDragMode; bead + panel
-            // row). Default rotate — plain drag falls through to OrbitControls
-            // and the avatar swivels exactly like every 3D surface on earth.
-            // In move mode the same plain drag repositions it. Empty space
-            // always rotates, whatever the mode.
+            if (event.button !== 0 && event.button !== 2) return;
+            // Gestures, v5 (2026-09-18, owner: "the right-click move is
+            // fucked, can we make this more intuitive, I'm confused"). No
+            // mode, no modifier: each button means ONE thing on a body.
+            //   left-drag  = MOVE this body      right-drag = TURN this body
+            //   wheel      = size this body      right-CLICK = its menu
+            // Empty space: left-drag orbits the camera. Camera pan is OFF
+            // (OrbitControls enablePan=false) -- a right-drag that shoved the
+            // whole scene sideways was what read as "moving one moves all".
             const { controls } = getThreeState();
             const orbit = controls as { enabled?: boolean } | null;
-            if (getDragMode() !== 'move') {
-              // ROT mode ON an avatar turns THAT avatar (its yaw), not the
-              // camera (owner, 2026-09-18: "rotating rotates the entire stage,
-              // it's awkward"). Empty space still orbits, so the whole stage
-              // can be viewed from any side without moving anyone.
+            if (event.button === 2) {
+              // Right-DRAG turns THIS avatar (yaw). A right-click that never
+              // travels reaches onContextMenu below and opens the menu instead.
               event.stopPropagation();
               suspendOrbit(orbit);
               draggingRef.current = true;
               const startX = event.nativeEvent.clientX;
               const startYaw = groupRef.current?.rotation.y ?? transformRef.current.yaw ?? 0;
+              rightTravelRef.current = 0;
               const onMove = (move: PointerEvent) => {
+                rightTravelRef.current = Math.max(rightTravelRef.current, Math.abs(move.clientX - startX));
                 const group = groupRef.current;
                 if (group) group.rotation.y = startYaw + (move.clientX - startX) * 0.012;
               };
@@ -329,8 +331,9 @@ function PlacedAvatar({ slotId, transform, onDrag, onScale, onRotate, onFocus, a
             // OrbitControls preventDefault()s contextmenu (right-drag pans), which kills
             // Electron's own menu event — so the per-avatar menu goes through the bridge,
             // same pattern the deck trigger uses. A plain right-CLICK lands here; a
-            // right-DRAG pans and never does.
+            // right-DRAG turns the body (pointerdown above) and never does.
             event.stopPropagation();
+            if (rightTravelRef.current >= 6) return;
             window.deskBridge?.avatarContextMenu(slotId);
           }}
         >
@@ -351,16 +354,24 @@ export function Scene(props: SceneProps) {
 
   const { extraSlots = [] } = props;
 
+  // The live layout, readable from the placement default without a dependency
+  // cycle (the hook that owns the layout takes the default as its input).
+  const layoutRef = useRef<Record<string, AvatarTransform>>({});
   const defaultTransform = useCallback(
     (slotId: string): AvatarTransform => {
       if (slotId === 'slot0') return { position: [0, 0, 0], scale: 1 };
-      const index = extraSlots.findIndex((slot) => slot.slotId === slotId);
-      const xOffset = (index >= 0 ? index + 1 : 1) * 1.6;
-      return { position: [xOffset, 0, 0], scale: 1 };
+      // The nearest FREE spot, never an index: two spawned bodies used to land
+      // on the same point after a removal (see stagePlacement.ts).
+      const occupied = [0, ...extraSlots
+        .filter((slot) => slot.slotId !== slotId)
+        .map((slot) => layoutRef.current[slot.slotId]?.position[0])
+        .filter((x): x is number => typeof x === 'number')];
+      return { position: [freeSpot(occupied, POSITION_BOUND), 0, 0], scale: 1 };
     },
     [extraSlots],
   );
-  const { getTransform, setPosition, setScale, setYaw, clearSlot } = useAvatarLayout(defaultTransform);
+  const { layout, getTransform, setPosition, setScale, setYaw, clearSlot } = useAvatarLayout(defaultTransform);
+  layoutRef.current = layout;
   // A removed slot's stored spot must not leak onto whatever LATER slot reuses that id
   // (nextFreeSlotId() reuses freed ids), so clear it the moment it drops out of extraSlots.
   const previousExtraIdsRef = useState(() => new Set<string>())[0];
@@ -505,7 +516,7 @@ export function Scene(props: SceneProps) {
         makeDefault
         enableDamping
         dampingFactor={0.08}
-        enablePan
+        enablePan={false}
         enableZoom
         minDistance={1.4}
         maxDistance={12}
