@@ -16,7 +16,7 @@ Desk serves a Streamable HTTP MCP endpoint while the app is running. Add it
 to Codex once:
 
 ```bash
-codex mcp add desk --url http://127.0.0.1:47831/mcp
+codex mcp add desk --url http://127.0.0.1:47931/mcp
 ```
 
 Start a new Codex session after registering the server. You can inspect the
@@ -97,7 +97,7 @@ Windows.
 
 ## Loopback HTTP API
 
-Desk listens on `127.0.0.1:47831` by default. Override the port with
+Desk listens on `127.0.0.1:47931` by default. Override the port with
 `PERSONA_BRIDGE_PORT`. Native clients may omit `Origin`; browser clients are
 restricted to trusted local and supported app origins. Requests with a
 non-loopback `Host` are rejected.
@@ -145,7 +145,7 @@ Send events:
 ```bash
 curl -H 'Content-Type: application/json' \
   --data '{"type":"state","state":{"phase":"active","activity":"speaking","microphoneMuted":false,"outputMuted":false}}' \
-  http://127.0.0.1:47831/events
+  http://127.0.0.1:47931/events
 ```
 
 `GET /health` reports whether Desk is running and returns the last state. It

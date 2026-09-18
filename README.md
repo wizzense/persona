@@ -20,7 +20,7 @@ whether the backend is aitherium.com or your own local node:
 - **Living Desktop host** — one tray switch between the Living Desktop,
   Desktop Anywhere, the AitherShell cockpit, and GobboNet, rendered over your
   real desktop (ghost mode) or in their own windows.
-- **Agent embodiment** — the local MCP server (`:47831`) lets any agent drive
+- **Agent embodiment** — the local MCP server (`:47931`) lets any agent drive
   the avatar, and the bridge server relays voice/animation events from native
   listeners.
 - **Decision cards** — the tray tracks the open decision-card queue
@@ -69,18 +69,29 @@ For a background launch:
 npm start -- --background
 ```
 
-## Connect Desk to Codex
+## Connect an agent to Desk
 
-With Desk running, register its local MCP server:
+With Desk running, register its local MCP server (streamable HTTP) with any
+MCP client — Claude Code, Codex, awsh, or your own:
 
 ```bash
-codex mcp add desk --url http://127.0.0.1:47831/mcp
+claude mcp add --transport http desk http://127.0.0.1:47931/mcp
+codex mcp add desk --url http://127.0.0.1:47931/mcp
 ```
 
-New Codex sessions can then ask Desk to play an installed animation, show or
-hide its window, and report whether the local character and voice listener are
-active. Desk remains a separate desktop application; the MCP connection
-only exposes its own visual controls.
+Sessions can then ask Desk to play an installed animation, show or hide its
+window, switch characters, open the Fleet or Command windows, and report
+whether the local character and voice listener are active. Desk remains a
+separate desktop application; the MCP connection only exposes its own
+controls. The port follows `DESK_BRIDGE_PORT` (default 47931 — 47831 sits
+inside a Windows reserved TCP range on some hosts).
+
+## Voice on Windows without Visual Studio
+
+The voice-output listener is a native helper. If `npm run native:build` cannot
+find Visual Studio Build Tools, `npm run native:fetch` pulls the built helper
+out of the newest release instead; the tray says "Voice: listener missing"
+until one is in place.
 
 The window intentionally contains no controls:
 
