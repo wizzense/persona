@@ -60,10 +60,15 @@ function slug(name) {
     .slice(0, 24) || "agent";
 }
 
-/** The slot an author speaks from: slot0 for the resident, "room-<slug>" for others. */
-function slotFor(author) {
+/** The slot an author speaks from: slot0 for the resident, "room-<slug>" for
+ *  agents, and "room-<slug>-<id4>" for a TERMINAL SESSION — parallel Claude
+ *  Code tabs share a name (the repo) and must not share a body (owner,
+ *  2026-09-18: "how does this work when I have multiple Claude Code terminal
+ *  sessions running in parallel?"). */
+function slotFor(author, { actorId = "", actorKind = "" } = {}) {
   const key = String(author || "").toLowerCase();
   if (RESIDENT_ACTORS.has(key)) return "slot0";
+  if (actorKind === "claude_code" && actorId) return `room-${slug(author)}-${slug(actorId).slice(0, 4)}`;
   return `room-${slug(author)}`;
 }
 
@@ -116,6 +121,8 @@ function selectUtterances(rows, sinceSeq, { max = MAX_QUEUE } = {}) {
     picked.push({
       seq: Number(row.seq),
       author: String(row.author || "agent"),
+      actorId: String(row.actorId || ""),
+      actorKind: String(row.actorKind || ""),
       text: text.length > MAX_UTTERANCE_CHARS ? text.slice(0, MAX_UTTERANCE_CHARS - 1) + "…" : text,
       kind: String(row.kind || ""),
     });
@@ -232,7 +239,7 @@ class RoomStage {
   }
 
   enqueue(u) {
-    const slotId = this.ensureSlot(u.author);
+    const slotId = this.ensureSlot(u.author, u);
     if (!slotId) return;
     const now = this.now();
     // A chatty actor is heard once per cooldown; the body stays, the stream of
@@ -248,14 +255,16 @@ class RoomStage {
     while (this.queue.length > MAX_QUEUE) this.queue.shift();
   }
 
-  ensureSlot(author) {
-    const slotId = slotFor(author);
+  ensureSlot(author, { actorId = "", actorKind = "" } = {}) {
+    const slotId = slotFor(author, { actorId, actorKind });
     if (slotId === "slot0") return slotId;
     if (this.slots.has(slotId)) return slotId;
     const taken = [...this.slots.values()].map((s) => s.character);
+    // A session's body is picked by its id, so two tabs of one repo differ.
+    const seed = actorKind === "claude_code" && actorId ? `${author}:${actorId}` : author;
     const character =
       this.io.assignedAvatar(author) ||
-      pickCharacter(author, this.io.roster(), { taken, resident: this.io.residentCharacter() });
+      pickCharacter(seed, this.io.roster(), { taken, resident: this.io.residentCharacter() });
     if (!character) {
       this.lastError = `no character available for ${author}`;
       return null;

@@ -125,6 +125,8 @@ interface PlacedAvatarProps {
   transform: AvatarTransform;
   onDrag: (position: [number, number, number]) => void;
   onScale: (scale: number) => void;
+  /** Committed yaw after a ROT-mode drag on THIS avatar (radians). */
+  onRotate: (yaw: number) => void;
   /** Clean LEFT-CLICK (no drag) on the avatar: the contextual "bring this one
    *  front and center" action — also the recovery move when an avatar got lost. */
   onFocus?: (slotId: string) => void;
@@ -158,7 +160,7 @@ function resumeOrbit(orbit: { enabled?: boolean } | null) {
  *  position is committed to persisted layout state ONCE, on pointerup. All live values
  *  (y, scale) are read through refs so a re-render mid-drag can never strand the drag on
  *  a stale closure. */
-function PlacedAvatar({ slotId, transform, onDrag, onScale, onFocus, avatarProps, onReady }: PlacedAvatarProps) {
+function PlacedAvatar({ slotId, transform, onDrag, onScale, onRotate, onFocus, avatarProps, onReady }: PlacedAvatarProps) {
   const getThreeState = useThree((state) => state.get);
   const groupRef = useRef<THREE.Group>(null);
   const transformRef = useRef(transform);
@@ -179,6 +181,7 @@ function PlacedAvatar({ slotId, transform, onDrag, onScale, onFocus, avatarProps
     if (!group) return;
     group.position.set(...transform.position);
     group.scale.setScalar(transform.scale);
+    group.rotation.y = transform.yaw ?? 0;
     // The layout scale is what the springs cannot see (applySpringScale): a
     // persisted 0.4 shoved every hair chain out over a 2.5x-too-big head
     // collider on every boot (owner, 2026-09-13). Re-derive the spring
@@ -257,10 +260,35 @@ function PlacedAvatar({ slotId, transform, onDrag, onScale, onFocus, avatarProps
             // and the avatar swivels exactly like every 3D surface on earth.
             // In move mode the same plain drag repositions it. Empty space
             // always rotates, whatever the mode.
-            if (getDragMode() !== 'move') return;
-            event.stopPropagation();
             const { controls } = getThreeState();
             const orbit = controls as { enabled?: boolean } | null;
+            if (getDragMode() !== 'move') {
+              // ROT mode ON an avatar turns THAT avatar (its yaw), not the
+              // camera (owner, 2026-09-18: "rotating rotates the entire stage,
+              // it's awkward"). Empty space still orbits, so the whole stage
+              // can be viewed from any side without moving anyone.
+              event.stopPropagation();
+              suspendOrbit(orbit);
+              draggingRef.current = true;
+              const startX = event.nativeEvent.clientX;
+              const startYaw = groupRef.current?.rotation.y ?? transformRef.current.yaw ?? 0;
+              const onMove = (move: PointerEvent) => {
+                const group = groupRef.current;
+                if (group) group.rotation.y = startYaw + (move.clientX - startX) * 0.012;
+              };
+              const onUp = () => {
+                window.removeEventListener('pointermove', onMove);
+                window.removeEventListener('pointerup', onUp);
+                draggingRef.current = false;
+                resumeOrbit(orbit);
+                const group = groupRef.current;
+                if (group) onRotate(group.rotation.y);
+              };
+              window.addEventListener('pointermove', onMove);
+              window.addEventListener('pointerup', onUp);
+              return;
+            }
+            event.stopPropagation();
             suspendOrbit(orbit);
             draggingRef.current = true;
             beginDrag(event.nativeEvent.clientX, event.nativeEvent.clientY, () => {
@@ -332,7 +360,7 @@ export function Scene(props: SceneProps) {
     },
     [extraSlots],
   );
-  const { getTransform, setPosition, setScale, clearSlot } = useAvatarLayout(defaultTransform);
+  const { getTransform, setPosition, setScale, setYaw, clearSlot } = useAvatarLayout(defaultTransform);
   // A removed slot's stored spot must not leak onto whatever LATER slot reuses that id
   // (nextFreeSlotId() reuses freed ids), so clear it the moment it drops out of extraSlots.
   const previousExtraIdsRef = useState(() => new Set<string>())[0];
@@ -441,6 +469,7 @@ export function Scene(props: SceneProps) {
         transform={getTransform('slot0')}
         onDrag={(position) => setPosition('slot0', position)}
         onScale={(scale) => setScale('slot0', scale)}
+        onRotate={(yaw) => setYaw('slot0', yaw)}
         onFocus={focusSlot}
         avatarProps={props}
         onReady={handleAvatarReady}
@@ -465,6 +494,7 @@ export function Scene(props: SceneProps) {
             transform={getTransform(slot.slotId)}
             onDrag={(position) => setPosition(slot.slotId, position)}
             onScale={(scale) => setScale(slot.slotId, scale)}
+            onRotate={(yaw) => setYaw(slot.slotId, yaw)}
             onFocus={focusSlot}
             avatarProps={avatarProps}
             onReady={(scene) => handleExtraReady(slot.slotId, scene)}

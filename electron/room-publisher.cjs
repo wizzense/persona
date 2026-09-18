@@ -139,6 +139,10 @@ function shapeChat(events, { limit = 60 } = {}) {
       seq: Number(ev.seq) || 0,
       at: Math.floor(Number(ev.ts) || 0),
       author: String(actor.name || actor.id || "?"),
+      // Who exactly: six parallel Claude Code tabs all carry the same NAME
+      // (the repo), so a stage keyed on the name gives them one body.
+      actorId: String(actor.id || ""),
+      actorKind: String(actor.kind || ""),
       text: text.slice(0, 2000),
       kind: String(ev.type),
       agent: actor.kind !== "human",

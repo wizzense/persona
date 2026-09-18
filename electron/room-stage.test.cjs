@@ -173,3 +173,25 @@ test("RoomStage: a chatty transcript is heard once per cooldown; addressed lines
   await new Promise((r) => setTimeout(r, 30));
   assert.equal(h.calls.speak[h.calls.speak.length - 1][0], "Pushed three.");
 });
+
+test("slotFor: parallel terminal sessions with one name get separate bodies", () => {
+  const a = slotFor("AitherOS-Fresh", { actorKind: "claude_code", actorId: "25bb0788-7d30" });
+  const b = slotFor("AitherOS-Fresh", { actorKind: "claude_code", actorId: "9f1e44aa-11c2" });
+  assert.notEqual(a, b);
+  assert.match(a, /^room-aitheros-fresh-25bb$/);
+  assert.equal(slotFor("atlas", { actorKind: "adk_agent", actorId: "x" }), "room-atlas");
+});
+
+test("RoomStage: two sessions named alike are two bodies", async () => {
+  const h = harness();
+  await h.stage.tick();
+  h.io.recentChat = async () => [
+    { seq: 6, agent: true, author: "AitherOS-Fresh", actorKind: "claude_code", actorId: "aaaa1111", kind: "agent_message", text: "one" },
+    { seq: 7, agent: true, author: "AitherOS-Fresh", actorKind: "claude_code", actorId: "bbbb2222", kind: "agent_message", text: "two" },
+  ];
+  await h.stage.tick();
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(h.calls.spawn.length, 2);
+  assert.notEqual(h.calls.spawn[0][0], h.calls.spawn[1][0]);
+  assert.notEqual(h.calls.spawn[0][1], h.calls.spawn[1][1], "different characters");
+});
