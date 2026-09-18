@@ -122,6 +122,8 @@ function AvatarSceneApp() {
     useState<BodyAnimationOverride | null>(null);
   const [talkTurn, setTalkTurn] = useState(0);
   const [extraSlots, setExtraSlots] = useState<Array<{ slotId: string; modelUrl: string }>>([]);
+  // Per-slot mouth state for spawned avatars (the room stage): level + speaking.
+  const [slotVoices, setSlotVoices] = useState<Record<string, { level: number; speaking: boolean }>>({});
   const previousPhase = useRef<VoicePhase>('inactive');
   const previousSpeaking = useRef(false);
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -171,7 +173,27 @@ function AvatarSceneApp() {
         // audio over. Play it through Web Audio and drive the SAME audioLevel
         // + voice-state props the scene already renders — lip sync and the
         // TALK animation come from the existing pipeline, no new render path.
-        void playSpoken(event.audioBase64, setVoice, setAudioLevel, audioCtxRef);
+        const slotId = event.slotId && event.slotId !== 'slot0' ? event.slotId : null;
+        if (slotId) {
+          // A room-stage agent speaks: drive THAT slot's mouth, not the resident's.
+          void playSpoken(
+            event.audioBase64,
+            (update) => {
+              const next = typeof update === 'function' ? update(INITIAL_STATE) : update;
+              setSlotVoices((current) => ({
+                ...current,
+                [slotId]: { ...(current[slotId] ?? { level: 0 }), speaking: next.activity === 'speaking' },
+              }));
+            },
+            (level) => setSlotVoices((current) => ({
+              ...current,
+              [slotId]: { ...(current[slotId] ?? { speaking: true }), level },
+            })),
+            { current: null },
+          );
+        } else {
+          void playSpoken(event.audioBase64, setVoice, setAudioLevel, audioCtxRef);
+        }
       }
     });
   }, []);
@@ -244,6 +266,7 @@ function AvatarSceneApp() {
         playback={bodyOverride ? 'once' : 'loop'}
         speaking={speaking}
         extraSlots={extraSlots}
+        slotVoices={slotVoices}
         modelUrl={soloModelUrl ?? undefined}
       />
       {/* Floating beads — the notification badge + quick actions that live ON

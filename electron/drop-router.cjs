@@ -402,7 +402,18 @@ async function synthesizeVerdict(text, voice = "nova", { speed, maxChars = 220 }
           try {
             const parsed = JSON.parse(text);
             const audio = parsed.audio_base64 || parsed.audioBase64 || parsed.base64;
-            if (parsed.success && audio) return resolve({ ok: true, audioBase64: audio });
+            if (parsed.success && audio) {
+              const seconds = Number(parsed.duration_seconds);
+              return resolve({
+                ok: true,
+                audioBase64: audio,
+                // The service says how long it is; else estimate from a 24 kHz
+                // 16-bit mono WAV so a caller can wait for the mouth to close.
+                durationMs: Number.isFinite(seconds) && seconds > 0
+                  ? Math.round(seconds * 1000)
+                  : Math.round((audio.length * 0.75) / (24000 * 2) * 1000),
+              });
+            }
             resolve({ ok: false, reason: String(parsed.error || parsed.detail || "synthesis failed").slice(0, 200) });
           } catch {
             resolve({ ok: false, reason: `synthesis answered non-JSON (${text.slice(0, 60)})` });

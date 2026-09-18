@@ -25,6 +25,8 @@ interface SceneProps {
   playback: 'loop' | 'once';
   speaking: boolean;
   extraSlots?: Array<{ slotId: string; modelUrl: string }>;
+  /** Mouth state per spawned slot (the room stage speaks through these). */
+  slotVoices?: Record<string, { level: number; speaking: boolean }>;
   /** Detached-window mode: render THIS character in slot0's spot instead of the default
    *  `./assets/model.vrm`. Set by App.tsx from the `?solo=` query param a detached
    *  avatar window is opened with (see detached-avatar-window.cjs). */
@@ -446,13 +448,14 @@ export function Scene(props: SceneProps) {
       {/* Extra slots: spawned avatars, each independently draggable/scalable — no longer
           pinned to a fixed side-by-side offset once the owner has moved one. */}
       {extraSlots.map((slot) => {
+        const mouth = props.slotVoices?.[slot.slotId];
         const avatarProps: Omit<AvatarProps, 'onReady'> = {
-          animation: 'IDLE',
+          animation: mouth?.speaking ? 'TALK' : 'IDLE',
           animationRequest: 0,
-          audioLevel: 0,
+          audioLevel: mouth?.level ?? 0,
           onAnimationComplete: () => {},
           playback: 'loop',
-          speaking: false,
+          speaking: Boolean(mouth?.speaking),
           modelUrl: slot.modelUrl,
         };
         return (

@@ -204,6 +204,8 @@ function createBridgeServer({
   consoleHandler = null,
   // () => {x, y, width, height} of the visible avatar window, or null.
   avatarBoundsProvider = null,
+  // () => the room stage's status (who is on stage, queue, spoken), or null.
+  stageStatusProvider = null,
   // undefined = resolve from env/file at start; null = none configured (mutators 503).
   bridgeToken = undefined,
 }) {
@@ -229,7 +231,13 @@ function createBridgeServer({
       } catch {
         avatar = null;
       }
-      response.end(JSON.stringify({ ok: true, lastState: lastStateEvent?.state ?? null, avatar }));
+      let stage;
+      try {
+        stage = stageStatusProvider ? stageStatusProvider() : null;
+      } catch {
+        stage = null;
+      }
+      response.end(JSON.stringify({ ok: true, lastState: lastStateEvent?.state ?? null, avatar, stage }));
       return;
     }
 
@@ -394,7 +402,8 @@ function createBridgeServer({
           const speed = Number.isFinite(Number(body?.speed)) && body?.speed != null
             ? Number(body.speed)
             : undefined;
-          return speakHandler({ text: text.slice(0, 2000), voice, speed });
+          const slot = typeof body?.slot === "string" && /^[a-z0-9_-]{1,32}$/.test(body.slot) ? body.slot : undefined;
+          return speakHandler({ text: text.slice(0, 2000), voice, speed, slot });
         })
         .then((result) => {
           if (result == null || response.headersSent) return;

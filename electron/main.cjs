@@ -581,19 +581,51 @@ function handleBridgeEvent(event) {
  *  tool -- so the orchestrator, a routine, awvoice and a Claude Code session
  *  all sound the same. Owner, 2026-09-18: "we have AitherVoice + awvoice +
  *  aither-orchestrator -- integrate this." Fail-soft: {ok:false, reason}. */
-async function speakAloud(text, voice = "nova", speed = undefined) {
+async function speakAloud(text, voice = "nova", speed = undefined, slotId = "slot0") {
   const tts = await synthesizeVerdict(text, voice || "nova", { speed, maxChars: 2000 });
   if (!tts.ok) return { ok: false, reason: tts.reason || "voice service unavailable" };
   let delivered = 0;
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {
-      win.webContents.send("desk:event", { type: "speak", audioBase64: tts.audioBase64 });
+      // `slotId` picks WHOSE mouth moves: slot0 is the resident avatar; a
+      // room-stage slot is one of the agents on stage.
+      win.webContents.send("desk:event", { type: "speak", audioBase64: tts.audioBase64, slotId: slotId || "slot0" });
       delivered += 1;
     }
   }
   if (delivered === 0) return { ok: false, reason: "no avatar window to speak from" };
-  return { ok: true, chars: text.length, windows: delivered };
+  return { ok: true, chars: text.length, windows: delivered, durationMs: tts.durationMs || 0, slotId: slotId || "slot0" };
 }
+
+/** The company room on stage: one avatar per agent, spoken in turn. Started
+ *  beside the room publisher; DESK_ROOM_STAGE=0 leaves the room text-only. */
+let roomStage = null;
+function startRoomStage() {
+  if (roomStage || !roomPublisher) return;
+  if (String(process.env.DESK_ROOM_STAGE || "1").trim() === "0") return;
+  const { RoomStage } = require("./room-stage.cjs");
+  const { filterCharacters } = require("./content-rating.cjs");
+  roomStage = new RoomStage(
+    {
+      recentChat: (opts) => roomPublisher.recentChat(opts),
+      spawn: (slotId, character, agent) => spawnAvatarSlot(slotId, character, agent),
+      remove: (slotId) => removeAvatarSlot(slotId),
+      speak: (text, voice, slotId) => speakAloud(text, voice, undefined, slotId),
+      // SAFE roster only: the content-rating gate decides what may have a body.
+      roster: () => filterCharacters(listCharacters()),
+      assignedAvatar: (agent) => getAgentAvatar(agent),
+      residentCharacter: () => {
+        try { return getActiveCharacter(); } catch { return null; }
+      },
+    },
+    {
+      idleMs: Math.max(60, Number(process.env.DESK_ROOM_IDLE_S) || 600) * 1000,
+      log: (...args) => debugLog(...args),
+    },
+  );
+  roomStage.start();
+}
+
 
 function handleListenerStatus(status) {
   const availabilityChanged = latestListenerStatus?.available !== status?.available;
@@ -1298,6 +1330,7 @@ function deckState() {
     // session's tool calls — the half of the company room that outlives the fleet.
     room: roomFeed,
     roomStatus: roomPublisher ? (roomPublisher.lastError || "ok") : "not started",
+    roomStage: roomStage ? roomStage.status() : null,
     relayPoller: relayPoller ? relayPoller.status() : null,
   };
 }
@@ -2104,12 +2137,13 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
       decisionsProvider: () => decisionCards.listOpen(),
       fleetHandler: (verb, { fresh = false } = {}) => fleetAction(verb === "open" ? "open_panel" : verb, { fresh }),
       // awsh /desktop, adk desk desktop, awconnect's popup and `desk://` all land here.
-      speakHandler: ({ text, voice, speed }) => speakAloud(text, voice, speed),
+      speakHandler: ({ text, voice, speed, slot }) => speakAloud(text, voice, speed, slot),
       consoleHandler: (pane) => {
         if (pane === "inbox" || pane === "cards") return { ok: openInbox() !== false, pane: "inbox" };
         openConsole();
         return { ok: focusPane(pane) !== false, pane };
       },
+      stageStatusProvider: () => (roomStage ? roomStage.status() : null),
       avatarBoundsProvider: () =>
         avatarWindow && !avatarWindow.isDestroyed() && avatarWindow.isVisible()
           ? avatarWindow.getBounds()
@@ -2174,6 +2208,7 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
     //    through the same agent and is acked in-thread on the relay.
     const commandAgent = getCommandAgent(getFleetControl());
     roomPublisher = new RoomPublisher();
+    startRoomStage();
     roomPublisher.attach(commandAgent, {
       actorFor: (p) => (/^relay:/.test(String(p.source || ""))
         ? { kind: "human", id: RELAY_NICK, name: RELAY_NICK }
