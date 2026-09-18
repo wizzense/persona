@@ -72,7 +72,7 @@ ws.addEventListener("open", async () => {
       const node = byId.get(profile.samples[i]);
       if (!node) continue;
       const fn = node.callFrame;
-      const key = `${fn.functionName || "(anonymous)"}  ${(fn.url || "").split("/").pop()}:${fn.lineNumber}`;
+      const key = `${fn.functionName || "(anonymous)"}  ${(fn.url || "").split("/").pop()}:${fn.lineNumber}:${fn.columnNumber}`;
       self.set(key, (self.get(key) || 0) + (deltas[i] || 0) / 1000);
     }
     const total = [...self.values()].reduce((a, b) => a + b, 0);

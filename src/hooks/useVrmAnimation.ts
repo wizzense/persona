@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import {
   VRMAnimationLoaderPlugin,
+  VRMLookAtQuaternionProxy,
   createVRMAnimationClip,
   type VRMAnimation,
 } from '@pixiv/three-vrm-animation';
@@ -41,6 +42,13 @@ export function useVrmAnimation(vrm: VRM | null) {
   const current = useRef<THREE.AnimationAction | null>(null);
   const currentType = useRef<AnimationType | null>(null);
   const cache = useRef(new Map<string, VRMAnimation>());
+  // ONE clip per animation file per body. createVRMAnimationClip rebuilds every
+  // humanoid track (it maps over every keyframe value) and the mixer keeps an
+  // action per clip object, so re-creating the clip on each play() cost 1.7 s of
+  // every 6 s with three bodies on stage and grew the mixer without bound
+  // (measured 2026-09-18, CDP profile: createVRMAnimationHumanoidTracks on top).
+  const clips = useRef(new Map<string, THREE.AnimationClip>());
+  const currentPath = useRef<string | null>(null);
   const previousAnimation = useRef(new Map<AnimationType, string>());
   const requestGeneration = useRef(0);
   const pendingCompletion = useRef<PendingCompletion | null>(null);
@@ -62,9 +70,20 @@ export function useVrmAnimation(vrm: VRM | null) {
     };
     animationMixer.addEventListener('finished', handleFinished);
     mixer.current = animationMixer;
+    // createVRMAnimationClip looks for this proxy as a DIRECT child of the scene
+    // on every call and warns + adds one when it is missing; make it once.
+    if (vrm.lookAt && !vrm.scene.children.some((o) => o instanceof VRMLookAtQuaternionProxy)) {
+      const proxy = new VRMLookAtQuaternionProxy(vrm.lookAt);
+      proxy.name = 'VRMLookAtQuaternionProxy';
+      vrm.scene.add(proxy);
+    }
+    const clipCache = clips.current;
     return () => {
       animationMixer.removeEventListener('finished', handleFinished);
       animationMixer.stopAllAction();
+      animationMixer.uncacheRoot(vrm.scene);
+      clipCache.clear();
+      currentPath.current = null;
       mixer.current = null;
       current.current = null;
       currentType.current = null;
@@ -116,9 +135,23 @@ export function useVrmAnimation(vrm: VRM | null) {
           previousAnimation.current.set(type, path);
         }
 
+        // Idempotent: asking for the loop that is already playing is a no-op, so
+        // a re-render (or a re-fired effect) cannot restart or re-fade it.
+        if (
+          playback === 'loop' &&
+          current.current?.isRunning() &&
+          currentPath.current === path
+        ) {
+          return;
+        }
         const animation = await load(path);
         if (generation !== requestGeneration.current || !mixer.current) return;
-        const action = mixer.current.clipAction(createVRMAnimationClip(animation, vrm));
+        let clip = clips.current.get(path);
+        if (!clip) {
+          clip = createVRMAnimationClip(animation, vrm);
+          clips.current.set(path, clip);
+        }
+        const action = mixer.current.clipAction(clip);
         const fadeSeconds =
           type !== null ? transitionSeconds(currentType.current, type) : 0.3;
         action.reset();
@@ -135,6 +168,7 @@ export function useVrmAnimation(vrm: VRM | null) {
         crossFadeAnimationActions(current.current, action, fadeSeconds);
         current.current = action;
         currentType.current = type;
+        currentPath.current = path;
       } catch (error) {
         console.warn('[desk] animation load failed', error);
         if (generation === requestGeneration.current && playback === 'once') {

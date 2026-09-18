@@ -10,6 +10,7 @@ import { calculateFullBodyFraming } from '../camera-framing';
 import { POSITION_BOUND, useAvatarLayout, type AvatarTransform } from '../hooks/useAvatarLayout';
 import { useAvatarDrag } from '../hooks/useAvatarDrag';
 import { freeSpot } from '../hooks/stagePlacement';
+import { anyoneAudible } from '../hooks/voiceLevels';
 import type { VRM } from '@pixiv/three-vrm';
 import { applySpringScale } from '../hooks/useVrmLoader';
 
@@ -117,6 +118,56 @@ function FullBodyCamera({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- objectsKey stands in for objects' identities
   }, [controlsReady, getThreeState, objectsKey, focusUuid, size.width, size.height]);
 
+  return null;
+}
+
+/** Frames per second the stage renders at. The display here runs rAF at ~95 Hz
+ *  and R3F's default loop rendered (and ran every body's physics) at that rate
+ *  whether or not anything moved: measured 2026-09-18 with three bodies, 5.5 s
+ *  of script per 6 s. The loop is now on DEMAND and this governor asks for
+ *  frames: 60 Hz while anyone is audible or the stage is being handled, 30 Hz
+ *  otherwise -- idle animation and hair read the same at 30. */
+const ACTIVE_FPS = 60;
+const IDLE_FPS = 30;
+/** Keep full rate this long after the last pointer/wheel input (orbit damping, drags). */
+const INTERACTION_TAIL_MS = 1500;
+
+/** Pure: the frame interval the governor wants right now. */
+function frameIntervalMs(active: boolean): number {
+  return 1000 / (active ? ACTIVE_FPS : IDLE_FPS);
+}
+
+function FrameGovernor() {
+  const invalidate = useThree((state) => state.invalidate);
+  const gl = useThree((state) => state.gl);
+  useEffect(() => {
+    let raf = 0;
+    let last = 0;
+    let lastInput = -Infinity;
+    const onInput = () => {
+      lastInput = performance.now();
+    };
+    const el = gl.domElement;
+    el.addEventListener('pointerdown', onInput);
+    el.addEventListener('pointermove', onInput);
+    el.addEventListener('wheel', onInput, { passive: true });
+    const loop = (t: number) => {
+      const active =
+        anyoneAudible() || orbitSuspend.depth > 0 || t - lastInput < INTERACTION_TAIL_MS;
+      if (t - last >= frameIntervalMs(active) - 1) {
+        last = t;
+        invalidate();
+      }
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => {
+      cancelAnimationFrame(raf);
+      el.removeEventListener('pointerdown', onInput);
+      el.removeEventListener('pointermove', onInput);
+      el.removeEventListener('wheel', onInput);
+    };
+  }, [gl, invalidate]);
   return null;
 }
 
@@ -445,6 +496,7 @@ export function Scene(props: SceneProps) {
   return (
     <Canvas
       camera={{ position: [0, 2, 4.8], fov: 20 }}
+      frameloop="demand"
       // dpr capped at 1: this scene previously rendered at up to 1.5x device pixels,
       // i.e. ~2.25x the fill-rate, for an anti-aliased overlay nobody reads text in.
       // On a loaded box that supersampling is the difference between smooth and janky.
@@ -472,6 +524,7 @@ export function Scene(props: SceneProps) {
         intensity={Math.PI}
       />
       <Environment files={dawnEnvironment} />
+      <FrameGovernor />
       <FullBodyCamera objects={allObjects} focusUuid={focusUuid} />
       {/* Slot 0: default avatar, drives voice/animation/audio — unchanged. Now individually
           draggable/scalable like every other slot; camera framing unions ALL avatars. */}
@@ -497,6 +550,7 @@ export function Scene(props: SceneProps) {
           playback: 'loop',
           speaking: Boolean(mouth?.speaking),
           modelUrl: slot.modelUrl,
+          slotId: slot.slotId,
         };
         return (
           <PlacedAvatar

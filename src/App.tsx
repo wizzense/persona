@@ -8,6 +8,7 @@ import {
   type SetStateAction,
 } from 'react';
 import { Scene } from './components/Scene';
+import { clearLevel, setLevel } from './hooks/voiceLevels';
 import { Deck } from './components/Deck';
 import { ChatView } from './components/ChatView';
 import { Beads } from './components/Beads';
@@ -116,7 +117,6 @@ export function App() {
 function AvatarSceneApp() {
   const [soloModelUrl] = useState(getSoloModelUrl);
   const [voice, setVoice] = useState<VoiceState>(INITIAL_STATE);
-  const [audioLevel, setAudioLevel] = useState(0);
   const [voiceAnimation, setVoiceAnimation] = useState<AnimationType>('IDLE');
   const [bodyOverride, setBodyOverride] =
     useState<BodyAnimationOverride | null>(null);
@@ -127,6 +127,9 @@ function AvatarSceneApp() {
   const previousPhase = useRef<VoicePhase>('inactive');
   const previousSpeaking = useRef(false);
   const audioCtxRef = useRef<AudioContext | null>(null);
+  // One playback context per stage body: a new utterance for a slot closes that
+  // slot's previous one instead of stacking contexts and rAF loops.
+  const slotAudioRefs = useRef(new Map<string, { current: AudioContext | null }>());
 
   useEffect(() => {
     const bridge = window.deskBridge;
@@ -138,7 +141,8 @@ function AvatarSceneApp() {
       if (event.type === 'state') {
         setVoice(event.state);
       } else if (event.type === 'audio-level') {
-        setAudioLevel(event.level);
+        // A per-frame SIGNAL, not UI state: the body reads it in useFrame.
+        setLevel('slot0', event.level);
       } else if (event.type === 'animation') {
         if (event.source === 'mcp' && event.requestId != null) {
           setBodyOverride({
@@ -168,6 +172,9 @@ function AvatarSceneApp() {
         setExtraSlots((current) =>
           current.filter((slot) => slot.slotId !== event.slotId),
         );
+        clearLevel(event.slotId);
+        slotAudioRefs.current.get(event.slotId)?.current?.close().catch(() => {});
+        slotAudioRefs.current.delete(event.slotId);
       } else if (event.type === 'speak') {
         // Drop-to-avatar (2026-08-29): main TTS'd a verdict and handed the
         // audio over. Play it through Web Audio and drive the SAME audioLevel
@@ -176,23 +183,29 @@ function AvatarSceneApp() {
         const slotId = event.slotId && event.slotId !== 'slot0' ? event.slotId : null;
         if (slotId) {
           // A room-stage agent speaks: drive THAT slot's mouth, not the resident's.
+          // React state changes only on the speaking START/STOP transition; the
+          // level itself goes to the per-frame store.
+          let ref = slotAudioRefs.current.get(slotId);
+          if (!ref) {
+            ref = { current: null };
+            slotAudioRefs.current.set(slotId, ref);
+          }
           void playSpoken(
             event.audioBase64,
             (update) => {
               const next = typeof update === 'function' ? update(INITIAL_STATE) : update;
-              setSlotVoices((current) => ({
-                ...current,
-                [slotId]: { ...(current[slotId] ?? { level: 0 }), speaking: next.activity === 'speaking' },
-              }));
+              const isSpeaking = next.activity === 'speaking';
+              setSlotVoices((current) =>
+                current[slotId]?.speaking === isSpeaking
+                  ? current
+                  : { ...current, [slotId]: { level: 0, speaking: isSpeaking } },
+              );
             },
-            (level) => setSlotVoices((current) => ({
-              ...current,
-              [slotId]: { ...(current[slotId] ?? { speaking: true }), level },
-            })),
-            { current: null },
+            (level) => setLevel(slotId, level),
+            ref,
           );
         } else {
-          void playSpoken(event.audioBase64, setVoice, setAudioLevel, audioCtxRef);
+          void playSpoken(event.audioBase64, setVoice, (level) => setLevel('slot0', level), audioCtxRef);
         }
       }
     });
@@ -221,7 +234,7 @@ function AvatarSceneApp() {
 
     if (voice.phase !== 'active' || voice.outputMuted) {
       setVoiceAnimation('IDLE');
-      setAudioLevel(0);
+      setLevel('slot0', 0);
       return;
     }
 
@@ -261,7 +274,7 @@ function AvatarSceneApp() {
       <Scene
         animation={animation}
         animationRequest={animationRequest}
-        audioLevel={audioLevel}
+        audioLevel={0}
         onAnimationComplete={handleAnimationComplete}
         playback={bodyOverride ? 'once' : 'loop'}
         speaking={speaking}

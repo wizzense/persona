@@ -14,6 +14,13 @@ const {
   shell,
   Tray,
 } = require("electron");
+
+// Opt-in diagnostics door: DESK_CDP_PORT=9223 exposes the renderer over CDP so
+// scripts/perf-gate.cjs (and cdp-probe / cdp-profile) can measure the running
+// app from outside. Must be set before the app is ready; off by default.
+if (/^\d{2,5}$/.test(String(process.env.DESK_CDP_PORT || ""))) {
+  app.commandLine.appendSwitch("remote-debugging-port", String(process.env.DESK_CDP_PORT));
+}
 const decisionCards = require("./decision-cards.cjs");
 const {
   fetchHistory: fetchRelayHistory,
