@@ -334,6 +334,11 @@ function showOverlay({ focus = false } = {}) {
     window.showInactive();
   }
   scheduleHyprlandWindowConfiguration();
+  // The tray's "Hide avatar / Show avatar" line reads the window state when the
+  // menu is BUILT, so a toggle left it saying the wrong thing until something
+  // else rebuilt the menu (owner, 2026-09-18: "the hide avatar button doesn't
+  // change to unhide"). Rebuild on every show/hide.
+  if (tray) refreshTrayMenu();
 }
 
 async function hideOverlay() {
@@ -343,6 +348,7 @@ async function hideOverlay() {
     hyprlandLastPosition = { x: placement.x, y: placement.y };
   }
   avatarWindow?.hide();
+  if (tray) refreshTrayMenu();
 }
 
 function toggleOverlay() {
@@ -2099,6 +2105,15 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
       fleetHandler: (verb, { fresh = false } = {}) => fleetAction(verb === "open" ? "open_panel" : verb, { fresh }),
       // awsh /desktop, adk desk desktop, awconnect's popup and `desk://` all land here.
       speakHandler: ({ text, voice, speed }) => speakAloud(text, voice, speed),
+      consoleHandler: (pane) => {
+        if (pane === "inbox" || pane === "cards") return { ok: openInbox() !== false, pane: "inbox" };
+        openConsole();
+        return { ok: focusPane(pane) !== false, pane };
+      },
+      avatarBoundsProvider: () =>
+        avatarWindow && !avatarWindow.isDestroyed() && avatarWindow.isVisible()
+          ? avatarWindow.getBounds()
+          : null,
       desktopHandler: (mode) => {
         if (mode === "overlay") showLivingDesktop();
         else if (mode === "app") showDesktopApp();

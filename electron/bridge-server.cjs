@@ -200,6 +200,10 @@ function createBridgeServer({
   desktopHandler = null,
   // POST /speak {text, voice?}: the avatar says it through AitherVoice.
   speakHandler = null,
+  // POST /console/open {pane?}: raise the Aither Console on a pane (default inbox).
+  consoleHandler = null,
+  // () => {x, y, width, height} of the visible avatar window, or null.
+  avatarBoundsProvider = null,
   // undefined = resolve from env/file at start; null = none configured (mutators 503).
   bridgeToken = undefined,
 }) {
@@ -215,7 +219,17 @@ function createBridgeServer({
 
     if (request.method === "GET" && request.url === "/health") {
       response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ ok: true, lastState: lastStateEvent?.state ?? null }));
+      // `avatar` = where the avatar window IS on screen (null when hidden), so a
+      // sibling surface can keep off it. The awask card window anchors bottom-
+      // right, exactly where the avatar lives, and covered it (owner, 2026-09-18:
+      // "the avatar is gone?? -- nvm it was hidden behind the awask decision card").
+      let avatar;
+      try {
+        avatar = avatarBoundsProvider ? avatarBoundsProvider() : null;
+      } catch {
+        avatar = null;
+      }
+      response.end(JSON.stringify({ ok: true, lastState: lastStateEvent?.state ?? null, avatar }));
       return;
     }
 
@@ -296,6 +310,44 @@ function createBridgeServer({
       Promise.resolve()
         .then(() => desktopHandler(mode))
         .then((result) => {
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(JSON.stringify(result ?? { ok: true }));
+        })
+        .catch((error) => {
+          if (response.headersSent) return;
+          response.writeHead(500, { "content-type": "application/json" });
+          response.end(JSON.stringify({ ok: false, error: error?.message || String(error) }));
+        });
+      return;
+    }
+
+    // The Aither Console is where cards live (owner, 2026-09-18: "I want the
+    // cards by default to launch in the aither console and become detachable
+    // like the other components"). POST /console/open {pane?: "inbox"|...}
+    // raises it on that pane -- the escalation ladder's desk rung uses this
+    // instead of a separate Tk popup that covered the avatar. Same trust
+    // class as /desktop: a window on the owner's own screen, no bearer.
+    if (request.url === "/console/open") {
+      if (!originAllowed(origin)) {
+        response.writeHead(403);
+        response.end();
+        return;
+      }
+      if (consoleHandler == null) {
+        response.writeHead(404);
+        response.end();
+        return;
+      }
+      if (request.method !== "POST") {
+        response.writeHead(405, { allow: "POST" });
+        response.end();
+        return;
+      }
+      readJsonBody(request)
+        .catch(() => ({}))
+        .then((body) => consoleHandler(typeof body?.pane === "string" ? body.pane : "inbox"))
+        .then((result) => {
+          if (response.headersSent) return;
           response.writeHead(200, { "content-type": "application/json" });
           response.end(JSON.stringify(result ?? { ok: true }));
         })
