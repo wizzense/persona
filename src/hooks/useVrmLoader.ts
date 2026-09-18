@@ -3,6 +3,7 @@ import { useLoader } from '@react-three/fiber';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { VRM, VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
+import { holdModel, releaseModel } from './vrmLifetime';
 
 /** VRoid exports routinely omit gravityPower — VRM 1.0's default is 0 — and a
  *  zero-gravity spring keeps its chain's AUTHORED rest direction forever. The
@@ -133,6 +134,19 @@ export function useVrmLoader(url: string): VRM | null {
       if (w.__deskVrm === vrm) delete w.__deskVrm;
     };
   }, [vrm]);
+
+  // Free the model when the last body showing this url leaves (vrmLifetime.ts):
+  // GPU buffers and textures through deepDispose, the parsed GLB through the
+  // loader cache -- which is also what lets a re-cast slot id load its NEW model.
+  useEffect(() => {
+    holdModel(url);
+    return () => {
+      releaseModel(url, () => {
+        if (vrm) VRMUtils.deepDispose(vrm.scene);
+        useLoader.clear(GLTFLoader, url);
+      });
+    };
+  }, [url, vrm]);
 
   return vrm;
 }

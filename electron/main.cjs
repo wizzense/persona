@@ -1764,6 +1764,9 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
   });
 
   app.whenReady().then(async () => {
+    // Ahead of batch work on a saturated host (process-priority.cjs). The first
+    // sweep runs once the GPU process and the windows exist; the timer catches later ones.
+    setTimeout(() => require("./process-priority.cjs").keepDeskResponsive(app), 5000);
     if (smokeIsRequested) {
       runSmokeTest();
       return;
@@ -2200,7 +2203,7 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
       // The Aitheros Online overlay renders the STATIC site, whose
       // /api/decisions is a build stub — this loopback read is how its bell
       // sees the queue at all. Read-only; answering stays in the queue window.
-      decisionsProvider: () => decisionCards.listOpen(),
+      decisionsProvider: () => decisionCards.lastOpen(),
       fleetHandler: (verb, { fresh = false } = {}) => fleetAction(verb === "open" ? "open_panel" : verb, { fresh }),
       // awsh /desktop, adk desk desktop, awconnect's popup and `desk://` all land here.
       speakHandler: ({ text, voice, speed, slot }) => speakAloud(text, voice, speed, slot),

@@ -34,6 +34,9 @@ const THRESHOLDS = {
   // (/health.stage.mainLag). Sync model copies measured 516 and 949 ms; the
   // queued async install measures 133 ms.
   mainLagMsDuringSpawn: 300,
+  // Desk VRAM after the bodies leave, minus before they came. Nothing was ever
+  // disposed: measured 141 -> 366 MB and still 366 MB after removal.
+  vramLeakMb: 60,
   stallsPer10s: 1, // frame gaps > 250 ms (one tolerated: a foreign GPU hiccup)
   // Frame gaps > 250 ms while an nvidia-smi poller holds the WDDM driver lock 4x a
   // second -- the real condition on a box whose dGPU serves the fleet. Measured
@@ -72,6 +75,16 @@ function deskVramMb() {
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Whole-host CPU busy fraction over `ms` (all cores). */
+async function hostBusy(ms = 3000) {
+  const os = require("node:os");
+  const snap = () => os.cpus().reduce((a, c) => ({ idle: a.idle + c.times.idle, total: a.total + Object.values(c.times).reduce((x, y) => x + y, 0) }), { idle: 0, total: 0 });
+  const a = snap();
+  await sleep(ms);
+  const b = snap();
+  return 1 - (b.idle - a.idle) / Math.max(1, b.total - a.total);
+}
 
 /** One long-lived poller; null when this box has no nvidia-smi (arm skipped, said so). */
 function startPoller() {
@@ -112,6 +125,14 @@ async function main() {
       return 2;
     }
 
+    // A saturated host stalls DWM itself (measured 2026-09-18 at 100 % CPU: the
+    // desktop compositor missed 7 frames > 250 ms in 30 s with the desk idle). Frame
+    // pacing measured then says nothing about the desk: could not judge, not a fail.
+    const busyHost = await hostBusy();
+    if (busyHost > 0.9 && !args.includes("--force")) {
+      console.error(`COULD NOT JUDGE: host CPU is ${Math.round(busyHost * 100)} % busy -- frame pacing here measures the host, not the desk. Re-run when it is quiet, or pass --force. Exit 2.`);
+      return 2;
+    }
     const baselineHeap = await heapAfterGc(cdp);
     const vramBefore = deskVramMb();
     const slots = [];
@@ -151,6 +172,7 @@ async function main() {
     for (const slot of slots) await mcp("remove_avatar", { slot_id: slot });
     await sleep(8000);
     const heapAfter = await heapAfterGc(cdp);
+    const vramAfter = deskVramMb();
 
     const result = {
       bodies: slots.length,
@@ -168,7 +190,8 @@ async function main() {
       stallsPer10s: gaps.stalls,
       stallsUnderPollerPer10s: polled ? polled.stalls : "skipped: no nvidia-smi on this box",
       maxUnderPollerMs: polled ? Math.round(polled.max) : null,
-      deskVramMb: { before: vramBefore, onStage: vramStage },
+      deskVramMb: { before: vramBefore, onStage: vramStage, afterRemoval: vramAfter },
+      vramLeakMb: vramBefore != null && vramAfter != null ? vramAfter - vramBefore : "unmeasured: no GPU process counter",
     };
     const breaches = [];
     if (result.busySecondsPer6s > THRESHOLDS.busySecondsPer6s) breaches.push(`busy ${result.busySecondsPer6s}s > ${THRESHOLDS.busySecondsPer6s}s`);
@@ -178,6 +201,7 @@ async function main() {
     if (polled && polled.stalls > THRESHOLDS.stallsUnderPollerPer10s)
       breaches.push(`stalls under a GPU poller ${polled.stalls} > ${THRESHOLDS.stallsUnderPollerPer10s} (max ${Math.round(polled.max)} ms)`);
     if (typeof mainLagMs === "number" && mainLagMs > THRESHOLDS.mainLagMsDuringSpawn) breaches.push(`main process blocked ${mainLagMs} ms during spawn > ${THRESHOLDS.mainLagMsDuringSpawn} ms`);
+    if (typeof result.vramLeakMb === "number" && result.vramLeakMb > THRESHOLDS.vramLeakMb) breaches.push(`VRAM did not return: +${result.vramLeakMb}MB (> ${THRESHOLDS.vramLeakMb}MB)`);
     if (result.stallsPer10s > THRESHOLDS.stallsPer10s) breaches.push(`stalls ${result.stallsPer10s} > ${THRESHOLDS.stallsPer10s}`);
 
     if (asJson) console.log(JSON.stringify({ result, breaches, thresholds: THRESHOLDS }, null, 2));
@@ -192,6 +216,13 @@ async function main() {
   }
 }
 
-main().then((code) => {
-  process.exitCode = code;
-});
+main().then(
+  (code) => {
+    process.exitCode = code;
+  },
+  (error) => {
+    // A reset socket or a dead bridge is 'could not run', never a pass and never a desk verdict.
+    console.error(`COULD NOT RUN: ${error?.cause?.code || error?.message || error}. Exit 2.`);
+    process.exitCode = 2;
+  },
+);
