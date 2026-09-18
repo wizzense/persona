@@ -570,8 +570,11 @@ function handleBridgeEvent(event) {
 }
 
 function handleListenerStatus(status) {
+  const availabilityChanged = latestListenerStatus?.available !== status?.available;
   latestListenerStatus = status;
   emitToRenderer({ type: "listener-status", status });
+  // The tray carries a "Voice: listener missing" line; keep it honest.
+  if (availabilityChanged && tray) refreshTrayMenu();
 }
 
 async function handleMcpWindowAction(action) {
@@ -1183,6 +1186,18 @@ function refreshTrayMenu() {
       { type: "separator" },
       { label: avatarShown ? "Hide avatar" : "Show avatar", click: () => toggleOverlay() },
       { label: "Characters", submenu: buildCharacterMenu() },
+      // A dead voice listener is otherwise INVISIBLE: the app boots, draws,
+      // answers /health and the avatar simply never speaks. Measured
+      // 2026-09-18 on the owner's own desk — the Windows helper had never
+      // been built there. Say so where the owner looks, and say the fix.
+      ...(latestListenerStatus && latestListenerStatus.available === false
+        ? [{
+            label: app.isPackaged
+              ? "Voice: listener unavailable — reinstall Desk"
+              : "Voice: listener missing — run `npm run native:fetch`",
+            enabled: false,
+          }]
+        : []),
       { type: "separator" },
       {
         label: "About Desk",
