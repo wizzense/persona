@@ -1020,6 +1020,11 @@ function stagePaneImpl() {
         pair: Array.isArray(options.pair) ? options.pair : [],
       });
     },
+    safety: () => {
+      const { isAdultContentVisible, noteGateState } = require("./content-rating.cjs");
+      noteGateState();
+      return { mature: isAdultContentVisible() ? "allowed" : "hidden" };
+    },
     focus: (slotId) => sendToAvatar("focus-avatar", { slotId: slotId || null }),
     remove: (slotId) => {
       if (!removeAvatarSlot(slotId)) throw new Error(`${slotId} is not a removable body`);
@@ -1365,6 +1370,10 @@ function fsMkdirSafe(dir) {
 
 function refreshTrayMenu() {
   invalidateGate();
+  // Slice F: append a line the first time the gate MOVES. The desk cannot
+  // authenticate the flip (the platform writes the mirror), so what it attests
+  // is what it observed and when -- which is the part a desk can honestly claim.
+  require("./content-rating.cjs").noteGateState();
   enforceActiveCharacterRating();
   // SLIMMED 2026-08-25 (owner redesign: "move away from nested menus"). The
   // deck panel (right-click the avatar, or "Open the Desk panel") carries the
