@@ -69,5 +69,9 @@ contextBridge.exposeInMainWorld("aitherConsole", {
     ipcRenderer.on("desk:console-inbox-count", handler);
     return () => ipcRenderer.off("desk:console-inbox-count", handler);
   },
+  /** Everything Desk can do, for the palette (Ctrl+K). Resolved labels, no logic. */
+  commands: () => ipcRenderer.invoke("desk:console-commands"),
+  /** Run one of them by id. */
+  runCommand: (id) => ipcRenderer.invoke("desk:console-command-run", String(id)),
   close: () => ipcRenderer.send("desk:console-close"),
 });

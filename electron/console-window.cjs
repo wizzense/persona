@@ -103,6 +103,10 @@ let wired = false;
 /** { <paneId>: { open(), close(), isOpen() } } — injected by main.cjs. */
 let windowsImpl = {};
 let rendererUrlImpl = null;
+/** { list(ctx) -> rows, run(id) } — injected by main.cjs; stubbed by the smoke.
+ *  The palette lives HERE rather than in main so the console can be verified
+ *  without loading main.cjs (which would take the running Desk's instance lock). */
+let commandsImpl = null;
 
 /**
  * Resolve each pane's content URL.
@@ -313,6 +317,30 @@ function wireIpc() {
   ipcMain.handle("desk:console-detach", (_event, paneId) => callWindow(paneId, "open"));
   ipcMain.handle("desk:console-reattach", (_event, paneId) => callWindow(paneId, "close"));
   ipcMain.handle("desk:console-detached", () => detachedIds());
+  // The palette: one list of everything Desk can do, and one way to run it.
+  // Rows come from the command registry via main; the shell renders what it is
+  // handed and knows no capability of its own.
+  ipcMain.handle("desk:console-commands", () => {
+    try {
+      return (commandsImpl && commandsImpl.list && commandsImpl.list()) || [];
+    } catch (error) {
+      console.warn(`[console] command list failed: ${(error && error.message) || error}`);
+      return [];
+    }
+  });
+  ipcMain.handle("desk:console-command-run", (_event, id) => {
+    const command = String(id || "");
+    if (!commandsImpl || typeof commandsImpl.run !== "function") {
+      return { ok: false, error: "no command runner wired" };
+    }
+    try {
+      commandsImpl.run(command);
+      return { ok: true, id: command };
+    } catch (error) {
+      // A palette that dies on one bad command is worse than one that says so.
+      return { ok: false, id: command, error: String((error && error.message) || error) };
+    }
+  });
   ipcMain.on("desk:console-close", () => {
     if (consoleWindow && !consoleWindow.isDestroyed()) consoleWindow.close();
   });
@@ -327,10 +355,13 @@ function wireIpc() {
  *                     pane table stays testable without Electron.
  * @param rendererUrl  main.cjs's own resolver, for the same reason.
  */
-function showConsole({ windows = {}, rendererUrl = null, urls = {}, autoShow = true } = {}) {
+function showConsole({
+  windows = {}, rendererUrl = null, urls = {}, autoShow = true, commands = null,
+} = {}) {
   windowsImpl = windows || {};
   rendererUrlImpl = rendererUrl;
   hostedUrls = urls || {};
+  commandsImpl = commands;
   wireIpc();
 
   if (consoleWindow && !consoleWindow.isDestroyed()) {

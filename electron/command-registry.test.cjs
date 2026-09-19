@@ -33,11 +33,16 @@ test("a capability with ONE entry point must say why", () => {
 });
 
 test("window size reaches the tray, the avatar menu AND the palette", () => {
-  const size = byId("window.size");
-  assert.ok(size, "window.size left the registry");
-  for (const surface of ["tray", "avatar-menu", "palette"]) {
-    assert.ok(size.surfaces.includes(surface), `window size is missing from ${surface}`);
+  const sizes = COMMANDS.filter((command) => command.group === "window-size");
+  assert.ok(sizes.length >= 4, "the size group lost its presets");
+  for (const command of sizes) {
+    for (const surface of ["tray", "avatar-menu", "palette"]) {
+      assert.ok(command.surfaces.includes(surface), `${command.id} is missing from ${surface}`);
+    }
   }
+  // Flat rows for the palette, nested under one label for a menu -- one list.
+  const rows = require("./command-registry.cjs").paletteRows({});
+  assert.equal(rows.filter((row) => row.group === "window-size").length, sizes.length);
 });
 
 test("every surface renders, and separators come from groups", () => {
@@ -96,6 +101,12 @@ test("every command either has a handler or a dynamic submenu", () => {
         new RegExp(`"${command.id.replace(".", "\\.")}":`),
         `${command.id} is dynamic but nothing supplies its submenu`,
       );
+      continue;
+    }
+    // A command is answerable three ways: a case in the switch, a dynamic submenu,
+    // or DATA on its own record (the size presets) that the default branch applies.
+    if (command.size) {
+      assert.match(body, /command\.size/, "the data-driven branch is gone");
       continue;
     }
     assert.ok(body.includes(`"${command.id}"`), `${command.id} has no case in runCommand`);

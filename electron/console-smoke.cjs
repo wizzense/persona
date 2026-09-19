@@ -73,8 +73,19 @@ async function run() {
   ensureCommandIpc(getFleetControl(), { createFleetWindow: () => {} });
   ensureSessionsIpc();
 
+  const paletteRan = [];
   const win = showConsole({
     autoShow: false,
+    // main.cjs supplies these from the command registry; here they are stubbed,
+    // because this entry point must never load main (it would take the running
+    // Desk's single-instance lock).
+    commands: {
+      list: () => [
+        { id: "window.size.large", label: "Large", group: "window-size" },
+        { id: "console.open", label: "Aither Console…", group: "go" },
+      ],
+      run: (id) => paletteRan.push(id),
+    },
     rendererUrl: require("node:url")
       .pathToFileURL(path.join(__dirname, "..", "dist", "index.html")).href,
     windows: Object.fromEntries(PANES.map((p) => [p.id, stubWindow(p.id)])),
@@ -251,6 +262,45 @@ async function run() {
     beforeExternal.state === "detached" && afterExternal.state !== "detached"
     && afterExternal.placeholders === 0 && afterExternal.frame === true,
     `${JSON.stringify(beforeExternal)} -> ${JSON.stringify(afterExternal)}`);
+
+  // 6. The palette: Ctrl+K, type, Enter. This is the path that makes a gesture
+  //    optional -- the failure it answers is "the size menu exists, somewhere,
+  //    behind a right-click that has to land on a body".
+  await win.webContents.executeJavaScript(
+    "document.dispatchEvent(new KeyboardEvent('keydown', "
+    + "{ key: 'k', ctrlKey: true, bubbles: true }))",
+  );
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  const opened2 = await win.webContents.executeJavaScript(
+    "({ open: document.getElementById('scrim').classList.contains('open'),"
+    + " rows: document.querySelectorAll('#palette-list li').length })",
+  );
+  check("Ctrl+K opens the palette with the registry's rows",
+    opened2.open === true && opened2.rows === 2, JSON.stringify(opened2));
+
+  // Typing narrows it, and Enter runs what is selected.
+  await win.webContents.executeJavaScript(
+    "(() => { const i = document.getElementById('palette-input');"
+    + " i.value = 'larg'; i.dispatchEvent(new Event('input', { bubbles: true })); })()",
+  );
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  const filtered = await win.webContents.executeJavaScript(
+    "({ rows: [...document.querySelectorAll('#palette-list li span:first-child')]"
+    + ".map((n) => n.textContent) })",
+  );
+  check("typing filters the palette", filtered.rows.length === 1 && filtered.rows[0] === "Large",
+    JSON.stringify(filtered));
+
+  await win.webContents.executeJavaScript(
+    "document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))",
+  );
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  const closedAfterRun = await win.webContents.executeJavaScript(
+    "document.getElementById('scrim').classList.contains('open')",
+  );
+  check("Enter runs the command and closes the palette",
+    paletteRan.length === 1 && paletteRan[0] === "window.size.large" && closedAfterRun === false,
+    `${paletteRan.join(",") || "nothing ran"} · open=${closedAfterRun}`);
 }
 
 app.whenReady().then(run).catch((error) => {

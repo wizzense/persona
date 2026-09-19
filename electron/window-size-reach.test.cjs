@@ -35,15 +35,15 @@ test("window size is reachable from the TRAY, not only from a gesture", () => {
   // registry, so this is two facts: the registry puts size on the tray, and main
   // supplies the presets behind it (a dynamic command with no submenu is dropped).
   assert.ok(
-    registry.commandsFor("tray").some((command) => command.id === "window.size"),
-    "the registry no longer puts window size on the tray",
+    registry.groupFor("window-size", "tray").length >= 4,
+    "the registry no longer puts the size commands on the tray",
   );
   const at = MAIN.indexOf("buildMenu(\"tray\"");
   assert.ok(at > 0, "the tray is no longer rendered from the registry");
   assert.match(
     MAIN.slice(at, at + 600),
-    /"window\.size":\s*buildSizeMenu\(\)/,
-    "nothing supplies the tray's size presets, so the row is dropped",
+    /nest:\s*\{\s*"window-size":/,
+    "the tray must nest the size group under one label, or it renders six flat rows",
   );
 });
 
@@ -66,15 +66,17 @@ test("a size shortcut that could not be registered SAYS so", () => {
 });
 
 test("every size preset stays reachable and sane", () => {
-  const at = MAIN.indexOf("const SIZE_PRESETS");
-  assert.ok(at > 0, "SIZE_PRESETS is gone");
-  const block = MAIN.slice(at, MAIN.indexOf("]", at));
-  const presets = [...block.matchAll(/width:\s*(\d+),\s*height:\s*(\d+)/g)]
-    .map(([, w, h]) => ({ w: Number(w), h: Number(h) }));
+  // The presets are registry DATA now (one list, rendered as a nested menu and as
+  // flat palette rows), so this reads them there rather than from a second copy
+  // in main.cjs -- the duplication that let one surface offer a size another did not.
+  const presets = registry.groupFor("window-size", "palette").filter((c) => c.size);
   assert.ok(presets.length >= 3, "a size menu with fewer than three choices is a toggle");
-  for (const { w, h } of presets) {
-    // setWindowSize clamps to these floors; a preset under them is a menu entry
-    // that appears to do nothing.
-    assert.ok(w >= 320 && h >= 480, `preset ${w}x${h} is below the clamp floor`);
+  for (const { id, size } of presets) {
+    // setWindowSize clamps to these floors; a preset under them is a row that
+    // appears to do nothing.
+    assert.ok(size.width >= 320 && size.height >= 480,
+      `${id} is ${size.width}x${size.height}, below the clamp floor`);
   }
+  assert.match(MAIN, /command\.size\)\s*\{[\s\S]{0,200}setWindowSize\(command\.size\.width/,
+    "main must apply a preset's size from the registry record");
 });

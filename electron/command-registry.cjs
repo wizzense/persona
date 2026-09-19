@@ -67,12 +67,37 @@ const COMMANDS = Object.freeze([
     surfaces: ["tray", "palette"],
     label: (ctx = {}) => (ctx.avatarShown ? "Hide avatar" : "Show avatar"),
   }),
-  // 🚩 The command this registry was born for. It is on the tray as well as the
-  // avatar's own menu because the avatar menu needs a right-click that lands on
-  // a BODY: with the avatar hidden, tiny, or off-screen there was no path at all.
+  // 🚩 The commands this registry was born for. They are on the tray as well as
+  // the avatar's own menu because that menu needs a right-click that lands on a
+  // BODY: with the avatar hidden, tiny or off-screen there was no path at all.
+  //
+  // The presets are DATA here rather than a submenu main builds, so the palette
+  // can list them one per row while the menus nest them. A dynamic submenu is
+  // invisible to anything that is not a menu -- which is how "size" stayed
+  // unreachable from everywhere except one gesture.
   Object.freeze({
-    id: "window.size", label: "Avatar window size", group: "avatar",
-    surfaces: ["tray", "avatar-menu", "palette"], dynamic: true,
+    id: "window.size.small", label: "Small", group: "window-size",
+    surfaces: ["tray", "avatar-menu", "palette"], size: Object.freeze({ width: 430, height: 680 }),
+  }),
+  Object.freeze({
+    id: "window.size.medium", label: "Medium", group: "window-size",
+    surfaces: ["tray", "avatar-menu", "palette"], size: Object.freeze({ width: 600, height: 950 }),
+  }),
+  Object.freeze({
+    id: "window.size.large", label: "Large", group: "window-size",
+    surfaces: ["tray", "avatar-menu", "palette"], size: Object.freeze({ width: 800, height: 1266 }),
+  }),
+  Object.freeze({
+    id: "window.size.xlarge", label: "Extra large", group: "window-size",
+    surfaces: ["tray", "avatar-menu", "palette"], size: Object.freeze({ width: 1000, height: 1583 }),
+  }),
+  Object.freeze({
+    id: "window.size.bigger", label: "Bigger  (Ctrl+Shift+=)", group: "window-size",
+    surfaces: ["tray", "avatar-menu", "palette"],
+  }),
+  Object.freeze({
+    id: "window.size.smaller", label: "Smaller  (Ctrl+Shift+-)", group: "window-size",
+    surfaces: ["tray", "avatar-menu", "palette"],
   }),
   Object.freeze({
     id: "characters.pick", label: "Characters", group: "avatar",
@@ -98,6 +123,27 @@ function byId(id) {
   return COMMANDS.find((command) => command.id === String(id || "")) || null;
 }
 
+/** One group's commands on a surface -- what a menu nests and a palette flattens. */
+function groupFor(group, surface) {
+  return commandsFor(surface).filter((command) => command.group === String(group));
+}
+
+/**
+ * The palette's rows: id + resolved label + group, nothing a page cannot render.
+ *
+ * A palette entry says which MENU would also have offered it, because "I know it
+ * is in a menu somewhere" is the state the palette exists to end.
+ */
+function paletteRows(ctx = {}) {
+  return commandsFor("palette")
+    .filter((command) => !command.dynamic)
+    .map((command) => ({
+      id: command.id,
+      label: labelOf(command, ctx),
+      group: command.group,
+    }));
+}
+
 function labelOf(command, ctx) {
   return typeof command.label === "function" ? command.label(ctx || {}) : command.label;
 }
@@ -113,14 +159,30 @@ function labelOf(command, ctx) {
  * a dynamic command with no submenu supplied is DROPPED rather than rendered as a
  * dead row, because a menu entry that does nothing is worse than an absent one.
  */
-function buildMenu(surface, run, { ctx = {}, submenus = {} } = {}) {
+function buildMenu(surface, run, { ctx = {}, submenus = {}, nest = {} } = {}) {
   const wanted = commandsFor(surface);
   const template = [];
+  const nested = new Set();
   let lastGroup = null;
   for (const command of wanted) {
     if (command.dynamic && !submenus[command.id]) continue;
+    const nestLabel = nest[command.group];
+    if (nestLabel && nested.has(command.group)) continue;
     if (lastGroup !== null && command.group !== lastGroup) template.push({ type: "separator" });
     lastGroup = command.group;
+    if (nestLabel) {
+      // A menu nests a group; the palette lists the same commands one per row.
+      // Both read this list, so neither can carry an entry the other lacks.
+      nested.add(command.group);
+      template.push({
+        label: nestLabel,
+        submenu: groupFor(command.group, surface).map((child) => ({
+          label: labelOf(child, ctx),
+          click: () => run(child.id),
+        })),
+      });
+      continue;
+    }
     const label = labelOf(command, ctx);
     if (command.dynamic) template.push({ label, submenu: submenus[command.id] });
     else template.push({ label, click: () => run(command.id) });
@@ -158,4 +220,6 @@ function conformance() {
   return problems;
 }
 
-module.exports = { SURFACES, COMMANDS, commandsFor, byId, labelOf, buildMenu, conformance };
+module.exports = {
+  SURFACES, COMMANDS, commandsFor, groupFor, paletteRows, byId, labelOf, buildMenu, conformance,
+};

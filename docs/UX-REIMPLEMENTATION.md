@@ -85,7 +85,7 @@ chrome IS the edge.
 | # | slice | done when |
 |---|---|---|
 | 0 | **stop-gaps (landed 2026-09-18)** | reattach repaints; size is on the tray; `console-smoke` drives the BUTTONS and reads the DOM; `window-size-reach.test.cjs` |
-| 1 | command registry + palette; tray/avatar/console menus rendered from it | a conformance test asserts every command reaches ≥2 surfaces, and no two menus hardcode the same label |
+| 1 | **command registry + palette (landed 2026-09-18)** — `command-registry.cjs`; tray and size menu rendered from it; Ctrl+K palette in the console | `conformance()` refuses a single-surface command with no written reason; the smoke opens the palette, filters it and runs a command |
 | 2 | **surface state machine (landed 2026-09-18)** — `electron/surface-state.cjs` owns where every route is; main pushes the map, the shell renders it | `surface-state.test.cjs` (8 arms); the smoke closes a detached window from OUTSIDE and the rail un-detaches itself — that arm FAILS on the pre-slice-2 files |
 | 3 | Deck decomposition into routes; standalone windows become `detached` presentations | no `new BrowserWindow` outside the presentation layer; `main.cjs` under ~1,200 lines |
 | 4 | visual pass: one layout grammar, one type scale, dark-first tokens, stage chrome | every surface uses the shared tokens; no per-window CSS colours |
