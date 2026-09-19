@@ -33,9 +33,15 @@ process.env.DESK_ADULT_CONTENT_MIRROR = MIRROR;
 // that lives between its two snapshots breaks the superset check (measured
 // 2026-08-25: "open roster lost a PG character: zz-gate-fixture-plain").
 const ROSTER = path.join(os.tmpdir(), `desk-roster-${process.pid}`);
+// The gate AUDIT, same per-process rule: the env var must be set before the
+// module resolves its paths at require time.
+const AUDIT = path.join(os.tmpdir(), `desk-adult-audit-${process.pid}.log`);
+process.env.DESK_ADULT_CONTENT_LOG = AUDIT;
 process.env.DESK_ROSTER_DIR = ROSTER;
 fs.mkdirSync(ROSTER, { recursive: true });
 after(() => {
+  fs.rmSync(AUDIT, { force: true });
+  fs.rmSync(`${AUDIT}.state`, { force: true });
   fs.rmSync(MIRROR, { force: true });
   fs.rmSync(ROSTER, { recursive: true, force: true });
 });
@@ -145,4 +151,66 @@ test("r15 is treated as adult too", () => {
       assert.equal(roster.listCharacters().includes("zz-gate-fixture-r15"), false);
     });
   });
+});
+
+test("a refusal names the REAL cause: hidden by rating, not 'not installed'", () => {
+  // The bug this closes: every door refused an R18 character correctly and then
+  // said "No character named X is installed" -- so the owner went looking for a
+  // model that was sitting in the roster all along.
+  withCharacter("zz-refusal-r18", "r18", () => {
+    withGate(false, () => {
+      const refusal = rating.refusalFor("zz-refusal-r18");
+      assert.ok(refusal, "a hidden character must explain itself");
+      assert.equal(refusal.code, "rating-hidden");
+      assert.equal(refusal.rating, "r18");
+      assert.match(refusal.reason, /rated r18/);
+      assert.doesNotMatch(refusal.reason, /not installed/i);
+      // and the door itself still refuses -- the reason is not a way in
+      assert.equal(roster.installCharacter("zz-refusal-r18"), false);
+    });
+    // Mutation guard: with the gate OPEN there is nothing to explain.
+    withGate(true, () => {
+      assert.equal(rating.refusalFor("zz-refusal-r18"), null);
+    });
+  });
+});
+
+test("a character that really is missing gets no rating excuse", () => {
+  withGate(false, () => {
+    assert.equal(rating.refusalFor("zz-no-such-character"), null,
+      "an absent character must fall through to the caller's own message");
+  });
+});
+
+test("a PG character is never refused, gate open or closed", () => {
+  withCharacter("zz-refusal-plain", "pg", () => {
+    withGate(false, () => assert.equal(rating.refusalFor("zz-refusal-plain"), null));
+    withGate(true, () => assert.equal(rating.refusalFor("zz-refusal-plain"), null));
+  });
+});
+
+test("the desk records WHEN it saw the gate move, once per transition", () => {
+  fs.rmSync(AUDIT, { force: true });
+  fs.rmSync(`${AUDIT}.state`, { force: true });
+  withGate(false, () => assert.equal(rating.noteGateState().changed, true));
+  withGate(false, () => assert.equal(rating.noteGateState().changed, false,
+    "a steady gate must not append a line per tray rebuild"));
+  withGate(true, () => {
+    const moved = rating.noteGateState();
+    assert.equal(moved.changed, true);
+    assert.equal(moved.visible, true);
+  });
+  const lines = fs.readFileSync(AUDIT, "utf8").trim().split(String.fromCharCode(10));
+  assert.equal(lines.length, 2, lines.join(" | "));
+  assert.match(lines[0], /mature=hidden by=/);
+  assert.match(lines[1], /mature=allowed by=/);
+  // The desk cannot authenticate the flip -- it reads a mirror -- so what it
+  // attests is what it OBSERVED. Saying more than that would be a lie.
+  assert.match(lines[1], /^\d{4}-\d{2}-\d{2}T/);
+});
+
+test("the MCP refusal text is the rating one, not the missing-file one", () => {
+  const source = fs.readFileSync(path.join(__dirname, "mcp-server.cjs"), "utf8");
+  assert.match(source, /refusalText\(/, "set_character/spawn_avatar must consult the gate");
+  assert.match(source, /require\("\.\/content-rating\.cjs"\)/);
 });

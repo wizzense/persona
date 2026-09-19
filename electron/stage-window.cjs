@@ -53,6 +53,10 @@ function ensureStageIpc(impl) {
 
   ipcMain.handle("desk:stage-bodies", () => call("bodies", () => ({
     bodies: (stageImpl.bodies && stageImpl.bodies()) || [],
+    // Plan 40 slice F: the safety setting is enforced at every door that shows a
+    // body, so the pane that lists bodies is where its state belongs. Read-only
+    // on purpose -- the desk does not own the flip, it obeys it.
+    safety: (stageImpl.safety && stageImpl.safety()) || null,
   })));
   ipcMain.handle("desk:stage-arrange", (_event, name, options) => call("arrange", () => {
     stageImpl.arrange?.(String(name || ""), options || {});

@@ -46,6 +46,11 @@ const MIRROR =
   process.env.DESK_ADULT_CONTENT_MIRROR ||
   path.join(os.homedir(), ".aither", "adult_content.json");
 const RATING_FILE = "character.json";
+/** Where the desk records what it OBSERVED the gate to be, and when it moved. */
+const AUDIT_LOG =
+  process.env.DESK_ADULT_CONTENT_LOG ||
+  path.join(os.homedir(), ".aither", "adult_content.log");
+const AUDIT_STATE = `${AUDIT_LOG}.state`;
 
 /** Ratings that are hidden while the gate is closed. */
 const ADULT_RATINGS = new Set(["r18", "r15"]);
@@ -116,6 +121,71 @@ function filterCharacters(names) {
   return names.filter((name) => !ADULT_RATINGS.has(getRating(name)));
 }
 
+/**
+ * WHY a character cannot be used right now — null when it can.
+ *
+ * 🚩 Every door already refused a hidden character correctly (`installCharacter`,
+ * `planSlotInstall`, `listCharacters`), and every one of them said the same
+ * wrong thing on the way out: "No character named X is installed." The character
+ * IS installed. It is hidden by the safety gate, and a refusal that names the
+ * wrong cause sends the owner looking for a missing file that is sitting right
+ * there -- exactly the "everything is broken" reading this gate is supposed to
+ * avoid. Plan 40 slice F: the setting is enforced everywhere, and it SAYS SO.
+ */
+function refusalFor(name) {
+  const rating = getRating(name);
+  if (ADULT_RATINGS.has(rating) && !isAdultContentVisible()) {
+    return {
+      code: "rating-hidden",
+      rating,
+      reason: `${name} is rated ${rating} and mature content is currently hidden. `
+        + "Turn it on in the platform's safety setting (the desk only reads it).",
+    };
+  }
+  return null;
+}
+
+/**
+ * Note the gate's current state, and append a line the FIRST time it changes.
+ *
+ * The plan asks for the flip to be auditable. The desk cannot authenticate the
+ * flip -- it only reads the mirror the platform writes -- so what it records is
+ * what it OBSERVED and when, which is the part a desk can honestly attest.
+ * Returns the state, and whether this call saw a transition.
+ */
+function noteGateState(now = new Date()) {
+  const visible = isAdultContentVisible();
+  let previous;
+  try {
+    previous = JSON.parse(fs.readFileSync(AUDIT_STATE, "utf8")).visible;
+  } catch {
+    // No state file yet (first run) reads as "we have never seen it", so the
+    // first observation is recorded rather than swallowed as "no change".
+    previous = null;
+  }
+  if (previous === visible) return { visible, changed: false };
+  let by = "unknown";
+  try {
+    const mirror = JSON.parse(fs.readFileSync(MIRROR, "utf8"));
+    by = String(mirror.by || mirror.source || "unknown");
+  } catch {
+    /* an unreadable mirror is already "hidden"; the audit says who as best it can */
+  }
+  try {
+    fs.mkdirSync(path.dirname(AUDIT_STATE), { recursive: true });
+    fs.appendFileSync(
+      AUDIT_LOG,
+      `${now.toISOString()} mature=${visible ? "allowed" : "hidden"} by=${by}
+`,
+    );
+    fs.writeFileSync(AUDIT_STATE, JSON.stringify({ visible, at: now.toISOString() }));
+  } catch {
+    // An audit that cannot be written must not stop the gate from being ENFORCED.
+    return { visible, changed: true, recorded: false };
+  }
+  return { visible, changed: true, recorded: true };
+}
+
 /** Roster ratings, for `rate-characters.py --report` and diagnostics. */
 function ratingReport() {
   let entries;
@@ -134,7 +204,10 @@ function ratingReport() {
 
 module.exports = {
   ADULT_RATINGS,
+  AUDIT_LOG,
   filterCharacters,
+  noteGateState,
+  refusalFor,
   getRating,
   invalidateGate,
   isAdultContentVisible,

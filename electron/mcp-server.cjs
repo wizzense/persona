@@ -6,6 +6,15 @@ const {
 } = require("@modelcontextprotocol/sdk/server/streamableHttp.js");
 const z = require("zod/v4");
 const { version } = require("../package.json");
+// Plan 40 slice F. A refusal must name its real cause: a character hidden by the
+// safety gate IS installed, and answering "not installed" sends the owner hunting
+// for a file that is sitting in the roster.
+const { refusalFor } = require("./content-rating.cjs");
+
+function refusalText(name, fallback) {
+  const refusal = refusalFor(name);
+  return refusal ? refusal.reason : fallback;
+}
 
 const MCP_PATH = "/mcp";
 const ANIMATION_EVENT_NAMES = {
@@ -188,7 +197,10 @@ function createDeskMcpServer({
         return textResult(
           ok
             ? `Desk switched to the ${name} character.`
-            : `No character named ${name} is installed. Use list_characters to see the roster.`,
+            : refusalText(
+              name,
+              `No character named ${name} is installed. Use list_characters to see the roster.`,
+            ),
         );
       },
     );
@@ -310,7 +322,11 @@ function createDeskMcpServer({
         return textResult(
           ok
             ? `Avatar spawned in slot ${slot_id} with character ${name}.`
-            : `Failed to spawn avatar: slot_id may be reserved (use a custom id like 'slot1'), or character ${name} is not installed.`,
+            : refusalText(
+              name,
+              `Failed to spawn avatar: slot_id may be reserved (use a custom id like 'slot1'), `
+              + `or character ${name} is not installed.`,
+            ),
         );
       },
     );
