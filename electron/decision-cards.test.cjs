@@ -156,7 +156,7 @@ test("an unreadable store is 'unreadable', never mistaken for empty-and-fine", (
   assert.deepEqual(listOpen(path.join(os.tmpdir(), "desk-no-such-dir-xyz")), []);
 });
 
-test("watch fires at start and on change, not on quiet polls", () => {
+test("watch fires at start and on change, not on quiet polls", async () => {
   const dir = tmpStore();
   writeCard(dir, "d-1");
   const seen = [];
@@ -172,18 +172,57 @@ test("watch fires at start and on change, not on quiet polls", () => {
       tick = null;
     },
   });
+  // The scan is asynchronous now (it must not block the main process): wait for
+  // the initial one instead of assuming it finished inside watch().
+  for (let i = 0; i < 200 && seen.length === 0; i += 1) await new Promise((r) => setTimeout(r, 5));
   assert.deepEqual(seen, [["d-1"]], "the initial poll reports the current queue");
 
-  tick();
+  await tick();
   assert.equal(seen.length, 1, "a quiet poll must not re-fire onChange");
 
   writeCard(dir, "d-2");
-  tick();
+  await tick();
   assert.equal(seen.length, 2, "a new card fires onChange");
   assert.deepEqual(seen[1].sort(), ["d-1", "d-2"]);
 
   stop();
   assert.equal(tick, null, "stop clears the interval");
+});
+
+test("scanAsync agrees with the sync signature and list, and re-reads only what changed", async () => {
+  const { scanAsync, signature, listOpen } = require("./decision-cards.cjs");
+  const fs = require("node:fs");
+  const dir = tmpStore();
+  writeCard(dir, "d-1");
+  writeCard(dir, "d-2");
+  const cache = new Map();
+  let reads = 0;
+  const counting = { ...fs.promises, readFile: async (...a) => { reads += 1; return fs.promises.readFile(...a); } };
+
+  const first = await scanAsync(dir, cache, counting);
+  assert.equal(first.signature, signature(dir));
+  assert.deepEqual(first.cards.map((c) => c.id).sort(), listOpen(dir).map((c) => c.id).sort());
+  assert.equal(reads, 2);
+
+  const quiet = await scanAsync(dir, cache, counting);
+  assert.equal(quiet.signature, first.signature);
+  assert.equal(reads, 2, "an unchanged store costs stats, not reads");
+
+  writeCard(dir, "d-3");
+  const grown = await scanAsync(dir, cache, counting);
+  assert.equal(reads, 3, "only the new file is read");
+  assert.equal(grown.cards.length, 3);
+
+  fs.unlinkSync(require("node:path").join(dir, "d-1.json"));
+  const shrunk = await scanAsync(dir, cache, counting);
+  assert.deepEqual(shrunk.cards.map((c) => c.id).sort(), ["d-2", "d-3"]);
+  assert.equal(cache.has("d-1.json"), false, "a removed card leaves the cache");
+});
+
+test("scanAsync: an unreadable directory is a token no real store produces", async () => {
+  const { scanAsync } = require("./decision-cards.cjs");
+  const out = await scanAsync(require("node:path").join(tmpStore(), "nope"));
+  assert.deepEqual(out, { signature: "unreadable", cards: [] });
 });
 
 test("steerCard sends a work order through awask, as ONE argv element, and refuses empties", () => {

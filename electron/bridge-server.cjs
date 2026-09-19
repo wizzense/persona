@@ -1,6 +1,6 @@
 "use strict";
 
-const { timingSafeEqual } = require("node:crypto");
+const nodeCrypto = require("node:crypto");
 const fs = require("node:fs");
 const http = require("node:http");
 const os = require("node:os");
@@ -88,7 +88,7 @@ function bearerOk(request, token) {
   const want = Buffer.from(token, "utf8");
   // Length leaks nothing useful here (the token is not secret-length), but a
   // compare that stops at the first differing byte would leak the prefix.
-  return given.length === want.length && timingSafeEqual(given, want);
+  return given.length === want.length && nodeCrypto.timingSafeEqual(given, want);
 }
 
 // Fails CLOSED: no configured token means no mutation, not open mutation.
@@ -196,6 +196,14 @@ function createBridgeServer({
   // The two desktop surfaces: POST /desktop/overlay | /desktop/app raise a
   // window (no bearer — same class as /fleet/open); GET /desktop/status reads.
   desktopHandler = null,
+  // POST /speak {text, voice?}: the avatar says it through AitherVoice.
+  speakHandler = null,
+  // POST /console/open {pane?}: raise the Aither Console on a pane (default inbox).
+  consoleHandler = null,
+  // () => {x, y, width, height} of the visible avatar window, or null.
+  avatarBoundsProvider = null,
+  // () => the room stage's status (who is on stage, queue, spoken), or null.
+  stageStatusProvider = null,
   // undefined = resolve from env/file at start; null = none configured (mutators 503).
   bridgeToken = undefined,
 }) {
@@ -211,7 +219,23 @@ function createBridgeServer({
 
     if (request.method === "GET" && request.url === "/health") {
       response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ ok: true, lastState: lastStateEvent?.state ?? null }));
+      // `avatar` = where the avatar window IS on screen (null when hidden), so a
+      // sibling surface can keep off it. The awask card window anchors bottom-
+      // right, exactly where the avatar lives, and covered it (owner, 2026-09-18:
+      // "the avatar is gone?? -- nvm it was hidden behind the awask decision card").
+      let avatar;
+      try {
+        avatar = avatarBoundsProvider ? avatarBoundsProvider() : null;
+      } catch {
+        avatar = null;
+      }
+      let stage;
+      try {
+        stage = stageStatusProvider ? stageStatusProvider() : null;
+      } catch {
+        stage = null;
+      }
+      response.end(JSON.stringify({ ok: true, lastState: lastStateEvent?.state ?? null, avatar, stage }));
       return;
     }
 
@@ -303,6 +327,95 @@ function createBridgeServer({
       return;
     }
 
+    // The Aither Console is where cards live (owner, 2026-09-18: "I want the
+    // cards by default to launch in the aither console and become detachable
+    // like the other components"). POST /console/open {pane?: "inbox"|...}
+    // raises it on that pane -- the escalation ladder's desk rung uses this
+    // instead of a separate Tk popup that covered the avatar. Same trust
+    // class as /desktop: a window on the owner's own screen, no bearer.
+    if (request.url === "/console/open") {
+      if (!originAllowed(origin)) {
+        response.writeHead(403);
+        response.end();
+        return;
+      }
+      if (consoleHandler == null) {
+        response.writeHead(404);
+        response.end();
+        return;
+      }
+      if (request.method !== "POST") {
+        response.writeHead(405, { allow: "POST" });
+        response.end();
+        return;
+      }
+      readJsonBody(request)
+        .catch(() => ({}))
+        .then((body) => consoleHandler(typeof body?.pane === "string" ? body.pane : "inbox"))
+        .then((result) => {
+          if (response.headersSent) return;
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(JSON.stringify(result ?? { ok: true }));
+        })
+        .catch((error) => {
+          if (response.headersSent) return;
+          response.writeHead(500, { "content-type": "application/json" });
+          response.end(JSON.stringify({ ok: false, error: error?.message || String(error) }));
+        });
+      return;
+    }
+
+    // The avatar SPEAKS (owner, 2026-09-18: "we have AitherVoice + awvoice +
+    // aither-orchestrator -- integrate this"). POST /speak {text, voice?}:
+    // main synthesises through AitherVoice and the renderer plays it with
+    // lip-sync -- the same path the drop lane already used, opened to every
+    // agent: the orchestrator's replies, a routine, awvoice, a Claude Code
+    // session. Same trust class as /desktop: loopback, no foreign Origin,
+    // no bearer -- speaking on the owner's own desk mutates nothing.
+    if (request.url === "/speak") {
+      if (!originAllowed(origin)) {
+        response.writeHead(403);
+        response.end();
+        return;
+      }
+      if (speakHandler == null) {
+        response.writeHead(404);
+        response.end();
+        return;
+      }
+      if (request.method !== "POST") {
+        response.writeHead(405, { allow: "POST" });
+        response.end();
+        return;
+      }
+      readJsonBody(request)
+        .then((body) => {
+          const text = typeof body?.text === "string" ? body.text.trim() : "";
+          if (!text) {
+            response.writeHead(400, { "content-type": "application/json" });
+            response.end(JSON.stringify({ ok: false, error: "text required" }));
+            return null;
+          }
+          const voice = typeof body?.voice === "string" && body.voice ? body.voice : undefined;
+          const speed = Number.isFinite(Number(body?.speed)) && body?.speed != null
+            ? Number(body.speed)
+            : undefined;
+          const slot = typeof body?.slot === "string" && /^[a-z0-9_-]{1,32}$/.test(body.slot) ? body.slot : undefined;
+          return speakHandler({ text: text.slice(0, 2000), voice, speed, slot });
+        })
+        .then((result) => {
+          if (result == null || response.headersSent) return;
+          response.writeHead(result.ok === false ? 502 : 200, { "content-type": "application/json" });
+          response.end(JSON.stringify(result));
+        })
+        .catch((error) => {
+          if (response.headersSent) return;
+          response.writeHead(500, { "content-type": "application/json" });
+          response.end(JSON.stringify({ ok: false, error: error?.message || String(error) }));
+        });
+      return;
+    }
+
     // prefetch away from an outage.
     if (request.url === "/fleet/status" || request.url.startsWith("/fleet/")) {
       if (!originAllowed(origin)) {
@@ -315,8 +428,13 @@ function createBridgeServer({
         response.end();
         return;
       }
-      const verb = request.url.slice("/fleet/".length).split("?")[0];
+      const [verb, query = ""] = request.url.slice("/fleet/".length).split("?");
       const isStatus = verb === "status";
+      // GET /fleet/status?maxAgeMs=0 (or ?fresh=1) forces a live probe; without
+      // it the 15 s cache answers. Measured 2026-09-18: the query was stripped
+      // here and every caller got the cache while believing it had forced one.
+      const params = new URLSearchParams(query);
+      const fresh = isStatus && (params.get("maxAgeMs") === "0" || params.get("fresh") === "1");
       if ((isStatus && request.method !== "GET") || (!isStatus && request.method !== "POST")) {
         response.writeHead(405, { allow: isStatus ? "GET" : "POST" });
         response.end();
@@ -328,7 +446,7 @@ function createBridgeServer({
         return;
       }
       Promise.resolve()
-        .then(() => fleetHandler(verb))
+        .then(() => fleetHandler(verb, { fresh }))
         .then((verdict) => {
           const status = verdict?.unknown ? 404 : verdict?.busy ? 409 : verdict?.cannotJudge ? 503 : 200;
           response.writeHead(status, { "content-type": "application/json" });

@@ -9,8 +9,14 @@ const {
   fetchThread,
   post,
   postThreadReply,
+  setHumanityAttestationSource,
   _resetJoinForTests,
+  _resetDoorForTests,
+  _setBearerSourceForTests,
   RELAY_URL,
+  DOOR_KNOCK_URL,
+  DOOR_PRESENT_URL,
+  DOOR_HEADER,
 } = require("./relay-feed.cjs");
 
 function fakeSpawn(handler) {
@@ -208,4 +214,194 @@ test("postThreadReply replies over HTTP and reports the verdict", async () => {
     { ok: false, detail: "missing message id" }, "a missing id never sends");
   assert.deepEqual(await postThreadReply("#agents", "m", "  "),
     { ok: false, detail: "empty reply" }, "blank text never sends");
+});
+
+// ---------------------------------------------------------------------------
+// The door protocol on the write path (module header, DOORS).
+// ---------------------------------------------------------------------------
+
+const DOOR_403 = {
+  status: 403,
+  body: JSON.stringify({
+    detail: "#agents is behind the channel:#agents door. Knock at /doors/knock, "
+      + "present your evidence at /doors/present, then send with X-Door-Attestation. "
+      + "No attestation presented.",
+  }),
+};
+
+/** A request fake that ALSO passes the {headers} option through. */
+function fakeRequest4(handler) {
+  return (method, urlPath, body, opts) => Promise.resolve(handler(method, urlPath, body, opts || {}));
+}
+
+/**
+ * A scripted relay + gateway. `relay(headers)` decides the write verdict from
+ * the attestation header; `present` mints attestations in sequence. Every
+ * call is logged so a test can count knocks, presents and writes.
+ */
+function doorWorld({ relay, present, knock, humanity = "humanity-evidence" } = {}) {
+  _resetJoinForTests();
+  _resetDoorForTests();
+  setHumanityAttestationSource(() => humanity);
+  const log = [];
+  const world = {
+    log,
+    presents: 0,
+    req: fakeRequest4((_m, urlPath, body, opts) => {
+      const headers = opts.headers || {};
+      if (urlPath === "/v1/agent/join") {
+        log.push({ kind: "join" });
+        return { status: 200, body: '{"is_agent":true,"nick":"david"}' };
+      }
+      if (urlPath === DOOR_KNOCK_URL) {
+        log.push({ kind: "knock", door: body.door });
+        return knock ? knock(body) : { status: 200, body: '{"door":"channel:#agents","requires":"humanity"}' };
+      }
+      if (urlPath === DOOR_PRESENT_URL) {
+        world.presents += 1;
+        log.push({ kind: "present", door: body.door, evidence: body.attestation });
+        return present
+          ? present(body, world.presents)
+          : { status: 200, body: JSON.stringify({ admitted: true, attestation: `att-${world.presents}`, expires_at: "2099-01-01T00:00:00Z" }) };
+      }
+      if (urlPath.startsWith("/v1/channels/")) {
+        log.push({ kind: "write", urlPath, attestation: headers[DOOR_HEADER] || "" });
+        return relay ? relay(headers[DOOR_HEADER] || "", body) : (
+          headers[DOOR_HEADER] ? { status: 200, body: '{"success":true}' } : DOOR_403
+        );
+      }
+      return { status: 500, body: "" };
+    }),
+  };
+  return world;
+}
+
+test("door: the attestation is minted once and reused across two posts", async () => {
+  const w = doorWorld();
+  assert.deepEqual(await post("#agents", "first", w.req), { ok: true, detail: "" });
+  assert.deepEqual(await post("#agents", "second", w.req), { ok: true, detail: "" });
+  assert.equal(w.presents, 1, "one present for two posts");
+  assert.equal(w.log.filter((e) => e.kind === "knock").length, 1, "one knock too");
+  const writes = w.log.filter((e) => e.kind === "write");
+  // first post: plain write -> 403-door -> present -> retry; second: header up front
+  assert.deepEqual(writes.map((e) => e.attestation), ["", "att-1", "att-1"]);
+  assert.equal(w.log.find((e) => e.kind === "knock").door, "channel:#agents");
+  assert.equal(w.log.find((e) => e.kind === "present").evidence, "humanity-evidence",
+    "the humanity attestation is what gets presented");
+  _resetDoorForTests();
+});
+
+test("door: the relay write carries X-Door-Attestation (post and thread reply)", async () => {
+  const w = doorWorld();
+  assert.equal((await post("#agents", "hi", w.req)).ok, true);
+  assert.equal((await postThreadReply("#agents", "451a3460", "reply", w.req)).ok, true);
+  const last = w.log.filter((e) => e.kind === "write").at(-1);
+  assert.ok(last.urlPath.includes("/451a3460/thread"), "the thread write happened");
+  assert.equal(last.attestation, "att-1", "the header is on the thread write");
+  assert.equal(w.presents, 1, "post and reply share the door attestation");
+  _resetDoorForTests();
+});
+
+test("door: a 403-door with a cached attestation re-presents once and retries once", async () => {
+  // the relay honours att-1 for the first write, then revokes it: att-2 needed
+  let honoured = "att-1";
+  const w = doorWorld({
+    relay: (att) => (att && att === honoured ? { status: 200, body: "{}" } : DOOR_403),
+  });
+  assert.equal((await post("#agents", "one", w.req)).ok, true);
+  honoured = "att-2";
+  assert.deepEqual(await post("#agents", "two", w.req), { ok: true, detail: "" });
+  assert.equal(w.presents, 2, "re-presented exactly once");
+  const writes = w.log.filter((e) => e.kind === "write").map((e) => e.attestation);
+  assert.deepEqual(writes, ["", "att-1", "att-1", "att-2"]);
+
+  // and when the retry is STILL 403-door, report it honestly — no third present
+  honoured = "never";
+  const r = await post("#agents", "three", w.req);
+  assert.equal(r.ok, false);
+  assert.match(r.detail, /relay HTTP 403/);
+  assert.match(r.detail, /behind the channel:#agents door/);
+  assert.equal(w.presents, 3, "one re-present per write, never a loop");
+  _resetDoorForTests();
+});
+
+test("door: present 403 yields an actionable 'door refused' detail with the server's reason", async () => {
+  const w = doorWorld({
+    present: () => ({ status: 403, body: '{"detail":"humanity attestation expired"}' }),
+  });
+  const r = await post("#agents", "hi", w.req);
+  assert.deepEqual(r, { ok: false, detail: "door refused: humanity attestation expired" });
+  assert.equal(w.log.filter((e) => e.kind === "write").length, 1, "no retry without an attestation");
+
+  // an admitted:false 2xx is a refusal too
+  const w2 = doorWorld({
+    present: () => ({ status: 200, body: '{"admitted":false,"detail":"evidence rejected"}' }),
+  });
+  assert.deepEqual(await post("#agents", "hi", w2.req), { ok: false, detail: "door refused: evidence rejected" });
+  _resetDoorForTests();
+});
+
+test("door: gateway 404 names the passthrough rung exactly", async () => {
+  const w = doorWorld({ knock: () => ({ status: 404, body: "Not Found" }) });
+  assert.deepEqual(await post("#agents", "hi", w.req),
+    { ok: false, detail: "doors passthrough not live on the gateway (HTTP 404)" });
+  assert.equal(w.presents, 0, "nothing to present against a dead passthrough");
+
+  const w2 = doorWorld({ present: () => ({ status: 404, body: "Not Found" }) });
+  assert.deepEqual(await post("#agents", "hi", w2.req),
+    { ok: false, detail: "doors passthrough not live on the gateway (HTTP 404)" });
+  _resetDoorForTests();
+});
+
+test("door: no humanity attestation on this machine is named, after the knock succeeds", async () => {
+  const w = doorWorld({ humanity: "" });
+  const r = await post("#agents", "hi", w.req);
+  assert.equal(r.ok, false);
+  assert.equal(r.detail,
+    "no humanity attestation on this machine -- take the humanity check once "
+    + "(Identity /auth/me/verify-humanity) and save it to ~/.aither/humanity-attestation");
+  assert.equal(w.presents, 0, "nothing was presented");
+  assert.equal(w.log.filter((e) => e.kind === "knock").length, 1, "the knock came first");
+  _resetDoorForTests();
+});
+
+test("door: a bearer rotation discards the attestation and re-presents", async () => {
+  const w = doorWorld();
+  let token = "bearer-A";
+  _setBearerSourceForTests(() => token);
+  assert.equal((await post("#agents", "one", w.req)).ok, true);
+  assert.equal(w.presents, 1);
+  token = "bearer-B";
+  assert.equal((await post("#agents", "two", w.req)).ok, true);
+  assert.equal(w.presents, 2, "a new bearer is a new identity at the door");
+  assert.equal(w.log.filter((e) => e.kind === "join").length, 2, "…and re-joins the relay");
+  const writes = w.log.filter((e) => e.kind === "write").map((e) => e.attestation);
+  assert.deepEqual(writes, ["", "att-1", "att-2"], "the second write presented BEFORE writing");
+  _resetDoorForTests();
+});
+
+test("door: a lapsed expires_at re-presents before the write", async () => {
+  const w = doorWorld({
+    present: (_b, n) => ({
+      status: 200,
+      body: JSON.stringify({
+        admitted: true,
+        attestation: `att-${n}`,
+        expires_at: n === 1 ? Math.floor(Date.now() / 1000) + 2 : "2099-01-01T00:00:00Z",
+      }),
+    }),
+  });
+  assert.equal((await post("#agents", "one", w.req)).ok, true);
+  assert.equal((await post("#agents", "two", w.req)).ok, true);
+  assert.equal(w.presents, 2, "an attestation inside the skew window is not reused");
+  _resetDoorForTests();
+});
+
+test("door: a plain 403 (no door in the reason) never knocks", async () => {
+  const w = doorWorld({ relay: () => ({ status: 403, body: '{"detail":"agent-only channel"}' }) });
+  const r = await post("#agents", "hi", w.req);
+  assert.equal(r.ok, false);
+  assert.match(r.detail, /agent-only channel/);
+  assert.equal(w.log.filter((e) => e.kind === "knock").length, 0);
+  _resetDoorForTests();
 });

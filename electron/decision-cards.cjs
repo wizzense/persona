@@ -86,6 +86,41 @@ function signature(dir = storeDir()) {
   return `${count}:${newest}:${total}`;
 }
 
+/** One stored card → the shape every desk surface reads, or null when it is not an open card. */
+function cardFromRaw(raw) {
+if (!raw || typeof raw !== "object" || raw.status !== "open") return null;
+if (typeof raw.id !== "string" || raw.id.length === 0) return null;
+  const source = raw.source && typeof raw.source === "object" ? raw.source : {};
+  // The card's OWN answer choices, so a desk surface can offer exactly what
+  // the raiser defined (a waiting notice is ack/later; a product decision may
+  // be three options) instead of hardcoding buttons that do not exist on the
+  // card. `defaultKey` is the raiser's "I recommend this one" hint.
+  const options = Array.isArray(raw.options)
+    ? raw.options
+        .filter((o) => o && typeof o === "object" && typeof o.key === "string")
+        .map((o) => ({
+          key: o.key,
+          label: typeof o.label === "string" ? o.label : o.key,
+          recommended: Boolean(o.recommended),
+        }))
+    : [];
+  return {
+    id: raw.id,
+    title: typeof raw.title === "string" ? raw.title : "Decision needed",
+    summary: typeof raw.summary === "string" ? raw.summary : "",
+    kind: typeof raw.kind === "string" ? raw.kind : "decision",
+    urgency: typeof raw.urgency === "string" ? raw.urgency : "normal",
+    createdAt: Number(raw.created_at) || 0,
+    options,
+    defaultKey: typeof raw.default_key === "string" ? raw.default_key : "",
+    // WHERE the ask came from — a toast with no identity is noise the owner
+    // cannot act on when a dozen sessions are open (owner report 2026-08-25).
+    tab: typeof source.tab_title === "string" ? source.tab_title : "",
+    cwd: typeof source.cwd === "string" ? source.cwd : "",
+    agent: typeof source.agent === "string" ? source.agent : "",
+  };
+}
+
 /** Open cards, oldest first — the one blocking longest is the one to surface. */
 function listOpen(dir = storeDir()) {
   let entries;
@@ -103,37 +138,8 @@ function listOpen(dir = storeDir()) {
     } catch {
       continue; // a half-written card must not take the list down
     }
-    if (!raw || typeof raw !== "object" || raw.status !== "open") continue;
-    if (typeof raw.id !== "string" || raw.id.length === 0) continue;
-    const source = raw.source && typeof raw.source === "object" ? raw.source : {};
-    // The card's OWN answer choices, so a desk surface can offer exactly what
-    // the raiser defined (a waiting notice is ack/later; a product decision may
-    // be three options) instead of hardcoding buttons that do not exist on the
-    // card. `defaultKey` is the raiser's "I recommend this one" hint.
-    const options = Array.isArray(raw.options)
-      ? raw.options
-          .filter((o) => o && typeof o === "object" && typeof o.key === "string")
-          .map((o) => ({
-            key: o.key,
-            label: typeof o.label === "string" ? o.label : o.key,
-            recommended: Boolean(o.recommended),
-          }))
-      : [];
-    cards.push({
-      id: raw.id,
-      title: typeof raw.title === "string" ? raw.title : "Decision needed",
-      summary: typeof raw.summary === "string" ? raw.summary : "",
-      kind: typeof raw.kind === "string" ? raw.kind : "decision",
-      urgency: typeof raw.urgency === "string" ? raw.urgency : "normal",
-      createdAt: Number(raw.created_at) || 0,
-      options,
-      defaultKey: typeof raw.default_key === "string" ? raw.default_key : "",
-      // WHERE the ask came from — a toast with no identity is noise the owner
-      // cannot act on when a dozen sessions are open (owner report 2026-08-25).
-      tab: typeof source.tab_title === "string" ? source.tab_title : "",
-      cwd: typeof source.cwd === "string" ? source.cwd : "",
-      agent: typeof source.agent === "string" ? source.agent : "",
-    });
+    const card = cardFromRaw(raw);
+    if (card) cards.push(card);
   }
   cards.sort((a, b) => a.createdAt - b.createdAt);
   return cards;
@@ -325,30 +331,97 @@ function steerCard(id, text, spawnFn = spawn) {
 }
 
 /**
+ * The store, read WITHOUT blocking the event loop.
+ *
+ * Answered cards are never removed from the directory: measured 2026-09-18 it
+ * held 2,788 files, the 15 s watcher `statSync`ed every one (903 ms of blocked
+ * main process per 25 s, scripts/main-profile.cjs) and every change -- and every
+ * /decisions request -- `readFileSync`ed and parsed all of them (1.4-3.6 s
+ * blocks on /health.stage.mainLag; the perf gate's first MCP call was reset).
+ *
+ * `scanAsync` stats in bounded batches and re-reads ONLY files whose
+ * (mtimeNs, size) moved; `cache` carries the parsed result between scans.
+ * Returns the same signature token as `signature()` plus the open cards.
+ */
+async function scanAsync(dir = storeDir(), cache = new Map(), fsp = fs.promises, batch = 64) {
+  let entries;
+  try {
+    entries = await fsp.readdir(dir);
+  } catch {
+    return { signature: "unreadable", cards: [] };
+  }
+  const names = entries.filter(isCardFile);
+  let count = 0;
+  let newest = 0n;
+  let total = 0;
+  const seen = new Set();
+  for (let i = 0; i < names.length; i += batch) {
+    await Promise.all(
+      names.slice(i, i + batch).map(async (name) => {
+        let info;
+        try {
+          info = await fsp.stat(path.join(dir, name), { bigint: true });
+        } catch {
+          return;
+        }
+        count += 1;
+        total += Number(info.size);
+        if (info.mtimeNs > newest) newest = info.mtimeNs;
+        seen.add(name);
+        const stamp = `${info.mtimeNs}:${info.size}`;
+        const hit = cache.get(name);
+        if (hit && hit.stamp === stamp) return;
+        let card = null;
+        try {
+          card = cardFromRaw(JSON.parse(await fsp.readFile(path.join(dir, name), "utf8")));
+        } catch {
+          return; // half-written: leave it uncached so the next scan retries
+        }
+        cache.set(name, { stamp, card });
+      }),
+    );
+  }
+  for (const name of [...cache.keys()]) if (!seen.has(name)) cache.delete(name);
+  const cards = [...cache.values()].map((v) => v.card).filter(Boolean);
+  cards.sort((a, b) => a.createdAt - b.createdAt);
+  return { signature: `${count}:${newest}:${total}`, cards };
+}
+
+// What the watcher last saw -- the answer for synchronous readers (the bridge's
+// /decisions, the deck state) that must not walk the store themselves.
+let lastOpenCards = null;
+function lastOpen(dir = storeDir()) {
+  return lastOpenCards ?? listOpen(dir);
+}
+
+/**
  * Poll the store; call onChange(cards) whenever the signature moves (and once at
  * start). Injectable timers/dir for tests. Returns a stop function.
  */
-function watch({ intervalMs = 15000, onChange, dir = storeDir(), setIntervalFn = setInterval, clearIntervalFn = clearInterval } = {}) {
+function watch({ intervalMs = 15000, onChange, dir = storeDir(), setIntervalFn = setInterval, clearIntervalFn = clearInterval, scanFn = scanAsync } = {}) {
   if (typeof onChange !== "function") throw new TypeError("watch requires onChange");
   let lastSig = null;
-  const poll = () => {
-    const sig = signature(dir);
-    if (sig === lastSig) return;
-    lastSig = sig;
-    let cards;
+  let running = false;
+  const cache = new Map();
+  const poll = async () => {
+    if (running) return; // a slow disk must not stack scans
+    running = true;
     try {
-      cards = listOpen(dir);
-    } catch {
-      cards = [];
-    }
-    try {
-      onChange(cards);
-    } catch {
-      /* a bad consumer must not kill the watcher */
+      const { signature: sig, cards } = await scanFn(dir, cache);
+      if (dir === storeDir()) lastOpenCards = cards;
+      if (sig === lastSig) return;
+      lastSig = sig;
+      try {
+        onChange(cards);
+      } catch {
+        /* a bad consumer must not kill the watcher */
+      }
+    } finally {
+      running = false;
     }
   };
-  poll();
-  const handle = setIntervalFn(poll, intervalMs);
+  void poll();
+  const handle = setIntervalFn(() => poll(), intervalMs);
   return () => clearIntervalFn(handle);
 }
 
@@ -356,6 +429,9 @@ module.exports = {
   storeDir,
   signature,
   listOpen,
+  lastOpen,
+  scanAsync,
+  cardFromRaw,
   triageCard,
   actionableCount,
   setWindowRouter,

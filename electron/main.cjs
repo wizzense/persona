@@ -14,6 +14,58 @@ const {
   shell,
   Tray,
 } = require("electron");
+
+// A transparent always-on-top overlay must never be treated as "in the
+// background". Measured 2026-09-18 over CDP with an IDLE renderer (0.7 s of work
+// per 6 s): frame gaps of almost exactly 1000 ms, several per 10 s -- Chromium's
+// 1 fps requestAnimationFrame throttle, applied whenever Windows' native
+// occlusion tracker judged the overlay covered (it sits under/over other
+// windows all day) or the renderer "backgrounded". On screen that is the avatar
+// freezing for a second at a time. The window-level half is
+// `backgroundThrottling: false` on the avatar BrowserWindow below.
+app.commandLine.appendSwitch("disable-features", "CalculateNativeWinOcclusion");
+// How frames reach the screen (software present + the integrated adapter on
+// Windows): the measurement and the knobs live in present-policy.cjs.
+const presentState = require("./present-policy.cjs").applyPresentPolicy(app, {
+  execFile: require("node:child_process").execFile,
+});
+app.commandLine.appendSwitch("disable-renderer-backgrounding");
+app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");
+
+// Main-process event-loop lag, measured not guessed: a 50 ms ticker records how
+// late each tick fires. A block here (sync fs, execFileSync, a big JSON.parse)
+// stalls IPC and frame delivery for every window. Reported on /health as
+// `mainLag` {maxMs, over100, windowS}; the window resets every 10 s.
+const mainLag = { maxMs: 0, over100: 0, windowS: 10, worst: [] };
+{
+  let expected = Date.now() + 50;
+  let windowStart = Date.now();
+  let cur = { maxMs: 0, over100: 0 };
+  setInterval(() => {
+    const now = Date.now();
+    const late = now - expected;
+    expected = now + 50;
+    if (late > cur.maxMs) cur.maxMs = late;
+    if (late > 100) {
+      cur.over100 += 1;
+      mainLag.worst.push({ at: new Date(now).toISOString().slice(11, 19), ms: late });
+      if (mainLag.worst.length > 8) mainLag.worst.shift();
+    }
+    if (now - windowStart >= mainLag.windowS * 1000) {
+      mainLag.maxMs = cur.maxMs;
+      mainLag.over100 = cur.over100;
+      cur = { maxMs: 0, over100: 0 };
+      windowStart = now;
+    }
+  }, 50).unref();
+}
+
+// Opt-in diagnostics door: DESK_CDP_PORT=9223 exposes the renderer over CDP so
+// scripts/perf-gate.cjs (and cdp-probe / cdp-profile) can measure the running
+// app from outside. Must be set before the app is ready; off by default.
+if (/^\d{2,5}$/.test(String(process.env.DESK_CDP_PORT || ""))) {
+  app.commandLine.appendSwitch("remote-debugging-port", String(process.env.DESK_CDP_PORT));
+}
 const decisionCards = require("./decision-cards.cjs");
 const {
   fetchHistory: fetchRelayHistory,
@@ -58,6 +110,7 @@ const {
 } = require("./command-window.cjs");
 const { showConsole, focusPane, closeConsole, setInboxBadge } = require("./console-window.cjs");
 const { badgeBitmap, badgeTooltip, drawBadge } = require("./badge.cjs");
+const { voiceTrayItems } = require("./voice-tray-line.cjs");
 const {
   ensureSessionsIpc,
   createSessionsWindow,
@@ -81,7 +134,8 @@ const {
   enrollNewestDownload,
   getActiveCharacter,
   installCharacter,
-  installCharacterToSlot,
+  planSlotInstall,
+  queueInstall,
   listCharacters,
 } = require("./character-roster.cjs");
 const { invalidateGate, isHidden } = require("./content-rating.cjs");
@@ -333,6 +387,11 @@ function showOverlay({ focus = false } = {}) {
     window.showInactive();
   }
   scheduleHyprlandWindowConfiguration();
+  // The tray's "Hide avatar / Show avatar" line reads the window state when the
+  // menu is BUILT, so a toggle left it saying the wrong thing until something
+  // else rebuilt the menu (owner, 2026-09-18: "the hide avatar button doesn't
+  // change to unhide"). Rebuild on every show/hide.
+  if (tray) refreshTrayMenu();
 }
 
 async function hideOverlay() {
@@ -342,6 +401,7 @@ async function hideOverlay() {
     hyprlandLastPosition = { x: placement.x, y: placement.y };
   }
   avatarWindow?.hide();
+  if (tray) refreshTrayMenu();
 }
 
 function toggleOverlay() {
@@ -382,6 +442,8 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      // Never throttle the overlay's animation loop (see the switches at the top).
+      backgroundThrottling: false,
     },
   });
 
@@ -569,9 +631,64 @@ function handleBridgeEvent(event) {
   emitToRenderer(event);
 }
 
+/** The avatar says `text` through AitherVoice, lip-synced by the renderer.
+ *  ONE path for every caller -- the drop lane, POST /speak, the MCP `speak`
+ *  tool -- so the orchestrator, a routine, awvoice and a Claude Code session
+ *  all sound the same. Owner, 2026-09-18: "we have AitherVoice + awvoice +
+ *  aither-orchestrator -- integrate this." Fail-soft: {ok:false, reason}. */
+async function speakAloud(text, voice = "nova", speed = undefined, slotId = "slot0") {
+  const tts = await synthesizeVerdict(text, voice || "nova", { speed, maxChars: 2000 });
+  if (!tts.ok) return { ok: false, reason: tts.reason || "voice service unavailable" };
+  let delivered = 0;
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) {
+      // `slotId` picks WHOSE mouth moves: slot0 is the resident avatar; a
+      // room-stage slot is one of the agents on stage.
+      win.webContents.send("desk:event", { type: "speak", audioBase64: tts.audioBase64, slotId: slotId || "slot0" });
+      delivered += 1;
+    }
+  }
+  if (delivered === 0) return { ok: false, reason: "no avatar window to speak from" };
+  return { ok: true, chars: text.length, windows: delivered, durationMs: tts.durationMs || 0, slotId: slotId || "slot0" };
+}
+
+/** The company room on stage: one avatar per agent, spoken in turn. Started
+ *  beside the room publisher; DESK_ROOM_STAGE=0 leaves the room text-only. */
+let roomStage = null;
+function startRoomStage() {
+  if (roomStage || !roomPublisher) return;
+  if (String(process.env.DESK_ROOM_STAGE || "1").trim() === "0") return;
+  const { RoomStage } = require("./room-stage.cjs");
+  const { filterCharacters } = require("./content-rating.cjs");
+  roomStage = new RoomStage(
+    {
+      recentChat: (opts) => roomPublisher.recentChat(opts),
+      spawn: (slotId, character, agent) => spawnAvatarSlot(slotId, character, agent),
+      remove: (slotId) => removeAvatarSlot(slotId),
+      speak: (text, voice, slotId) => speakAloud(text, voice, undefined, slotId),
+      // SAFE roster only: the content-rating gate decides what may have a body.
+      roster: () => filterCharacters(listCharacters()),
+      assignedAvatar: (agent) => getAgentAvatar(agent),
+      residentCharacter: () => {
+        try { return getActiveCharacter(); } catch { return null; }
+      },
+    },
+    {
+      idleMs: Math.max(60, Number(process.env.DESK_ROOM_IDLE_S) || 600) * 1000,
+      maxBodies: Math.max(0, Number(process.env.DESK_ROOM_MAX_BODIES) || 3),
+      log: (...args) => debugLog(...args),
+    },
+  );
+  roomStage.start();
+}
+
+
 function handleListenerStatus(status) {
+  const availabilityChanged = latestListenerStatus?.available !== status?.available;
   latestListenerStatus = status;
   emitToRenderer({ type: "listener-status", status });
+  // The tray carries a "Voice: listener missing" line; keep it honest.
+  if (availabilityChanged && tray) refreshTrayMenu();
 }
 
 async function handleMcpWindowAction(action) {
@@ -787,20 +904,30 @@ function spawnAvatarSlot(slotId, name, agent) {
   // Refuse slot IDs reserved for the default avatar
   if (slotId === "slot0" || slotId === "default" || slotId === "") return false;
 
-  const modelUrl = installCharacterToSlot(name, slotId);
-  if (!modelUrl) return false;
+  // The refusal is synchronous (hidden / no such model); the BYTES move off the
+  // event loop, and the renderer hears about the body only once its file exists.
+  const plan = planSlotInstall(name, slotId);
+  if (!plan) return false;
+  const modelUrl = plan.url;
 
   avatarSlots.set(slotId, { name, modelUrl, agent: agent || null });
   debugLog("avatar slot spawned", slotId, name, agent ? `(agent: ${agent})` : "");
   showOverlay();
-  if (avatarWindow && !avatarWindow.isDestroyed()) {
-    avatarWindow.webContents.send("desk:event", {
-      type: "spawn-avatar",
-      slotId,
-      modelUrl,
-    });
-  }
   sendDeckState();
+  queueInstall(plan.copies).then(
+    () => {
+      // Removed (or re-spawned as someone else) while the copy ran: say nothing.
+      if (avatarSlots.get(slotId)?.modelUrl !== modelUrl || avatarSlots.get(slotId)?.name !== name) return;
+      if (avatarWindow && !avatarWindow.isDestroyed()) {
+        avatarWindow.webContents.send("desk:event", { type: "spawn-avatar", slotId, modelUrl });
+      }
+    },
+    (error) => {
+      debugLog("avatar slot install failed", slotId, name, error?.message || error);
+      if (avatarSlots.get(slotId)?.name === name) avatarSlots.delete(slotId);
+      sendDeckState();
+    },
+  );
   return true;
 }
 
@@ -1183,6 +1310,8 @@ function refreshTrayMenu() {
       { type: "separator" },
       { label: avatarShown ? "Hide avatar" : "Show avatar", click: () => toggleOverlay() },
       { label: "Characters", submenu: buildCharacterMenu() },
+      // A dead voice listener is otherwise INVISIBLE (see voice-tray-line.cjs).
+      ...voiceTrayItems(latestListenerStatus, app.isPackaged),
       { type: "separator" },
       {
         label: "About Desk",
@@ -1267,6 +1396,7 @@ function deckState() {
     // session's tool calls — the half of the company room that outlives the fleet.
     room: roomFeed,
     roomStatus: roomPublisher ? (roomPublisher.lastError || "ok") : "not started",
+    roomStage: roomStage ? roomStage.status() : null,
     relayPoller: relayPoller ? relayPoller.status() : null,
   };
 }
@@ -1634,6 +1764,9 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
   });
 
   app.whenReady().then(async () => {
+    // Ahead of batch work on a saturated host (process-priority.cjs). The first
+    // sweep runs once the GPU process and the windows exist; the timer catches later ones.
+    setTimeout(() => require("./process-priority.cjs").keepDeskResponsive(app), 5000);
     if (smokeIsRequested) {
       runSmokeTest();
       return;
@@ -1772,9 +1905,14 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
         let wav = tmp;
         if (isWebm) {
           wav = path.join(os.tmpdir(), `desk-ptt-${Date.now()}.wav`);
-          const { execFileSync } = require("child_process");
-          execFileSync("ffmpeg", ["-y", "-i", tmp, "-ar", "16000", "-ac", "1", wav],
-            { stdio: "ignore", timeout: 30000 });
+          // Off the event loop: execFileSync here held the main process -- IPC,
+          // every window's input, the room stage -- for the whole conversion
+          // (up to its 30 s timeout) on every push-to-talk.
+          const { execFile } = require("child_process");
+          await new Promise((resolve, reject) => {
+            execFile("ffmpeg", ["-y", "-i", tmp, "-ar", "16000", "-ac", "1", wav],
+              { windowsHide: true, timeout: 30000 }, (error) => (error ? reject(error) : resolve()));
+          });
           fs.unlink(tmp, () => {});
         }
         // THE BRIDGE (drop-router doctrine, measured 2026-08-29): a HOST
@@ -1810,14 +1948,7 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
       const speakText = verdict.kind === "doc" ? verdict.summary : String(verdict.summary).slice(0, 220);
       // The avatar SPEAKS the verdict (fail-soft: a dead voice service must
       // never fail the drop itself).
-      void synthesizeVerdict(speakText).then((tts) => {
-        if (!tts.ok) return;
-        for (const win of BrowserWindow.getAllWindows()) {
-          if (!win.isDestroyed()) {
-            win.webContents.send("desk:event", { type: "speak", audioBase64: tts.audioBase64 });
-          }
-        }
-      });
+      void speakAloud(speakText);
       // GAP-4 agent pass: post the notice to the cockpit channel; the deck's
       // own relay feed picks it up via refreshRelayFeed. Fire-and-forget —
       // a refused post must not fail the drop.
@@ -2063,6 +2194,7 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
       onRemoveAvatar: (slotId) => removeAvatarSlot(slotId),
       onFleet: (action, opts) => fleetAction(action, opts),
       onCommand: (text, opts) => commandAction(text, opts),
+      onSpeak: ({ text, voice, speed }) => speakAloud(text, voice, speed),
       onDesktop: (surface) => {
         if (surface === "overlay") showLivingDesktop();
         else if (surface === "app") showDesktopApp();
@@ -2076,9 +2208,20 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
       // The Aitheros Online overlay renders the STATIC site, whose
       // /api/decisions is a build stub — this loopback read is how its bell
       // sees the queue at all. Read-only; answering stays in the queue window.
-      decisionsProvider: () => decisionCards.listOpen(),
-      fleetHandler: (verb) => fleetAction(verb === "open" ? "open_panel" : verb, { fresh: false }),
+      decisionsProvider: () => decisionCards.lastOpen(),
+      fleetHandler: (verb, { fresh = false } = {}) => fleetAction(verb === "open" ? "open_panel" : verb, { fresh }),
       // awsh /desktop, adk desk desktop, awconnect's popup and `desk://` all land here.
+      speakHandler: ({ text, voice, speed, slot }) => speakAloud(text, voice, speed, slot),
+      consoleHandler: (pane) => {
+        if (pane === "inbox" || pane === "cards") return { ok: openInbox() !== false, pane: "inbox" };
+        openConsole();
+        return { ok: focusPane(pane) !== false, pane };
+      },
+      stageStatusProvider: () => ({ ...(roomStage ? roomStage.status() : { room: false }), mainLag, present: { mode: presentState.present, gpu: presentState.gpu } }),
+      avatarBoundsProvider: () =>
+        avatarWindow && !avatarWindow.isDestroyed() && avatarWindow.isVisible()
+          ? avatarWindow.getBounds()
+          : null,
       desktopHandler: (mode) => {
         if (mode === "overlay") showLivingDesktop();
         else if (mode === "app") showDesktopApp();
@@ -2139,6 +2282,7 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
     //    through the same agent and is acked in-thread on the relay.
     const commandAgent = getCommandAgent(getFleetControl());
     roomPublisher = new RoomPublisher();
+    startRoomStage();
     roomPublisher.attach(commandAgent, {
       actorFor: (p) => (/^relay:/.test(String(p.source || ""))
         ? { kind: "human", id: RELAY_NICK, name: RELAY_NICK }

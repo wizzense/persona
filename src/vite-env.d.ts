@@ -48,7 +48,7 @@ type AvatarBridgeEvent =
   | { type: 'reset-avatar-layout'; slotId: string }
   // Drop-to-avatar (2026-08-29): main TTS'd the drop verdict and hands the
   // audio over for playback + lip sync in the avatar window.
-  | { type: 'speak'; audioBase64: string };
+  | { type: 'speak'; audioBase64: string; slotId?: string };
 
 /** The verdict of a dropped file (preload -> main -> drop-router). */
 interface DropVerdict {

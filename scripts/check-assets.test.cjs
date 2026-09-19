@@ -1,6 +1,7 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const { execFileSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -66,7 +67,22 @@ test("a user's own model and slot copies are dev media, never an error", (contex
 });
 
 test("release passes on the clean real tree", () => {
-  assert.deepEqual(validateAssets({ release: true }), []);
+  // "Clean" means the TRACKED tree — what a fresh checkout (and CI) holds — not
+  // this developer's working copy. The dev tree legitimately carries per-user
+  // runtime media (installCharacter*, vroid-sync write .vrm/.vrma into
+  // public/assets and .gitignore keeps them out of git), and asserting it is
+  // empty made `npm test` red on every dev box while saying nothing about a
+  // release (measured 2026-09-18). The property that matters is that no
+  // character media is COMMITTED; `npm run assets:release` still refuses to
+  // package a working tree that holds any.
+  const tracked = execFileSync("git", ["ls-files", "public/assets"], {
+    cwd: path.join(__dirname, ".."),
+    encoding: "utf8",
+  })
+    .split(/\r?\n/)
+    .filter((file) => /\.(?:vrm|vrma)$/i.test(file));
+  assert.deepEqual(tracked, [], "character media is committed to the repo");
+  assert.deepEqual(validateAssets(), []);
 });
 
 test("release REFUSES to package a tree containing a character model", (context) => {

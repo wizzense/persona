@@ -3,6 +3,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 export interface AvatarTransform {
   position: [number, number, number];
   scale: number;
+  /** Yaw in radians (turn about the vertical axis). Absent = 0. Per AVATAR, so
+   *  turning one body no longer means orbiting the camera around the whole stage
+   *  (owner, 2026-09-18: "rotating rotates the entire stage, it's awkward"). */
+  yaw?: number;
 }
 
 const STORAGE_KEY = 'desk.avatar-layout.v1';
@@ -36,7 +40,9 @@ export function sane(entry: unknown): entry is AvatarTransform {
   if (!Array.isArray(t.position) || t.position.length !== 3) return false;
   if (!t.position.every((v) => Number.isFinite(v) && Math.abs(v as number) <= POSITION_BOUND))
     return false;
-  return typeof t.scale === 'number' && t.scale >= SCALE_MIN && t.scale <= SCALE_MAX;
+  if (typeof t.scale !== 'number' || t.scale < SCALE_MIN || t.scale > SCALE_MAX) return false;
+  const yaw = (entry as { yaw?: unknown }).yaw;
+  return yaw === undefined || (typeof yaw === 'number' && Number.isFinite(yaw));
 }
 
 export function sanitizeLayout(parsed: unknown): Record<string, AvatarTransform> {
@@ -100,6 +106,7 @@ export function useAvatarLayout(defaultFor: (slotId: string) => AvatarTransform)
       [slotId]: {
         position,
         scale: current[slotId]?.scale ?? defaultForRef.current(slotId).scale,
+        yaw: current[slotId]?.yaw ?? defaultForRef.current(slotId).yaw ?? 0,
       },
     }));
   }, []);
@@ -110,6 +117,19 @@ export function useAvatarLayout(defaultFor: (slotId: string) => AvatarTransform)
       [slotId]: {
         position: current[slotId]?.position ?? defaultForRef.current(slotId).position,
         scale,
+        yaw: current[slotId]?.yaw ?? defaultForRef.current(slotId).yaw ?? 0,
+      },
+    }));
+  }, []);
+
+  /** Turn one avatar about its own vertical axis (ROT mode dragged ON a body). */
+  const setYaw = useCallback((slotId: string, yaw: number) => {
+    setLayout((current) => ({
+      ...current,
+      [slotId]: {
+        position: current[slotId]?.position ?? defaultForRef.current(slotId).position,
+        scale: current[slotId]?.scale ?? defaultForRef.current(slotId).scale,
+        yaw,
       },
     }));
   }, []);
@@ -125,5 +145,5 @@ export function useAvatarLayout(defaultFor: (slotId: string) => AvatarTransform)
     });
   }, []);
 
-  return { getTransform, setPosition, setScale, clearSlot };
+  return { layout, getTransform, setPosition, setScale, setYaw, clearSlot };
 }

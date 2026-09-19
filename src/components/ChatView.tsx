@@ -1,5 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { EMPTY_DECK_STATE, formatAge, type DeckState, type RelayRow, type RoomRow } from '../deck/deck-types';
+import {
+  chatPickerGroups,
+  chatTargetFromValue,
+  chatTargetValue,
+  directEmptyText,
+  loadChatTarget,
+  saveChatTarget,
+  type ChatSource,
+  type TargetStorage,
+} from '../deck/chat-target';
 
 /**
  * The CHAT window — `?chat=1`, opened by the chat bead. Not the deck, not a
@@ -22,8 +32,6 @@ import { EMPTY_DECK_STATE, formatAge, type DeckState, type RelayRow, type RoomRo
  * replies go back through the same bridge actions the deck uses, so this
  * window is a VIEW, never a second chat implementation.
  */
-
-type ChatSource = 'relay' | 'room';
 
 interface BridgeDeck {
   getState(): Promise<DeckState>;
@@ -50,6 +58,16 @@ function bridgeDeck(): BridgeDeck | null {
   return bridge?.deck ?? null;
 }
 
+/** localStorage, or null where the page cannot reach it (a blocked file://
+ *  frame throws on the ACCESSOR, not just on the call). */
+function targetStorage(): TargetStorage | null {
+  try {
+    return window.localStorage ?? null;
+  } catch {
+    return null;
+  }
+}
+
 function bridgeSubscribe(listener: (event: Record<string, unknown>) => void): () => void {
   const bridge = window.deskBridge as unknown as {
     subscribe?: (l: (event: Record<string, unknown>) => void) => () => void;
@@ -64,13 +82,20 @@ function bridgeSubscribe(listener: (event: Record<string, unknown>) => void): ()
 
 export function ChatView() {
   const [state, setState] = useState<DeckState>(EMPTY_DECK_STATE);
-  const [thread, setThread] = useState<{ anchorId: string; rows: RelayRow[] } | null>(null);
+  // The pane comes up where the owner LEFT it (2026-09-18: "switching to
+  // aither direct is clunky" -- every open landed on #agents and the direct
+  // target had to be picked again). The remembered target is restored before
+  // the first render; the thread anchor is resolved once the feed arrives.
+  const [remembered] = useState(() => loadChatTarget(targetStorage()));
+  const [thread, setThread] = useState<{ anchorId: string; rows: RelayRow[] } | null>(() =>
+    remembered.source === 'relay' && remembered.agent ? { anchorId: '', rows: [] } : null,
+  );
   // Who the composer is addressing: null = the room, "agent" = a direct thread.
   // When the agent has no feed message yet, posts go out as @agent mentions.
-  const [chatTarget, setChatTarget] = useState<string | null>(null);
+  const [chatTarget, setChatTarget] = useState<string | null>(remembered.agent);
   // relay = #agents (needs the fleet); room = the local awdk-daemon room,
   // where typing RUNS the sentence through the desk's CommandAgent.
-  const [source, setSource] = useState<ChatSource>('relay');
+  const [source, setSource] = useState<ChatSource>(remembered.source);
   const [running, setRunning] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
@@ -105,12 +130,28 @@ export function ChatView() {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
   }, [state.relay, state.room, thread, source]);
 
-  const openThread = (row: RelayRow) => {
+  // Remember the target on every change, so the next open is one motion.
+  useEffect(() => {
+    saveChatTarget(targetStorage(), { source, agent: chatTarget });
+  }, [source, chatTarget]);
+
+  const openThread = useCallback((row: RelayRow) => {
     void bridgeDeck()
       ?.relayThread(row.id ?? '')
       .then((rows) => setThread({ anchorId: row.id ?? '', rows }))
       .catch(() => {});
-  };
+  }, []);
+
+  // A direct target with no anchor yet (restored before the feed arrived, or
+  // the agent had not spoken) attaches to the agent's latest message as soon
+  // as one exists -- without this the restored pane sits on an empty thread
+  // while the conversation is one row down in the feed.
+  const anchorMissing = Boolean(thread && !thread.anchorId);
+  useEffect(() => {
+    if (source !== 'relay' || !chatTarget || !anchorMissing) return;
+    const latest = [...state.relay].reverse().find((row) => row.author === chatTarget && row.id);
+    if (latest) openThread(latest);
+  }, [source, chatTarget, anchorMissing, state.relay, openThread]);
 
   /** Pick a conversation: the room, or the direct thread under the chosen
    *  agent's most recent room message (no per-agent channels exist — the
@@ -225,6 +266,12 @@ export function ChatView() {
       : chatTarget
         ? `${chatTarget} — direct`
         : `${state.relayChannel} — the company room`;
+  const pickerGroups = chatPickerGroups({
+    relayChannel: state.relayChannel,
+    agents: state.agents,
+    slots: state.slots,
+    current: source === 'relay' ? chatTarget : null,
+  });
 
   return (
     <main className="chat-view">
@@ -232,24 +279,26 @@ export function ChatView() {
         <span className="chat-head-title" title={title}>{title}</span>
         <select
           className="chat-target"
-          value={source === 'room' ? ' room' : chatTarget ?? ''}
+          value={chatTargetValue({ source, agent: chatTarget })}
           onChange={(event) => {
-            const value = event.target.value;
-            if (value === ' room') {
+            const next = chatTargetFromValue(event.target.value);
+            if (next.source === 'room') {
               setSource('room');
               setThread(null);
               setChatTarget(null);
               return;
             }
             setSource('relay');
-            pickTarget(value || null);
+            pickTarget(next.agent);
           }}
-          title="Where you are talking: the relay channel (needs the fleet) or the local room (runs the sentence here)"
+          title="Where you are talking: the company room (needs the fleet), the local room (runs the sentence here), or one agent directly"
         >
-          <option value="">{state.relayChannel} (relay)</option>
-          <option value={' room'}>room — local, runs it (fleet up or down)</option>
-          {state.agents.map((agent) => (
-            <option key={agent} value={agent}>{agent}</option>
+          {pickerGroups.map((group) => (
+            <optgroup key={group.label} label={group.label}>
+              {group.options.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </optgroup>
           ))}
         </select>
         <button
@@ -267,7 +316,9 @@ export function ChatView() {
         {rows.length === 0 ? (
           <p className="chat-empty">
             {thread
-              ? 'No replies in this thread yet.'
+              ? (chatTarget
+                ? directEmptyText(chatTarget, state.relayChannel, Boolean(thread.anchorId))
+                : 'No replies in this thread yet.')
               : source === 'room'
                 ? (state.roomStatus === 'ok' ? 'Nothing said in the room yet — tell the desk what to do.' : `Room unavailable: ${state.roomStatus} (start the awdk daemon: aither harness serve).`)
                 : 'The room is quiet — say something.'}
@@ -302,7 +353,15 @@ export function ChatView() {
         )}
         <input
           className="chat-input"
-          placeholder={thread ? 'Reply in thread…' : source === 'room' ? 'Tell the desk what to do — it runs here…' : `Post to ${state.relayChannel}…`}
+          placeholder={
+            thread && thread.anchorId
+              ? `Reply to ${chatTarget ?? 'the thread'}…`
+              : chatTarget
+                ? `Message ${chatTarget} (posts to ${state.relayChannel} as @${chatTarget})…`
+                : source === 'room'
+                  ? 'Tell the desk what to do — it runs here…'
+                  : `Post to ${state.relayChannel}…`
+          }
           value={draft}
           onChange={(event) => {
             setDraft(event.target.value);

@@ -365,11 +365,26 @@ async function routeDrop({ filePath, mime = "" }, deps = {}) {
  * the gateway synthesize_speech tool is a known gap). Fail-soft:
  * {ok:false, reason} when the voice service is unreachable.
  */
-async function synthesizeVerdict(text, voice = "nova") {
-  const short = String(text || "").slice(0, 220);
+// Playback rate for everything the avatar says. The fleet voices read slow
+// (owner, 2026-09-18: "the speech rate is too slow"); awsh already defaults to
+// 1.25x for the same reason. DESK_VOICE_SPEED overrides per host; the
+// service accepts 0.25-4.0.
+const SPEED_MIN = 0.25;
+const SPEED_MAX = 4.0;
+const SPEED_DEFAULT = 1.35;
+function voiceSpeed(requested, env = process.env) {
+  const raw = Number.isFinite(Number(requested)) && requested !== "" && requested != null
+    ? Number(requested)
+    : Number(env.DESK_VOICE_SPEED);
+  const speed = Number.isFinite(raw) && raw > 0 ? raw : SPEED_DEFAULT;
+  return Math.max(SPEED_MIN, Math.min(SPEED_MAX, speed));
+}
+
+async function synthesizeVerdict(text, voice = "nova", { speed, maxChars = 220 } = {}) {
+  const short = String(text || "").slice(0, maxChars);
   if (!short) return { ok: false, reason: "nothing to say" };
   return await new Promise((resolve) => {
-    const body = JSON.stringify({ text: short, voice, return_base64: true });
+    const body = JSON.stringify({ text: short, voice, speed: voiceSpeed(speed), return_base64: true });
     const req = http.request(
       {
         host: "127.0.0.1",
@@ -387,7 +402,18 @@ async function synthesizeVerdict(text, voice = "nova") {
           try {
             const parsed = JSON.parse(text);
             const audio = parsed.audio_base64 || parsed.audioBase64 || parsed.base64;
-            if (parsed.success && audio) return resolve({ ok: true, audioBase64: audio });
+            if (parsed.success && audio) {
+              const seconds = Number(parsed.duration_seconds);
+              return resolve({
+                ok: true,
+                audioBase64: audio,
+                // The service says how long it is; else estimate from a 24 kHz
+                // 16-bit mono WAV so a caller can wait for the mouth to close.
+                durationMs: Number.isFinite(seconds) && seconds > 0
+                  ? Math.round(seconds * 1000)
+                  : Math.round((audio.length * 0.75) / (24000 * 2) * 1000),
+              });
+            }
             resolve({ ok: false, reason: String(parsed.error || parsed.detail || "synthesis failed").slice(0, 200) });
           } catch {
             resolve({ ok: false, reason: `synthesis answered non-JSON (${text.slice(0, 60)})` });
@@ -405,6 +431,8 @@ async function synthesizeVerdict(text, voice = "nova") {
 module.exports = {
   routeDrop,
   synthesizeVerdict,
+  voiceSpeed,
+  SPEED_DEFAULT,
   stagePath,
   cleanupStage,
   kindOf,

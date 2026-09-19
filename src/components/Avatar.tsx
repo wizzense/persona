@@ -1,4 +1,4 @@
-import {
+import { useRef,
   Component,
   Suspense,
   useEffect,
@@ -9,6 +9,7 @@ import { useFrame } from '@react-three/fiber';
 import type * as THREE from 'three';
 import type { VRM } from '@pixiv/three-vrm';
 import { useVrmLoader } from '../hooks/useVrmLoader';
+import { getLevel } from '../hooks/voiceLevels';
 import { useVrmAnimation } from '../hooks/useVrmAnimation';
 import { useAmplitudeLipSync } from '../hooks/useAmplitudeLipSync';
 import { useBlink } from '../hooks/useBlink';
@@ -25,6 +26,8 @@ export interface AvatarProps {
    *  the spring manager (applySpringScale) and must not reach it by mutation. */
   onReady?: (scene: THREE.Object3D, vrm?: VRM) => void;
   modelUrl?: string;
+  /** Which body this is; its mouth level is read from voiceLevels by this id. */
+  slotId?: string;
 }
 
 function AvatarModel({
@@ -36,15 +39,21 @@ function AvatarModel({
   speaking,
   onReady,
   modelUrl,
+  slotId,
 }: AvatarProps) {
   const vrm = useVrmLoader(modelUrl ?? './assets/model.vrm');
   const { play, update: updateAnimation } = useVrmAnimation(vrm);
   const updateLipSync = useAmplitudeLipSync(vrm);
   const updateBlink = useBlink(vrm);
 
+  // The completion callback rides a ref: for a stage body the parent hands a
+  // fresh `() => {}` on every render, and as an effect dependency that re-fired
+  // play() -- and rebuilt the clip -- on EVERY render of the scene.
+  const onCompleteRef = useRef(onAnimationComplete);
+  onCompleteRef.current = onAnimationComplete;
   useEffect(() => {
-    void play(animation, { onComplete: onAnimationComplete, playback });
-  }, [animation, animationRequest, onAnimationComplete, play, playback]);
+    void play(animation, { onComplete: () => onCompleteRef.current(), playback });
+  }, [animation, animationRequest, play, playback]);
 
   useLayoutEffect(() => {
     if (vrm) onReady?.(vrm.scene, vrm);
@@ -61,9 +70,14 @@ function AvatarModel({
     // as broken physics, not as a stall. 1/30 s is the largest step that still
     // integrates stably; anything longer is a stall, not elapsed time.
     const step = Math.min(delta, 1 / 30);
+    // The level is a per-frame signal read from the store (voiceLevels.ts), not a
+    // prop: as React state it re-rendered the whole scene every frame. The RATE
+    // is the frame governor's job (Scene.tsx: 30 Hz idle, 60 Hz while anyone
+    // speaks or is being handled), so there is no per-body frame skipping here.
+    const level = Math.max(audioLevel, getLevel(slotId ?? 'slot0'));
     updateAnimation(step);
     updateBlink(step);
-    updateLipSync(step, audioLevel, speaking);
+    updateLipSync(step, level, speaking || level > 0.02);
     vrm.update(step);
   });
 

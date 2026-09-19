@@ -16,18 +16,55 @@
  * relay rather than whatever env happens to leak into the process. A missing
  * bearer or a down relay yields [] / false — the desk renders "relay
  * unavailable", never a half-truth.
+ *
+ * DOORS (2026-09-18). The relay's write path for #agents sits behind the
+ * `channel:#agents` door: a plain POST answers 403 "#agents is behind the
+ * channel:#agents door. Knock at /doors/knock, present your evidence at
+ * /doors/present, then send with X-Door-Attestation". Reads (history,
+ * thread) are NOT door-gated. This module is a CLIENT of that protocol — it
+ * adds no privilege, it presents the evidence the server already demands:
+ *
+ *   1. POST {gateway}/doors/knock   {door:"channel:#agents"}      -> describe
+ *   2. POST {gateway}/doors/present {door, attestation:<humanity>} -> {attestation, expires_at}
+ *   3. relay write carries header  X-Door-Attestation: <attestation>
+ *
+ * The door attestation is cached PER BEARER and discarded when the bearer
+ * rotates, when expires_at passes, or when the relay answers 403-door anyway
+ * (then it is re-presented once and the write retried once — never a loop).
+ * The relay is the authority on whether a door exists: a channel is written
+ * plainly until the relay says "door", after which every write to it presents
+ * first. A stale "the door is gone" memory would otherwise keep the desk dead.
+ *
+ * The HUMANITY attestation (what is presented at the door) is the owner's own
+ * Identity `/auth/me` -> metadata.humanity_attestation, saved to
+ * ~/.aither/humanity-attestation (mode 600, the value only). The source is
+ * injectable (setHumanityAttestationSource); the default reads that file and
+ * yields "" when it is absent. Detail strings name the failing rung exactly
+ * so the cockpit says which step to fix, not a flat "refused".
  */
 
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { spawn, execFileSync } = require("node:child_process");
+const http = require("node:http");
 const https = require("node:https");
 
 const RELAY_URL = "https://127.0.0.1:8205";
 const RELAY_CHANNEL = "#agents";
 const HISTORY_LIMIT = 12;
 const RELAY_NICK = "david";
+// The door protocol is served by genesis THROUGH the MCP gateway (rung 1 of
+// the dispatch ladder — genesis publishes no host port). Today the gateway
+// answers 404 for /doors/*; when the passthrough goes live it is these paths.
+const GATEWAY_URL = "http://127.0.0.1:8182";
+const DOOR_KNOCK_URL = `${GATEWAY_URL}/doors/knock`;
+const DOOR_PRESENT_URL = `${GATEWAY_URL}/doors/present`;
+const DOOR_HEADER = "X-Door-Attestation";
+const HUMANITY_ATTESTATION_FILE = path.join(os.homedir(), ".aither", "humanity-attestation");
+const DETAIL_DOORS_NOT_LIVE = "doors passthrough not live on the gateway (HTTP 404)";
+const DETAIL_NO_HUMANITY = "no humanity attestation on this machine -- take the humanity "
+  + "check once (Identity /auth/me/verify-humanity) and save it to ~/.aither/humanity-attestation";
 // RELAY_NICK is the OWNER identity, derived server-side from
 // fleet_trust.json by link_relay_identity.py. The relay's write paths
 // (/v1/agent/join, /v1/channels/*/messages, thread replies) REQUIRE
@@ -53,13 +90,19 @@ function relayCa() {
     try {
       if (fs.existsSync(p)) return { ca: fs.readFileSync(p) };
     } catch {
-      /* unreadable candidate: try the next one */
+      // an unreadable candidate is simply not the CA — try the next
     }
   }
   return {};
 }
 
-function relayRequest(method, urlPath, body) {
+/**
+ * One JSON request as the owner. `urlPath` is relay-relative ("/v1/...") or
+ * an absolute URL (the gateway's door endpoints); `headers` are extra request
+ * headers (the door attestation). The injectable requestFn in post() /
+ * postThreadReply() has this same (method, urlPath, body, {headers}) shape.
+ */
+function relayRequest(method, urlPath, body, { headers = {} } = {}) {
   return new Promise((resolve) => {
     const token = bearer();
     if (!token) {
@@ -67,18 +110,32 @@ function relayRequest(method, urlPath, body) {
       return;
     }
     const payload = JSON.stringify(body);
-    const req = https.request(
+    let target;
+    if (/^https?:\/\//i.test(urlPath)) {
+      const u = new URL(urlPath);
+      target = {
+        client: u.protocol === "https:" ? https : http,
+        hostname: u.hostname,
+        port: u.port || (u.protocol === "https:" ? 443 : 80),
+        path: u.pathname + u.search,
+        tls: u.protocol === "https:" ? relayCa() : {},
+      };
+    } else {
+      target = { client: https, hostname: "127.0.0.1", port: 8205, path: urlPath, tls: relayCa() };
+    }
+    const req = target.client.request(
       {
-        hostname: "127.0.0.1",
-        port: 8205,
-        path: urlPath,
+        hostname: target.hostname,
+        port: target.port,
+        path: target.path,
         method,
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
           "Content-Length": Buffer.byteLength(payload),
+          ...headers,
         },
-        ...relayCa(),
+        ...target.tls,
       },
       (res) => {
         let data = "";
@@ -96,20 +153,20 @@ function relayRequest(method, urlPath, body) {
 }
 
 /** The relay's refusal REASON, extracted from its JSON body when present. */
-function refusalDetail(body) {
+function refusalDetail(body, max = 160) {
   if (typeof body !== "string" || !body) return "";
   try {
     const parsed = JSON.parse(body);
     if (parsed && typeof parsed.detail === "string" && parsed.detail) {
-      return parsed.detail.slice(0, 160);
+      return parsed.detail.slice(0, max);
     }
     if (parsed && typeof parsed.message === "string" && parsed.message) {
-      return parsed.message.slice(0, 160);
+      return parsed.message.slice(0, max);
     }
   } catch {
-    /* not JSON: the raw body below is the message */
+    // not JSON — the raw body is the message
   }
-  return body.slice(0, 160);
+  return body.slice(0, max);
 }
 
 let joinState = "pending"; // "pending" | "joined" | "failed"
@@ -145,12 +202,182 @@ function ensureJoined(requestFn = relayRequest) {
   return joinPromise;
 }
 
+let bearerSource = null; // test-only override; null = the session-bearer file
 function bearer() {
+  if (bearerSource) {
+    try { return String(bearerSource() || ""); } catch { return ""; }
+  }
   try {
     return fs.readFileSync(path.join(os.homedir(), ".aither", "session-bearer"), "utf8").trim();
   } catch {
     return "";
   }
+}
+
+// ---------------------------------------------------------------------------
+// The door plane (see the module header).
+// ---------------------------------------------------------------------------
+
+/** Default humanity source: the VALUE saved at ~/.aither/humanity-attestation. */
+function fileHumanityAttestation() {
+  try {
+    return fs.readFileSync(HUMANITY_ATTESTATION_FILE, "utf8").trim();
+  } catch {
+    return "";
+  }
+}
+let humanitySource = fileHumanityAttestation;
+/** Inject where the humanity attestation comes from (a () => string). */
+function setHumanityAttestationSource(fn) {
+  humanitySource = typeof fn === "function" ? fn : fileHumanityAttestation;
+}
+function humanityAttestation() {
+  try {
+    const v = humanitySource();
+    return typeof v === "string" ? v.trim() : "";
+  } catch {
+    return "";
+  }
+}
+
+function doorFor(channel) {
+  return `channel:${channel}`;
+}
+
+/** expires_at as epoch ms: ISO string, epoch seconds, or epoch ms. null = none given. */
+function parseExpiry(value) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value < 1e12 ? value * 1000 : value;
+  }
+  if (typeof value === "string" && value) {
+    const n = Number(value);
+    if (Number.isFinite(n)) return parseExpiry(n);
+    const t = Date.parse(value);
+    return Number.isFinite(t) ? t : null;
+  }
+  return null;
+}
+
+// door -> {bearer, attestation, expiresAtMs}. One entry per door, per bearer.
+const doorAttestations = new Map();
+// door -> in-flight present, so two racing writes present once.
+const doorPresenting = new Map();
+// doors the relay has TOLD us exist (a 403-door answer). Written plainly
+// until then — the relay, not a memory, decides whether a door is there.
+const knownDoors = new Set();
+
+function cachedAttestation(door) {
+  const c = doorAttestations.get(door);
+  if (!c) return "";
+  if (c.bearer !== bearer()) { doorAttestations.delete(door); return ""; }
+  // 5 s of skew: an attestation about to lapse would be refused mid-flight.
+  if (c.expiresAtMs !== null && Date.now() >= c.expiresAtMs - 5000) {
+    doorAttestations.delete(door);
+    return "";
+  }
+  return c.attestation;
+}
+
+function discardAttestation(door) {
+  doorAttestations.delete(door);
+}
+
+/**
+ * Knock, then present the humanity attestation; cache and return the door
+ * attestation. {ok, attestation, detail} — detail names the rung that failed.
+ */
+function ensureDoorAttestation(door, requestFn = relayRequest) {
+  const cached = cachedAttestation(door);
+  if (cached) return Promise.resolve({ ok: true, attestation: cached, detail: "" });
+  if (doorPresenting.has(door)) return doorPresenting.get(door);
+  const token = bearer();
+  const p = (async () => {
+    const knock = await requestFn("POST", DOOR_KNOCK_URL, { door });
+    if (knock.status === 404) return { ok: false, attestation: "", detail: DETAIL_DOORS_NOT_LIVE };
+    if (knock.status === 0) {
+      return { ok: false, attestation: "", detail: "the gateway did not answer the door knock (is aitheros-mcpgateway up?)" };
+    }
+    if (knock.status < 200 || knock.status >= 300) {
+      return {
+        ok: false,
+        attestation: "",
+        detail: `door knock refused: HTTP ${knock.status}${refusalDetail(knock.body) ? ` — ${refusalDetail(knock.body)}` : ""}`,
+      };
+    }
+    const humanity = humanityAttestation();
+    if (!humanity) return { ok: false, attestation: "", detail: DETAIL_NO_HUMANITY };
+    const present = await requestFn("POST", DOOR_PRESENT_URL, { door, attestation: humanity });
+    if (present.status === 404) return { ok: false, attestation: "", detail: DETAIL_DOORS_NOT_LIVE };
+    if (present.status === 0) {
+      return { ok: false, attestation: "", detail: "the gateway did not answer the door present (is aitheros-mcpgateway up?)" };
+    }
+    if (present.status < 200 || present.status >= 300) {
+      const why = refusalDetail(present.body) || `HTTP ${present.status}`;
+      return { ok: false, attestation: "", detail: `door refused: ${why}` };
+    }
+    let parsed;
+    try { parsed = JSON.parse(present.body); } catch { parsed = null; }
+    if (parsed && parsed.admitted === false) {
+      const why = refusalDetail(present.body) || "not admitted";
+      return { ok: false, attestation: "", detail: `door refused: ${why}` };
+    }
+    const attestation = parsed && typeof parsed.attestation === "string" ? parsed.attestation : "";
+    if (!attestation) {
+      return { ok: false, attestation: "", detail: "door present answered without an attestation" };
+    }
+    doorAttestations.set(door, {
+      bearer: token,
+      attestation,
+      expiresAtMs: parseExpiry(parsed.expires_at),
+    });
+    return { ok: true, attestation, detail: "" };
+  })().finally(() => doorPresenting.delete(door));
+  doorPresenting.set(door, p);
+  return p;
+}
+
+/** A relay 403 whose reason names the door — the cue to (re)present. */
+function isDoorRefusal(r) {
+  return r.status === 403 && /\bdoor\b/i.test(refusalDetail(r.body, 4000));
+}
+
+/**
+ * One relay write with the door protocol around it. The write goes plainly
+ * unless the relay has already told us this channel has a door; a 403-door
+ * answer discards any cached attestation, presents once, and retries once.
+ */
+async function doorGatedWrite(channel, urlPath, payload, requestFn) {
+  const door = doorFor(channel);
+  const sendOnce = async (headers) => {
+    let r = await requestFn("POST", urlPath, payload, { headers });
+    if (r.status === 0) {
+      // one transient transport blip (TLS reset, restart window), never a loop
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      r = await requestFn("POST", urlPath, payload, { headers });
+    }
+    return r;
+  };
+  let headers = {};
+  if (knownDoors.has(door)) {
+    const a = await ensureDoorAttestation(door, requestFn);
+    if (!a.ok) return { ok: false, detail: a.detail };
+    headers = { [DOOR_HEADER]: a.attestation };
+  }
+  let r = await sendOnce(headers);
+  if (isDoorRefusal(r)) {
+    knownDoors.add(door);
+    discardAttestation(door);
+    const a = await ensureDoorAttestation(door, requestFn);
+    if (!a.ok) return { ok: false, detail: a.detail };
+    r = await sendOnce({ [DOOR_HEADER]: a.attestation });
+  }
+  if (r.status >= 200 && r.status < 300) return { ok: true, detail: "" };
+  return {
+    ok: false,
+    detail: r.status === 0
+      ? "the relay did not answer (it may be restarting)"
+      : `relay HTTP ${r.status}${refusalDetail(r.body) ? ` — ${refusalDetail(r.body)}` : ""}`,
+  };
 }
 
 /**
@@ -308,18 +535,7 @@ async function post(channel = RELAY_CHANNEL, text, requestFn = relayRequest) {
     nick: RELAY_NICK,
     content: text.trim().slice(0, 1500),
   };
-  let r = await requestFn("POST", `/v1/channels/${q}/messages`, payload);
-  if (r.status === 0) {
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    r = await requestFn("POST", `/v1/channels/${q}/messages`, payload);
-  }
-  if (r.status >= 200 && r.status < 300) return { ok: true, detail: "" };
-  return {
-    ok: false,
-    detail: r.status === 0
-      ? "the relay did not answer (it may be restarting)"
-      : `relay HTTP ${r.status}${refusalDetail(r.body) ? ` — ${refusalDetail(r.body)}` : ""}`,
-  };
+  return doorGatedWrite(channel, `/v1/channels/${q}/messages`, payload, requestFn);
 }
 
 /** Reply into a message's thread — the per-agent direct chat send path. */
@@ -337,20 +553,12 @@ async function postThreadReply(channel, messageId, text, requestFn = relayReques
     nick: RELAY_NICK,
     content: text.trim().slice(0, 1500),
   };
-  let r = await requestFn("POST",
-    `/v1/channels/${q}/messages/${encodeURIComponent(messageId)}/thread`, payload);
-  if (r.status === 0) {
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    r = await requestFn("POST",
-      `/v1/channels/${q}/messages/${encodeURIComponent(messageId)}/thread`, payload);
-  }
-  if (r.status >= 200 && r.status < 300) return { ok: true, detail: "" };
-  return {
-    ok: false,
-    detail: r.status === 0
-      ? "the relay did not answer (it may be restarting)"
-      : `relay HTTP ${r.status}${refusalDetail(r.body) ? ` — ${refusalDetail(r.body)}` : ""}`,
-  };
+  return doorGatedWrite(
+    channel,
+    `/v1/channels/${q}/messages/${encodeURIComponent(messageId)}/thread`,
+    payload,
+    requestFn,
+  );
 }
 
 /** Test-only: clear the per-bearer join cache so a test can force a re-join. */
@@ -361,13 +569,36 @@ function _resetJoinForTests() {
   lastJoinDetail = "";
 }
 
+/** Test-only: forget every door, attestation and injected source. */
+function _resetDoorForTests() {
+  doorAttestations.clear();
+  doorPresenting.clear();
+  knownDoors.clear();
+  humanitySource = fileHumanityAttestation;
+  bearerSource = null;
+}
+
+/** Test-only: where bearer() reads from (a () => string); null = the file. */
+function _setBearerSourceForTests(fn) {
+  bearerSource = typeof fn === "function" ? fn : null;
+}
+
 module.exports = {
   fetchHistory,
   fetchThread,
   post,
   postThreadReply,
+  setHumanityAttestationSource,
+  _relayRequestForTests: relayRequest,
   _resetJoinForTests,
+  _resetDoorForTests,
+  _setBearerSourceForTests,
   RELAY_URL,
   RELAY_CHANNEL,
   RELAY_NICK,
+  GATEWAY_URL,
+  DOOR_KNOCK_URL,
+  DOOR_PRESENT_URL,
+  DOOR_HEADER,
+  HUMANITY_ATTESTATION_FILE,
 };

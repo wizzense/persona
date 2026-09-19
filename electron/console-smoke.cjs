@@ -173,6 +173,32 @@ async function run() {
     check("sessions pane's handler is registered", answer === "ok", String(answer).slice(0, 90));
   }
 
+  // 3c. The Fleet pane must SAY what it is doing. Its first probe walks the
+  //     distro, seven doors and the GPU counters (24-73 s measured 2026-09-18),
+  //     and the owner's 07:20 screenshot that day was the pane mid-probe: a grey
+  //     UNKNOWN pill over four "?", read as broken. Whatever this run sees --
+  //     the probe in flight, a verdict, or a refusal -- it must not be the bare
+  //     placeholder, and a pill that says PROBING must not claim the GPU is free.
+  await win.webContents.executeJavaScript("document.getElementById('tab-fleet').click()");
+  await new Promise((resolve) => setTimeout(resolve, 800));
+  const fleetFrame = win.webContents.mainFrame.framesInSubtree
+    .find((f) => String(f.url || "").includes("fleet-control.html"));
+  if (!fleetFrame) {
+    check("fleet pane says what it is doing", false, "the fleet frame vanished");
+  } else {
+    const seen = await fleetFrame.executeJavaScript(
+      "({ pill: document.getElementById('pill').textContent,"
+      + " state: document.getElementById('pill').dataset.state,"
+      + " running: document.getElementById('s-running').textContent,"
+      + " hold: document.getElementById('s-hold').textContent })",
+    );
+    const placeholder = seen.pill === "…" || seen.state === "UNKNOWN" || seen.running === "–";
+    check("fleet pane says what it is doing", !placeholder, JSON.stringify(seen));
+    check("fleet pane never paints 'free' before a verdict",
+      seen.state !== "PROBING" || (seen.hold === "probing…" && seen.running === "probing…"),
+      JSON.stringify(seen));
+  }
+
   // 4. Detach/reattach really drives main's window creators.
   const detach = await win.webContents.executeJavaScript(
     "window.aitherConsole.detach('fleet')",
