@@ -46,6 +46,25 @@ test("window size reaches the tray, the avatar menu AND the palette", () => {
   assert.equal(rows.filter((row) => row.group === "window-size").length, sizes.length);
 });
 
+test("U27: configuration is reachable from three surfaces, not one gesture", () => {
+  // The regression this unit exists for: assigning a character's cast/voice
+  // identity had exactly one door, a tray submenu that only bound whichever
+  // avatar was resident. cast.open puts it on all three; room.steer needs a
+  // scoped body/row first, so it skips tray on purpose (not a whySingle case --
+  // it still names two surfaces).
+  const cast = byId("cast.open");
+  assert.ok(cast, "cast.open is missing from the registry");
+  assert.equal(cast.group, "avatar");
+  assert.deepEqual(cast.surfaces, ["tray", "avatar-menu", "palette"]);
+  assert.equal(cast.whySingle, undefined, "cast.open is multi-surface, whySingle is not its job");
+
+  const steer = byId("room.steer");
+  assert.ok(steer, "room.steer is missing from the registry");
+  assert.equal(steer.group, "room");
+  assert.deepEqual(steer.surfaces, ["avatar-menu", "palette"]);
+  assert.equal(steer.whySingle, undefined, "room.steer names two surfaces, not one");
+});
+
 test("every surface renders, and separators come from groups", () => {
   for (const surface of SURFACES) {
     const ran = [];

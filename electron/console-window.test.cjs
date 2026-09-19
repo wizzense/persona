@@ -20,7 +20,7 @@ test("every pane resolves to a page that exists", () => {
   const panes = paneSources("http://127.0.0.1:5173");
   // The count is asserted so a pane cannot be DROPPED by an edit that only meant
   // to reorder the rail; bump it deliberately when one is added.
-  assert.equal(panes.length, 7);
+  assert.equal(panes.length, 8);
   for (const pane of panes) {
     if (pane.kind !== "file") continue;
     assert.ok(
@@ -29,6 +29,24 @@ test("every pane resolves to a page that exists", () => {
     );
     assert.equal(pane.src, `./${pane.file}`);
   }
+});
+
+test("the rail is in this exact order -- a drop or a reorder must fail here", () => {
+  // Listed explicitly rather than derived from PANES, so an edit that silently
+  // drops or reshuffles an entry is caught here instead of only downstream.
+  assert.deepEqual(PANES.map((p) => p.id),
+    ["cards", "command", "fleet", "sessions", "chat", "stage", "cast", "desktop"]);
+});
+
+test("the Cast pane is a FILE pane, src resolved the same in dev-server and file:// modes", () => {
+  // Unlike a `kind: "view"` pane, a file pane's src never depends on the
+  // renderer base -- it must be non-null whether the desk is pointed at the
+  // vite dev server or a packaged file:// bundle.
+  const dev = paneSources("http://127.0.0.1:5173").find((p) => p.id === "cast");
+  const packaged = paneSources("file:///d/dist/index.html").find((p) => p.id === "cast");
+  assert.equal(dev.kind, "file");
+  assert.equal(dev.src, "./cast.html");
+  assert.equal(packaged.src, "./cast.html");
 });
 
 test("view panes carry the renderer base and their own query flag", () => {
@@ -85,6 +103,30 @@ test("detach opens the pane's own window; reattach closes it", async () => {
   assert.equal(back.ok, true);
   assert.deepEqual(back.detached, []);
   assert.deepEqual(calls, ["open", "close"]);
+});
+
+test("detachedIds()/callWindow accept the new cast id, same as any other pane", async () => {
+  // U28 (main.cjs, LAST in the plan) is what supplies the real window: this
+  // arm proves the rail's own machinery treats "cast" like any other pane id
+  // rather than needing a special case, independent of that later wiring.
+  let castOpen = false;
+  __setWindowsForTest({
+    cast: {
+      open: () => { castOpen = true; },
+      close: () => { castOpen = false; },
+      isOpen: () => castOpen,
+    },
+  });
+
+  assert.deepEqual(detachedIds(), []);
+  const detached = await callWindow("cast", "open");
+  assert.equal(detached.ok, true);
+  assert.deepEqual(detached.detached, ["cast"]);
+
+  const back = await callWindow("cast", "close");
+  assert.equal(back.ok, true);
+  assert.deepEqual(back.detached, []);
+  __setWindowsForTest({});
 });
 
 test("a reattach reply describes the windows AFTER the close lands", async () => {
@@ -168,7 +210,7 @@ test("the console preload COMPOSES the pane preloads, never copies them", () => 
   // deskBridge alone is 20 verbs. A hand-copied bridge drifts, and a pane would
   // then behave differently inside the console than in its detached window.
   const preload = read("console-preload.cjs");
-  for (const dep of ["./command-preload.cjs", "./fleet-preload.cjs", "./preload.cjs"]) {
+  for (const dep of ["./command-preload.cjs", "./fleet-preload.cjs", "./cast-preload.cjs", "./preload.cjs"]) {
     assert.ok(preload.includes(`require("${dep}")`), `console-preload must require ${dep}`);
   }
   // Exactly one namespace of its own; the other three come from the files above.

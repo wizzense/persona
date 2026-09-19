@@ -29,6 +29,8 @@ if (href.includes("command.html")) {
   require("./sessions-preload.cjs");
 } else if (href.includes("stage.html")) {
   require("./stage-preload.cjs");
+} else if (href.includes("cast.html")) {
+  require("./cast-preload.cjs");
 } else if (!href.includes("console.html")) {
   // The renderer bundle: ?deck=1 and ?chat=1 both live here. Loaded ONLY for
   // those frames, because preload.cjs also installs middle-drag window-move

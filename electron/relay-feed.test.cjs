@@ -18,6 +18,7 @@ const {
   DOOR_PRESENT_URL,
   DOOR_HEADER,
 } = require("./relay-feed.cjs");
+const { sharedBridge, _resetSharedForTests } = require("./relay-room-bridge.cjs");
 
 function fakeSpawn(handler) {
   return (_cmd, args) => {
@@ -95,7 +96,13 @@ test("post joins the relay identity, sends over HTTP, and reports the verdict", 
     if (urlPath.includes("/messages")) return { status: 200, body: '{"success":true}' };
     return { status: 500, body: "" };
   });
-  assert.deepEqual(await post("#agents", "hello fleet", req), { ok: true, detail: "" });
+  const sent = await post("#agents", "hello fleet", req);
+  // 🚩 the verdict now CARRIES the relay's record (id, body) alongside ok/detail
+  // (see storedMessageId in relay-feed.cjs) — a plain {ok,detail} deepEqual
+  // here would fail on those extra, correct keys, so check the two fields the
+  // relay-room-bridge and main.cjs actually branch on.
+  assert.equal(sent.ok, true);
+  assert.equal(sent.detail, "");
   const send = calls.find((c) => c.urlPath.includes("/v1/channels/%23agents/messages"));
   assert.ok(send, "the message POST happened");
   assert.equal(send.body.channel, "#agents");
@@ -125,7 +132,9 @@ test("post retries ONE transient transport blip, and a join refusal names the re
     if (flaky.attempts === 1) return { status: 0, body: "" };
     return { status: 200, body: '{"success":true,"content":"' + body.content + '"}' };
   });
-  assert.deepEqual(await post("#agents", "after the blip", flaky), { ok: true, detail: "" });
+  const afterBlip = await post("#agents", "after the blip", flaky);
+  assert.equal(afterBlip.ok, true);
+  assert.equal(afterBlip.detail, "");
   assert.equal(flaky.attempts, 2, "one retry, not a loop");
 
   // A join REFUSED by the relay surfaces the relay's own detail, not "refused".
@@ -195,8 +204,9 @@ test("postThreadReply replies over HTTP and reports the verdict", async () => {
     if (urlPath.includes("/thread")) return { status: 200, body: '{"success":true,"reply":{}}' };
     return { status: 500, body: "" };
   });
-  assert.deepEqual(await postThreadReply("#agents", "451a3460", "nice catch", req),
-    { ok: true, detail: "" });
+  const replied = await postThreadReply("#agents", "451a3460", "nice catch", req);
+  assert.equal(replied.ok, true);
+  assert.equal(replied.detail, "");
   const reply = calls.find((c) => c.urlPath.includes("/thread"));
   assert.ok(reply, "the thread POST happened");
   assert.ok(reply.urlPath.includes("451a3460"), "the parent id is in the URL");
@@ -214,6 +224,72 @@ test("postThreadReply replies over HTTP and reports the verdict", async () => {
     { ok: false, detail: "missing message id" }, "a missing id never sends");
   assert.deepEqual(await postThreadReply("#agents", "m", "  "),
     { ok: false, detail: "empty reply" }, "blank text never sends");
+});
+
+// ---------------------------------------------------------------------------
+// The relay's own id, and loop protection that actually fires (U08).
+//
+// 🚩 Before this unit doorGatedWrite discarded the relay's response body, so
+// noteOursToRoom's `result.id || result.message_id || result.body.id` read
+// undefined every time and a message this desk posted came back on the next
+// poll as somebody else's words — measured 2026-09-19 in AitherRelay.py: a
+// message POST answers {"success":true,"message":{...}} and a thread reply
+// answers {"success":true,"reply":{...}}, neither carrying `id` at the top
+// level. storedMessageId() in relay-feed.cjs is what reads INTO those shapes.
+// ---------------------------------------------------------------------------
+
+test("post surfaces the relay's id from message.id and hands it to noteOurs", async () => {
+  _resetJoinForTests();
+  _resetSharedForTests();
+  const req = fakeRequest((_m, urlPath) => {
+    if (urlPath === "/v1/agent/join") return { status: 200, body: '{"is_agent":true}' };
+    return { status: 200, body: '{"success":true,"message":{"id":"msg-abc"}}' };
+  });
+  const result = await post("#agents", "hello", req);
+  assert.equal(result.ok, true);
+  assert.equal(result.id, "msg-abc", "storedMessageId reads message.id");
+  // noteOursToRoom is fire-and-forget inside post() — it runs synchronously
+  // in this module (no await between the relay answer and the require), so
+  // the shared bridge already has it by the time post() resolves.
+  assert.ok(sharedBridge().ours.has("msg-abc"),
+    "a row THIS desk posted must be recognisable as ours on the next mirror poll");
+});
+
+test("post surfaces the relay's id from a bare id or message_id, never from a body with neither", async () => {
+  _resetJoinForTests();
+  _resetSharedForTests();
+  const bareId = fakeRequest((_m, urlPath) => {
+    if (urlPath === "/v1/agent/join") return { status: 200, body: '{"is_agent":true}' };
+    return { status: 200, body: '{"id":"bare-1"}' };
+  });
+  assert.equal((await post("#agents", "a", bareId)).id, "bare-1");
+
+  _resetJoinForTests();
+  const viaMessageId = fakeRequest((_m, urlPath) => {
+    if (urlPath === "/v1/agent/join") return { status: 200, body: '{"is_agent":true}' };
+    return { status: 200, body: '{"success":true,"message_id":"mid-2"}' };
+  });
+  assert.equal((await post("#agents", "b", viaMessageId)).id, "mid-2");
+
+  _resetJoinForTests();
+  const noId = fakeRequest((_m, urlPath) => {
+    if (urlPath === "/v1/agent/join") return { status: 200, body: '{"is_agent":true}' };
+    return { status: 200, body: '{"success":true}' };
+  });
+  assert.equal((await post("#agents", "c", noId)).id, null,
+    "an unparseable id is null, never a guess");
+});
+
+test("postThreadReply surfaces the relay's id from reply.id", async () => {
+  _resetJoinForTests();
+  _resetSharedForTests();
+  const req = fakeRequest((_m, urlPath) => {
+    if (urlPath === "/v1/agent/join") return { status: 200, body: '{"is_agent":true}' };
+    return { status: 200, body: '{"success":true,"reply":{"id":"reply-9"},"thread_info":{}}' };
+  });
+  const result = await postThreadReply("#agents", "451a3460", "nice catch", req);
+  assert.equal(result.id, "reply-9");
+  assert.ok(sharedBridge().ours.has("reply-9"));
 });
 
 // ---------------------------------------------------------------------------
@@ -278,8 +354,12 @@ function doorWorld({ relay, present, knock, humanity = "humanity-evidence" } = {
 
 test("door: the attestation is minted once and reused across two posts", async () => {
   const w = doorWorld();
-  assert.deepEqual(await post("#agents", "first", w.req), { ok: true, detail: "" });
-  assert.deepEqual(await post("#agents", "second", w.req), { ok: true, detail: "" });
+  const first = await post("#agents", "first", w.req);
+  assert.equal(first.ok, true);
+  assert.equal(first.detail, "");
+  const second = await post("#agents", "second", w.req);
+  assert.equal(second.ok, true);
+  assert.equal(second.detail, "");
   assert.equal(w.presents, 1, "one present for two posts");
   assert.equal(w.log.filter((e) => e.kind === "knock").length, 1, "one knock too");
   const writes = w.log.filter((e) => e.kind === "write");
@@ -310,7 +390,9 @@ test("door: a 403-door with a cached attestation re-presents once and retries on
   });
   assert.equal((await post("#agents", "one", w.req)).ok, true);
   honoured = "att-2";
-  assert.deepEqual(await post("#agents", "two", w.req), { ok: true, detail: "" });
+  const two = await post("#agents", "two", w.req);
+  assert.equal(two.ok, true);
+  assert.equal(two.detail, "");
   assert.equal(w.presents, 2, "re-presented exactly once");
   const writes = w.log.filter((e) => e.kind === "write").map((e) => e.attestation);
   assert.deepEqual(writes, ["", "att-1", "att-1", "att-2"]);

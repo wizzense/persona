@@ -37,6 +37,20 @@
  *     A burst in the channel must not become five minutes of monologue.
  *  5. SYSTEM ROWS ARE NOT SPEECH. join/part/system rows narrate the channel;
  *     they are presence, not something an avatar says.
+ *  6. MIRRORING GRANTS NOTHING. A channel is mirrored for PRESENCE and HISTORY
+ *     by default and is audible only where cast.json says
+ *     channels["#chan"].voiced === true. 🚩 The relay's `agent` flag cannot
+ *     carry this decision: /v1/agent/join puts the OWNER's nick in the trusted
+ *     set, so agent === true on #agents for the owner's own messages. Anyone
+ *     who can post in a mirrored channel would otherwise have a voice on the
+ *     owner's speakers; the grant is local (U01's cast.json, authored in the
+ *     Cast pane), never a field of the row.
+ *
+ * WHAT IS LOCALLY STAMPED (and therefore trustworthy): payload.source
+ * "awrelay", payload.channel (the channel WE polled, never row.channel — that
+ * one is relay-supplied) and the namespaced actor id `relay:<nick>`. Those
+ * three are the only discriminators an echo may key on, and they are also what
+ * the cast resolver derives its origin key from (`relay:<channel>[:<nick>]`).
  *
  * Failure is always silent and total: no daemon, no token, no relay — the
  * panel keeps working and nothing speaks. The bridge never throws into its
@@ -94,8 +108,64 @@ const SELF_NICKS = new Set(["awdesk", "desk", "aither-room"]);
 const HUMAN_NICKS = new Set(["david"]);
 
 //: Stamped on anything the room publishes OUT to relay, so a round trip is
-//: recognisable even when it comes back under a different nick.
+//: recognisable even when it comes back under a different nick. publishOut()
+//: below is its WRITER: until this unit the marker had a reader in selectRows
+//: and nothing that ever wrote it, which is a guard that cannot fire.
 const ROOM_MARKER = "[room]";
+
+//: 🚩 FAIL CLOSED ON AUDIBILITY, not on presence. An unknown channel is
+//: mirrored (bodies, history) and MUTE. Silencing the whole desk until a file
+//: exists would be a regression nobody asked for; handing a voice to whoever
+//: can post in a relay channel is a privilege the mirror must not grant.
+//: `presence: null` means "fall through to cast.json defaults.presence".
+const DEFAULT_CHANNEL_POLICY = Object.freeze({ voiced: false, presence: null });
+const PRESENCE_VALUES = new Set(["off", "quiet", "normal", "chatty"]);
+
+/** A cast.json channel entry as a policy. Per-field drop-not-clamp, never throws. */
+function normalisePolicy(raw) {
+  if (!raw || typeof raw !== "object") return { ...DEFAULT_CHANNEL_POLICY };
+  const presence = typeof raw.presence === "string" && PRESENCE_VALUES.has(raw.presence)
+    ? raw.presence
+    : null;
+  // `voiced === true` and nothing else: a truthy string from a hand-edited
+  // file must not read as a grant.
+  return { voiced: raw.voiced === true, presence };
+}
+
+/**
+ * The channel's policy from cast-config (U01), or the closed default.
+ *
+ * A SOFT require on purpose: this module ships in the same wave as
+ * cast-config.cjs and must work before it exists, in a packaged build where
+ * app.getPath is not ready, and against a malformed cast.json — every one of
+ * those is "no grant", never a throw on the poll path.
+ */
+function castChannelPolicy(channel) {
+  try {
+     
+    const cast = require("./cast-config.cjs");
+    const snapshot = typeof cast.current === "function"
+      ? cast.current()
+      : typeof cast.load === "function" ? (cast.load() || {}).snapshot : null;
+    const channels = snapshot && typeof snapshot.channels === "object" ? snapshot.channels : null;
+    if (!channels) return { ...DEFAULT_CHANNEL_POLICY };
+    const key = String(channel || "");
+    return normalisePolicy(channels[key] || channels[key.replace(/^#/, "")]);
+  } catch {
+    return { ...DEFAULT_CHANNEL_POLICY };
+  }
+}
+
+/**
+ * Text going OUT of the room into relay, stamped so the next poll recognises
+ * the round trip even when the relay stores it under the owner's nick.
+ * Idempotent: re-stamping a marked line would double the marker in the panel.
+ */
+function stampOutbound(text) {
+  const body = String(text == null ? "" : text).trim();
+  if (!body) return "";
+  return body.includes(ROOM_MARKER) ? body : `${ROOM_MARKER} ${body}`;
+}
 
 function normaliseChannels(raw) {
   if (typeof raw !== "string" || !raw.trim()) return DEFAULT_CHANNELS;
@@ -108,13 +178,28 @@ function normaliseChannels(raw) {
 }
 
 /**
- * The rows this tick should speak, newest last.
+ * The rows this tick should MIRROR, newest last, each carrying whether the
+ * channel's policy makes it audible (`voiceable`).
  *
  * `state` is {watermark, seen} and is MUTATED by the caller, not here — the
  * decision must be testable without a clock or a daemon.
+ *
+ * The policy gate refuses HERE, early, and that placement is the point: a gate
+ * applied downstream (at publish time, or by the room stage refusing an event)
+ * would leave the rows unpublished, the watermark unmoved, and the same rows
+ * re-selected every 2 s poll forever. Refusing here lets mirror() treat them as
+ * handled and step the watermark past them.
  */
-function selectRows(rows, state, { maxPerTick = MAX_PER_TICK, selfNicks = SELF_NICKS, ourIds = null } = {}) {
+function selectRows(
+  rows,
+  state,
+  { maxPerTick = MAX_PER_TICK, selfNicks = SELF_NICKS, ourIds = null, policy = DEFAULT_CHANNEL_POLICY } = {},
+) {
   if (!Array.isArray(rows) || !rows.length) return [];
+  const pol = normalisePolicy(policy);
+  // presence "off" is the owner saying this channel takes no part in the room
+  // at all: no body, no history, nothing queued.
+  if (pol.presence === "off") return [];
   const fresh = [];
   for (const row of rows) {
     if (!row || typeof row !== "object") continue;
@@ -131,7 +216,14 @@ function selectRows(rows, state, { maxPerTick = MAX_PER_TICK, selfNicks = SELF_N
     const at = Number(row.at) || 0;
     if (at <= state.watermark) continue;
     if (row.id && state.seen.has(row.id)) continue;
-    fresh.push({ ...row, text: text.slice(0, MAX_TEXT) });
+    // Rule 6: audibility is granted by cast.json, per channel, and "quiet"
+    // means a body that never speaks. Everything else about the row still
+    // travels — presence and history are not a privilege.
+    const voiceable = pol.voiced === true
+      && pol.presence !== "quiet"
+      && row.agent === true
+      && !HUMAN_NICKS.has(author.toLowerCase());
+    fresh.push({ ...row, text: text.slice(0, MAX_TEXT), voiceable });
   }
   fresh.sort((a, b) => (Number(a.at) || 0) - (Number(b.at) || 0));
   // Rule 4: a ceiling, keeping the NEWEST rows — an old row that missed the
@@ -139,12 +231,24 @@ function selectRows(rows, state, { maxPerTick = MAX_PER_TICK, selfNicks = SELF_N
   return fresh.slice(-Math.max(1, maxPerTick));
 }
 
-/** One relay row as one room event the stage already knows how to render. */
-function toEvent(row, { room = "main" } = {}) {
+/**
+ * One relay row as one room event the stage already knows how to render.
+ *
+ * `channel` is the channel WE polled and it WINS over row.channel: the row's
+ * own channel field arrived from the relay, and the cast resolver derives its
+ * origin key (`relay:<channel>`) from payload.channel — a key read out of a
+ * payload the poster influences is a grant list you do not control. payload
+ * .channel is therefore always present, even when the row carries none.
+ */
+function toEvent(row, { room = "main", channel = "", voiceable } = {}) {
   const author = String(row.author || "someone");
-  // Rule 3: a human is presence, never a voice. The room stage keys voicing
-  // off actor.kind, so this single field is the whole policy.
-  const kind = row.agent === true && !HUMAN_NICKS.has(author.toLowerCase())
+  const stampedChannel = String(channel || row.channel || "");
+  // Rules 3 and 6: a voice is GRANTED, never assumed. The room stage keys
+  // voicing off actor.kind (room-publisher.shapeChat: agent = kind !== "human"),
+  // so until the cast resolver lands in room-stage this one field is the whole
+  // enforcement — and it must default to silence when nobody said otherwise.
+  const granted = voiceable === true || row.voiceable === true;
+  const kind = granted && row.agent === true && !HUMAN_NICKS.has(author.toLowerCase())
     ? "adk_agent"
     : "human";
   return {
@@ -159,9 +263,15 @@ function toEvent(row, { room = "main" } = {}) {
     },
     payload: {
       text: row.text,
-      channel: row.channel || "",
+      channel: stampedChannel,
       source: "awrelay",
       relay_message_id: row.id || null,
+      // The decision, stated so the Cast pane and the resolver can SEE it, and
+      // so "why is this agent mute" has an answer in the event itself.
+      voiceable: kind === "adk_agent",
+      // The relay's own class flag, kept apart from the voice decision: it is
+      // true for the owner on #agents (see rule 6) and so cannot mean "bot".
+      relay_agent: row.agent === true,
     },
   };
 }
@@ -175,8 +285,22 @@ function toEvent(row, { room = "main" } = {}) {
  * HTTP client with no state worth sharing.
  */
 class RelayRoomBridge {
-  constructor({ publisher = patientPublisher(), log = () => {}, channels, selfNicks, statusFile } = {}) {
+  constructor({
+    publisher = patientPublisher(),
+    log = () => {},
+    channels,
+    selfNicks,
+    statusFile,
+    channelPolicy = castChannelPolicy,
+    relayPost = null,
+  } = {}) {
     this.publisher = publisher;
+    //: Injected so a test never depends on the owner's real cast.json (and so
+    //: this file does not hard-require a module landing in the same wave).
+    this.channelPolicy = typeof channelPolicy === "function" ? channelPolicy : castChannelPolicy;
+    //: How publishOut() reaches relay. Lazy by default: requiring relay-feed at
+    //: module load would close the require cycle (relay-feed requires US).
+    this.relayPost = typeof relayPost === "function" ? relayPost : null;
     //: Where the operator trace lands. A test MUST pass its own path: a suite
     //: that writes the live status file makes the desk look like it mirrored
     //: something it never saw (measured on this file's first run).
@@ -200,6 +324,48 @@ class RelayRoomBridge {
     if (typeof messageId !== "string" || !messageId) return;
     this.ours.add(messageId);
     if (this.ours.size > 200) this.ours = new Set([...this.ours].slice(-100));
+  }
+
+  /** This channel's audibility policy, closed by default. Never throws. */
+  policyFor(channel) {
+    try {
+      return normalisePolicy(this.channelPolicy(channel));
+    } catch {
+      return { ...DEFAULT_CHANNEL_POLICY };
+    }
+  }
+
+  /**
+   * Publish a line from the ROOM back OUT into a relay channel.
+   *
+   * Both halves of loop protection are applied here, because this is the only
+   * place the desk creates a row it will later read back: the text is stamped
+   * with ROOM_MARKER (survives a nick change, works even when the relay tells
+   * us nothing) and the id the relay assigned is recorded with noteOurs (works
+   * even when a peer strips the marker). Returns relay-feed's {ok, detail, id}
+   * verdict; never throws and never awaits the room.
+   */
+  async publishOut(channel, text, { post = null } = {}) {
+    const body = stampOutbound(text);
+    if (!body) return { ok: false, detail: "empty message" };
+    let send = post || this.relayPost;
+    if (!send) {
+      try {
+         
+        send = require("./relay-feed.cjs").post;
+      } catch {
+        return { ok: false, detail: "relay-feed unavailable" };
+      }
+    }
+    let result;
+    try {
+      result = await send(channel, body);
+    } catch (error) {
+      return { ok: false, detail: (error && error.message) || "relay post threw" };
+    }
+    const verdict = result && typeof result === "object" ? result : { ok: false, detail: "no verdict" };
+    if (verdict.ok && typeof verdict.id === "string") this.noteOurs(verdict.id);
+    return verdict;
   }
 
   enabled(channel) {
@@ -235,7 +401,16 @@ class RelayRoomBridge {
       this.writeStatus();
       return { mirrored: 0, skipped: (rows || []).length, reason: "primed" };
     }
-    const picked = selectRows(rows, state, { selfNicks: this.selfNicks, ourIds: this.ours });
+    // 🚩 MEASURED (U08 test suite): policyFor() existed with nothing calling
+    // it — a guard with no lane reaching it, same class as the ROOM_MARKER
+    // that once had a reader and no writer. Without this the channel's
+    // cast.json policy (voiced/presence) never reached selectRows and every
+    // channel fell back to whatever selectRows' OWN default parameter was.
+    const picked = selectRows(rows, state, {
+      selfNicks: this.selfNicks,
+      ourIds: this.ours,
+      policy: this.policyFor(channel),
+    });
     let mirrored = 0;
     for (const row of picked) {
       const result = await this.publisher.publish(toEvent(row));

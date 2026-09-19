@@ -116,6 +116,14 @@ const COMMANDS = Object.freeze([
     id: "characters.pick", label: "Characters", group: "avatar",
     surfaces: ["tray", "avatar-menu", "palette"], dynamic: true,
   }),
+  // U27 (owner, 2026-09-19): today the ONLY way to assign an agent's avatar a
+  // voice/cast identity is the same nested tray submenu this file was built to
+  // replace -- reachable only from whichever character is resident right now.
+  // cast.open is the one door onto cast.json (U01) from all three surfaces.
+  Object.freeze({
+    id: "cast.open", label: "Cast & voices…", group: "avatar",
+    surfaces: ["tray", "avatar-menu", "palette"],
+  }),
   // Plan 40 slice G, "think macOS Stage Manager": the verbs for a stage with
   // several bodies on it. Arranging four avatars by dragging each one is the work
   // this removes, and on a frameless overlay it is also the least accurate work
@@ -139,6 +147,13 @@ const COMMANDS = Object.freeze([
   Object.freeze({
     id: "stage.reset", label: "Stage: reset everyone", group: "stage",
     surfaces: ["tray", "avatar-menu", "palette"], arrangement: "reset",
+  }),
+  // U27, the second half of the same regression: talking to a session meant
+  // finding its body first. Not on tray -- "this session" is meaningless
+  // without a body or a palette row already scoped to one, unlike cast.open.
+  Object.freeze({
+    id: "room.steer", label: "Message this session…", group: "room",
+    surfaces: ["avatar-menu", "palette"],
   }),
   // Command and control (owner, 2026-09-19: "i need controls in awdesk and awsh").
   // Until today the fleet verbs lived on ONE page (the Fleet window) and the ARC

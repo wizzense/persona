@@ -9,6 +9,7 @@ import {
   loadChatTarget,
   saveChatTarget,
   type ChatSource,
+  type StageBody,
   type TargetStorage,
 } from '../deck/chat-target';
 
@@ -81,6 +82,98 @@ function bridgeSubscribe(listener: (event: Record<string, unknown>) => void): ()
   }
 }
 
+/** RoomStage.status()'s own shape (room-stage.cjs `status()`), not carried in
+ *  DeckState (deck-types.ts is peer-held — plan U20/U21 conflicts) even
+ *  though main's deckState() already sends it under `roomStage`. Declared
+ *  LOCALLY, read with a cast, same doctrine chat-target.ts uses for
+ *  StageBody. Only the fields this view needs. */
+interface RawStageBody {
+  slotId?: string;
+  agent?: string;
+  actorId?: string;
+  actorKind?: string;
+}
+interface RoomStageStatus {
+  onStage?: RawStageBody[];
+}
+
+/** Bodies on stage, addressable ones only. A body is addressable when its
+ *  actor is a `claude_code` session — room-publisher.cjs: "a claude_code
+ *  actor's room actor.id IS the session id" — anything else (a service or
+ *  relay-mirrored actor) has no mailbox to steer into, so it is left out
+ *  rather than offered and refused later. No session TITLE is available here
+ *  (main does not yet join RoomStage.status() with room-publisher's
+ *  sessionTitles() into deckState — plan U18's join point, not this file's);
+ *  stageBodyOptions() already falls back to the agent name and disambiguates
+ *  same-named bodies by session id, so the picker still shows distinct rows. */
+function stageBodiesFrom(state: DeckState): StageBody[] {
+  const roomStage = (state as unknown as { roomStage?: RoomStageStatus } | undefined)?.roomStage;
+  const onStage = roomStage?.onStage;
+  if (!Array.isArray(onStage)) return [];
+  const out: StageBody[] = [];
+  for (const b of onStage) {
+    if (!b || b.actorKind !== 'claude_code' || !b.actorId) continue;
+    out.push({ slotId: String(b.slotId || ''), agent: b.agent || null, actorId: b.actorId, actorKind: b.actorKind, sessionId: b.actorId });
+  }
+  return out;
+}
+
+/** The empty text for a session steer view: names where typing goes, because
+ *  nothing here reads back the session's own turns (that would need the
+ *  relay-mirror `channel` attach, not this mailbox-only lane). */
+function sessionEmptyText(label: string | null, sessionId: string | null): string {
+  const who = label || (sessionId ? sessionId.slice(0, 8) : 'that session');
+  return `Nothing sent to ${who} yet. What you type is queued for its next turn boundary — this is a mailbox, not a live read-back.`;
+}
+
+/** One sent steer, with its receipt filled in once room-steer answers. */
+interface SentSteer {
+  id: string;
+  text: string;
+  at: number;
+  /** null while the answer is in flight. */
+  receipt: string | null;
+  refused: boolean;
+}
+
+/**
+ * The dispatcher's own wording for a room-steer answer, never guessed past
+ * what the answer actually says (owner risk on U21: "claiming delivery for
+ * something that is only queued"). Handles every shape this can arrive in:
+ *  - a rich receipt {ok, channel, landed_now, detail} once main (U28) wires
+ *    room-steer to await steer_dispatch's steering_receipt;
+ *  - a bare boolean/string (the generic action() shape every OTHER verb in
+ *    this file uses) if it lands before that;
+ *  - a rejected promise (handled by the caller, not here).
+ * `channel: "pty"` is the ONLY path that says "delivered" — on this box every
+ * live session is origin=discovered, so pty essentially always misses and
+ * mailbox is the real channel (steer_dispatch.py, plan U11). Anything ok but
+ * without channel info is reported as queued, never delivered, because
+ * "the agent has it now" and "queued for its next turn boundary" are
+ * different facts and the owner acts on this sentence.
+ */
+function receiptFor(answer: unknown): { refused: boolean; text: string } {
+  const QUEUED = "queued — lands at that session's next turn boundary";
+  if (answer && typeof answer === 'object') {
+    const a = answer as Record<string, unknown>;
+    if (a.ok === false) {
+      const reason = (typeof a.detail === 'string' && a.detail) || (typeof a.error === 'string' && a.error) || 'the room refused the steer';
+      return { refused: true, text: reason };
+    }
+    if (a.channel === 'pty' || a.landed_now === true) return { refused: false, text: 'delivered' };
+    if (a.channel === 'mailbox') return { refused: false, text: QUEUED };
+    if (a.channel === 'none') {
+      const reason = (typeof a.detail === 'string' && a.detail) || 'refused — no delivery channel for this session';
+      return { refused: true, text: reason };
+    }
+    // ok, but no channel fact yet: still queued, never a guessed "delivered".
+    return { refused: false, text: QUEUED };
+  }
+  if (answer === true) return { refused: false, text: QUEUED };
+  const reason = (typeof answer === 'string' && answer) || 'the room refused the steer';
+  return { refused: true, text: reason };
+}
+
 export function ChatView() {
   const [state, setState] = useState<DeckState>(EMPTY_DECK_STATE);
   // The pane comes up where the owner LEFT it (2026-09-18: "switching to
@@ -105,6 +198,16 @@ export function ChatView() {
   const [channel, setChannel] = useState<string | null>(remembered.channel ?? null);
   const [channelRows, setChannelRows] = useState<RelayRow[]>([]);
   const [sessionChannels, setSessionChannels] = useState<string[]>([]);
+  // ONE live session (a body on stage), addressed through room-steer -> the
+  // steer mailbox, distinct from `channel` above (a relay-mirrored channel
+  // anyone can attach to). `sessionLabel` is read off the picked <option>'s
+  // own text at selection time — no session-title lookup is wired to this
+  // window (see stageBodiesFrom) — and falls back to the id at render time.
+  const [sessionId, setSessionId] = useState<string | null>(
+    remembered.source === 'session' ? remembered.session ?? null : null,
+  );
+  const [sessionLabel, setSessionLabel] = useState<string | null>(null);
+  const [sentSteers, setSentSteers] = useState<SentSteer[]>([]);
   const [running, setRunning] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
@@ -172,8 +275,13 @@ export function ChatView() {
 
   // Remember the target on every change, so the next open is one motion.
   useEffect(() => {
-    saveChatTarget(targetStorage(), { source, agent: chatTarget, channel: channel ?? undefined });
-  }, [source, chatTarget, channel]);
+    saveChatTarget(targetStorage(), {
+      source,
+      agent: chatTarget,
+      channel: channel ?? undefined,
+      session: sessionId ?? undefined,
+    });
+  }, [source, chatTarget, channel, sessionId]);
 
   const openThread = useCallback((row: RelayRow) => {
     void bridgeDeck()
@@ -251,6 +359,36 @@ export function ChatView() {
       void runLocally(null);
       return;
     }
+    if (source === 'session') {
+      // A body on stage, steered through the room spine (plan U18/U19/U28) —
+      // NEVER command-send: that would spawn a fresh `claude -p` at a
+      // hardcoded cwd and answer from an empty context, which looks like the
+      // addressed session replying with amnesia.
+      if (!sessionId) {
+        fail('Not sent — no session selected.');
+        return;
+      }
+      const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const label = sessionLabel || sessionId;
+      setNotice(null);
+      // The message is shown as SENT the moment the spine is asked to take
+      // it; the receipt line under it fills in once room-steer answers. A
+      // dispatcher-level refusal (self-address, hop limit, unknown actor) is
+      // a fact about DELIVERY, not about whether the room accepted the
+      // steer, so it renders inline rather than restoring the draft.
+      setSentSteers((prev) => [...prev, { id, text, at: Date.now(), receipt: null, refused: false }]);
+      void deck
+        .action('room-steer', JSON.stringify({ to: sessionId, text, label }))
+        .then((res) => {
+          const { refused, text: receiptText } = receiptFor(res);
+          setSentSteers((prev) => prev.map((s) => (s.id === id ? { ...s, receipt: receiptText, refused } : s)));
+        })
+        .catch((err) => {
+          const msg = `Not sent — ${err instanceof Error ? err.message : String(err)}`;
+          setSentSteers((prev) => prev.map((s) => (s.id === id ? { ...s, receipt: msg, refused: true } : s)));
+        });
+      return;
+    }
     if (thread && thread.anchorId) {
       const anchorId = thread.anchorId;
       void deck
@@ -314,22 +452,29 @@ export function ChatView() {
   const roomRows = state.room.map(roomAsRow);
   const rows = thread ? thread.rows
     : source === 'channel' ? channelRows
-      : source === 'room' ? roomRows : state.relay;
+      : source === 'room' ? roomRows
+        : source === 'session' ? [] // rendered from sentSteers below — a mailbox has no read-back feed
+          : state.relay;
   const title = thread && thread.anchorId
     ? `Direct chat — ${chatTarget ?? 'thread'}`
     : source === 'channel' && channel
       ? `${channel} — live session (watch & steer)`
       : source === 'room'
       ? `room — local (${state.roomStatus === 'ok' ? 'awdk daemon' : state.roomStatus})`
-      : chatTarget
-        ? `${chatTarget} — direct`
-        : `${state.relayChannel} — the company room`;
+      : source === 'session' && sessionId
+        ? `${sessionLabel || sessionId.slice(0, 8)} — session (steer)`
+        : chatTarget
+          ? `${chatTarget} — direct`
+          : `${state.relayChannel} — the company room`;
+  const stageBodies = stageBodiesFrom(state);
   const pickerGroups = chatPickerGroups({
     relayChannel: state.relayChannel,
     agents: state.agents,
     slots: state.slots,
     current: source === 'relay' ? chatTarget : null,
     sessionChannels,
+    bodies: stageBodies,
+    currentSession: source === 'session' ? sessionId : null,
   });
 
   return (
@@ -338,9 +483,29 @@ export function ChatView() {
         <span className="chat-head-title" title={title}>{title}</span>
         <select
           className="chat-target"
-          value={chatTargetValue({ source, agent: chatTarget, channel: channel ?? undefined })}
+          value={chatTargetValue({
+            source,
+            agent: chatTarget,
+            channel: channel ?? undefined,
+            session: sessionId ?? undefined,
+          })}
           onChange={(event) => {
             const next = chatTargetFromValue(event.target.value);
+            if (next.source === 'session' && next.session) {
+              // Label read off the picked <option> itself (its text is
+              // already the distinct, collision-resolved label
+              // stageBodyOptions built) — no separate title lookup exists
+              // for this window to call.
+              const label = event.target.selectedOptions[0]?.text ?? next.session;
+              setSource('session');
+              setSessionId(next.session);
+              setSessionLabel(label);
+              setChannel(null);
+              setChannelRows([]);
+              setThread(null);
+              setChatTarget(null);
+              return;
+            }
             if (next.source === 'channel' && next.channel) {
               setSource('channel');
               setChannel(next.channel);
@@ -380,7 +545,32 @@ export function ChatView() {
         >×</button>
       </header>
       <div className="chat-list" ref={listRef}>
-        {rows.length === 0 ? (
+        {source === 'session' ? (
+          // A mailbox has no read-back feed (that is what `channel` attach
+          // is for) -- this view shows what the owner sent and, under each
+          // one, the honest receipt: queued/delivered/refused, never a guess.
+          sentSteers.length === 0 ? (
+            <p className="chat-empty">{sessionEmptyText(sessionLabel, sessionId)}</p>
+          ) : (
+            sentSteers.map((s) => (
+              <div className="chat-row chat-row-static chat-own" key={s.id}>
+                <span className="chat-meta">
+                  <span className="chat-author">you → {sessionLabel || (sessionId ? sessionId.slice(0, 8) : 'session')}</span>
+                  <span className="chat-age">{formatAge(s.at, nowMs)}</span>
+                </span>
+                <span className="chat-bubble">{s.text}</span>
+                {/* The receipt line — under the sent message, per plan U21.
+                    Scoped inline style (Deck.tsx/styles.css are peer-held). */}
+                <span
+                  className="chat-meta chat-receipt"
+                  style={{ fontSize: 11, opacity: 0.75, color: s.refused ? '#ff9a9a' : '#9ec1ff' }}
+                >
+                  {s.receipt ?? 'sending…'}
+                </span>
+              </div>
+            ))
+          )
+        ) : rows.length === 0 ? (
           <p className="chat-empty">
             {thread
               ? (chatTarget
@@ -429,9 +619,11 @@ export function ChatView() {
                 ? `Message ${chatTarget} (posts to ${state.relayChannel} as @${chatTarget})…`
                 : source === 'channel' && channel
                   ? `Steer ${channel} — the agent reads this on its next turn…`
-                  : source === 'room'
-                    ? 'Tell the desk what to do — it runs here…'
-                    : `Post to ${state.relayChannel}…`
+                  : source === 'session' && sessionId
+                    ? `Message ${sessionLabel || sessionId.slice(0, 8)} — queued for its next turn boundary…`
+                    : source === 'room'
+                      ? 'Tell the desk what to do — it runs here…'
+                      : `Post to ${state.relayChannel}…`
           }
           value={draft}
           onChange={(event) => {

@@ -1,0 +1,602 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Cast</title>
+<style>
+  :root {
+    --bg: #0f1218; --panel: #171b24; --line: #262c3a; --fg: #e6e9f0; --muted: #8a93a6;
+    --btn: #222838; --btn-hi: #2c3447; --accent: #9ec1ff; --red: #ff8b8f; --amber: #e8c07a;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+    font: 13px/1.45 system-ui, "Segoe UI", sans-serif; }
+  body { display: grid; grid-template-rows: 44px auto 1fr auto; height: 100vh; }
+
+  .bar { display: flex; align-items: center; gap: 10px; padding: 0 14px;
+    border-bottom: 1px solid var(--line); }
+  .bar .title { font-weight: 600; }
+  .bar .state { color: var(--muted); font-size: 12px; flex: 1; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chip { appearance: none; border: 1px solid var(--line); background: var(--btn);
+    color: var(--muted); border-radius: 6px; padding: 5px 10px; cursor: pointer;
+    font: 12px/1.2 system-ui; }
+  .chip:hover { background: var(--btn-hi); color: var(--fg); }
+  .chip.on { color: var(--fg); border-color: #2c4a7c; }
+  .chip.danger:hover { color: var(--red); border-color: #5a2c30; }
+  .chip.small { padding: 3px 8px; font-size: 11px; }
+
+  .banner { display: none; padding: 8px 14px; background: #2a1418; color: var(--red);
+    border-bottom: 1px solid #5a2c30; font-size: 12px; }
+  .banner.show { display: block; }
+  .banner code { background: #1a0d10; padding: 1px 5px; border-radius: 4px; }
+  .banner details { margin-top: 4px; color: var(--amber); }
+  .banner summary { cursor: pointer; }
+
+  #content { overflow-y: auto; min-height: 0; }
+  section { border-bottom: 1px solid var(--line); padding: 12px 14px; }
+  section h2 { margin: 0 0 4px; font-size: 12px; letter-spacing: .04em;
+    text-transform: uppercase; color: var(--muted); display: flex; align-items: center; gap: 8px; }
+  section .lede { color: var(--muted); font-size: 11px; margin: 0 0 10px; }
+
+  .row { display: flex; align-items: flex-start; gap: 10px; padding: 8px 0;
+    border-bottom: 1px solid #1c212c; flex-wrap: wrap; }
+  .row:last-child { border-bottom: none; }
+  .row .who { flex: 1 1 160px; min-width: 140px; display: grid; gap: 2px; }
+  .row .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .sub { color: var(--muted); font-size: 11px; }
+  .row .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; flex: 2 1 320px; }
+  .field { display: grid; gap: 2px; }
+  .field label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+  .field .from { font-size: 10px; color: #5f6a80; }
+  select, input[type=text], input[type=number] { background: var(--btn); color: var(--fg);
+    border: 1px solid var(--line); border-radius: 5px; padding: 4px 6px; font: 12px system-ui; }
+  select { min-width: 110px; }
+  input[type=number] { width: 68px; }
+  .ck { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--muted); }
+  .tag { font-size: 10px; border-radius: 999px; padding: 1px 7px; border: 1px solid var(--line);
+    color: var(--muted); white-space: nowrap; }
+  .tag.warn { color: var(--amber); border-color: #5a4a2c; }
+  .problem { font-size: 10px; color: var(--red); }
+  .empty { color: var(--muted); padding: 6px 0; font-size: 12px; }
+  .sample { color: var(--muted); font-size: 11px; font-style: italic; max-width: 320px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px 14px; }
+
+  footer { border-top: 1px solid var(--line); padding: 8px 14px; color: var(--muted);
+    font-size: 11px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  footer .err { color: var(--red); flex: 1; min-width: 200px; }
+  footer .path { font-size: 10px; color: #5f6a80; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; max-width: 380px; }
+</style>
+</head>
+<body>
+  <div class="bar">
+    <span class="title">Cast</span>
+    <span class="state" id="state">reading the cast…</span>
+    <button class="chip" id="capture">Capture current arrangement</button>
+    <button class="chip" id="refresh">Refresh</button>
+  </div>
+
+  <div class="banner" id="banner">
+    <div id="bannerText"></div>
+    <details id="problemsDetails">
+      <summary id="problemsSummary">problems</summary>
+      <div id="problemsList"></div>
+    </details>
+  </div>
+
+  <div id="content">
+    <section id="onStageSection">
+      <h2>On stage / known actors</h2>
+      <p class="lede">Every body currently standing, plus every actor the file names even when it
+        is not on stage right now. Each control writes straight to <code>cast.json</code> —
+        ASSIGN here never SWITCHES the resident's own model the way the tray menu does.</p>
+      <div id="onStageList"></div>
+    </section>
+
+    <section id="whoMaySection">
+      <h2>Who may speak</h2>
+      <p class="lede">Origins the room has actually seen, whether or not the file grants them
+        anything yet. An origin nobody configured is audible by default unless it is a relay
+        channel (those start silent) — this list is how a legitimately new agent stops being
+        mysteriously mute in one click.</p>
+      <div id="whoMayList"></div>
+    </section>
+
+    <section id="stageSection">
+      <h2>Stage defaults</h2>
+      <p class="lede">Unset fields fall through to the built-in (shown as placeholder). The ✕
+        button clears a field back to unset, distinct from typing a value that happens to match
+        the default.</p>
+      <div class="grid" id="stageGrid"></div>
+    </section>
+
+    <section id="voiceSection">
+      <h2>Voice defaults</h2>
+      <p class="lede">The endpoint host/port/path is what the desk dials for AitherVoice — today
+        it is hardcoded to 127.0.0.1:8084 in code; here it is a setting.</p>
+      <div class="grid" id="voiceGrid"></div>
+    </section>
+  </div>
+
+  <footer>
+    <span class="err" id="err"></span>
+    <span class="path" id="castPath"></span>
+  </footer>
+
+<script>
+"use strict";
+
+// The Cast pane. It authors cast.json through window.aitherCast; it holds no
+// state of its own beyond the last describe() result. Every write re-reads
+// (the ipc handler re-reads cast.json fresh — see cast-config.cjs's write())
+// so two open Cast panes never clobber each other on the fields they did NOT
+// touch, only on the one they both edited at once (last write wins, same as
+// every other settings file in this tree).
+
+const PRESENCE_LEVELS = ["off", "quiet", "normal", "chatty"];
+const VOICES = ["nova", "alloy", "echo", "fable", "onyx", "shimmer"];
+// Mirrors cast-config.cjs's BUILTIN_STAGE / BUILTIN_VOICE — placeholders only,
+// never sent unless the owner actually edits the field.
+const STAGE_DEFAULT = { maxBodies: 3, idleSeconds: 600, cooldownSeconds: 20, gapMs: 350, pollMs: 2000, resident: "" };
+const VOICE_DEFAULT = {
+  defaultVoice: "nova", defaultSpeed: 1.35, maxChars: 2000, affectIntensity: 1,
+  endpointHost: "127.0.0.1", endpointPort: 8084, endpointPath: "/voice/synthesize",
+  speechFilterMaxChars: 220, speechFilterAllowCode: false,
+};
+
+const stateEl = document.getElementById("state");
+const errEl = document.getElementById("err");
+const castPathEl = document.getElementById("castPath");
+
+let last = null; // the last describe() result
+
+function say(message) {
+  errEl.textContent = message || "";
+}
+
+/** Every call reports; a verb that failed must not look like one that did
+ *  nothing (same rule stage.html's `call` follows). */
+async function call(promise, what) {
+  try {
+    const result = await promise;
+    if (!result || result.ok !== true) {
+      say((result && result.error) || `${what} did not answer`);
+      return null;
+    }
+    say("");
+    return result;
+  } catch (error) {
+    say(`${what}: ${String((error && error.message) || error)}`);
+    return null;
+  }
+}
+
+function numOrNull(value) {
+  if (value === "" || value === null || value === undefined) return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+// ─── banner ──────────────────────────────────────────────────────────────
+
+function renderBanner() {
+  const banner = document.getElementById("banner");
+  const error = last && last.error;
+  const problems = (last && last.problems) || [];
+  const path = last && last.snapshot && last.snapshot.meta && last.snapshot.meta.path;
+  castPathEl.textContent = path ? `cast: ${path}` : "";
+  if (!error && problems.length === 0) {
+    banner.classList.remove("show");
+    return;
+  }
+  banner.classList.add("show");
+  const text = document.getElementById("bannerText");
+  text.textContent = error
+    ? `cast.json problem${path ? ` (${path})` : ""}: ${error}`
+    : `${problems.length} field${problems.length === 1 ? "" : "s"} in cast.json did not validate and fell through to the next tier.`;
+  const summary = document.getElementById("problemsSummary");
+  summary.textContent = `${problems.length} problem${problems.length === 1 ? "" : "s"}`;
+  const list = document.getElementById("problemsList");
+  list.replaceChildren();
+  for (const p of problems) {
+    list.appendChild(el("div", "problem", `${p.path}: ${JSON.stringify(p.value)} — ${p.reason}`));
+  }
+}
+
+// ─── on stage / known actors ─────────────────────────────────────────────
+
+function rosterSelect(current) {
+  const select = document.createElement("select");
+  const none = el("option", null, "(unset — hashed)");
+  none.value = "";
+  select.appendChild(none);
+  const roster = (last && last.roster) || [];
+  // A configured character that fell out of the safe roster (content rating
+  // flipped, or the model is missing) is still offered here as its OWN option
+  // so the field shows what is actually in the file rather than silently
+  // hiding it — the row's provenance/problem line says why it is not taking.
+  const names = current && !roster.includes(current) ? [current, ...roster] : roster;
+  for (const name of names) {
+    const opt = el("option", null, name);
+    opt.value = name;
+    select.appendChild(opt);
+  }
+  select.value = current || "";
+  return select;
+}
+
+function fieldBlock(labelText, control, fromText) {
+  const field = el("div", "field");
+  const label = el("label", null, labelText);
+  field.appendChild(label);
+  field.appendChild(control);
+  if (fromText) field.appendChild(el("div", "from", fromText));
+  return field;
+}
+
+/** One editable actor row, shared by the on-stage list and the "known but not
+ *  on stage" list — the ONLY difference is whether a live `resolution` (with
+ *  provenance) exists or the raw `record` from snapshot.actors is all there is. */
+function actorRow({ key, title, subtitle, resolution, record, tag }) {
+  const row = el("div", "row");
+
+  const who = el("div", "who");
+  who.appendChild(el("div", "name", title));
+  if (subtitle) who.appendChild(el("div", "sub", subtitle));
+  if (tag) {
+    const t = el("span", "tag", tag);
+    who.appendChild(t);
+  }
+  if (resolution && Array.isArray(resolution.problems) && resolution.problems.length) {
+    for (const p of resolution.problems) {
+      who.appendChild(el("div", "problem", `${p.path}: ${p.reason}`));
+    }
+  }
+  row.appendChild(who);
+
+  const controls = el("div", "controls");
+
+  const current = resolution || record || {};
+  const character = resolution ? resolution.character : record && record.character;
+  const characterFrom = resolution ? resolution.characterFrom : (record && "character" in record ? "actors" : null);
+  const charSelect = rosterSelect(character);
+  charSelect.addEventListener("change", () => {
+    void call(window.aitherCast.setActor(key, { character: charSelect.value || null }), "Character");
+    void refresh();
+  });
+  controls.appendChild(fieldBlock("Character", charSelect, characterFrom));
+
+  const voiceInput = document.createElement("input");
+  voiceInput.type = "text";
+  voiceInput.setAttribute("list", "voice-options");
+  voiceInput.maxLength = 40;
+  voiceInput.value = (resolution ? resolution.voice : record && record.voice) || "";
+  voiceInput.addEventListener("change", () => {
+    void call(window.aitherCast.setActor(key, { voice: voiceInput.value.trim() || null }), "Voice");
+    void refresh();
+  });
+  controls.appendChild(fieldBlock("Voice", voiceInput, resolution ? resolution.voiceFrom : null));
+
+  const speedInput = document.createElement("input");
+  speedInput.type = "number";
+  speedInput.min = "0.25";
+  speedInput.max = "4";
+  speedInput.step = "0.05";
+  const speedValue = resolution ? resolution.speed : record && record.speed;
+  if (speedValue != null) speedInput.value = speedValue;
+  speedInput.addEventListener("change", () => {
+    void call(window.aitherCast.setActor(key, { speed: numOrNull(speedInput.value) }), "Speed");
+    void refresh();
+  });
+  controls.appendChild(fieldBlock("Speed", speedInput, resolution ? resolution.speedFrom : null));
+
+  const presenceSelect = document.createElement("select");
+  for (const level of PRESENCE_LEVELS) {
+    const opt = el("option", null, level);
+    opt.value = level;
+    presenceSelect.appendChild(opt);
+  }
+  presenceSelect.value = (resolution ? resolution.presence : record && record.presence) || "normal";
+  presenceSelect.addEventListener("change", () => {
+    void call(window.aitherCast.setActor(key, { presence: presenceSelect.value }), "Presence");
+    void refresh();
+  });
+  controls.appendChild(fieldBlock("Presence", presenceSelect, resolution ? resolution.presenceFrom : null));
+
+  const speakLabel = el("label", "ck");
+  const speakBox = document.createElement("input");
+  speakBox.type = "checkbox";
+  speakBox.checked = (resolution ? resolution.speak : record && record.speak) !== false;
+  speakBox.addEventListener("change", () => {
+    void call(window.aitherCast.setActor(key, { speak: speakBox.checked }), "Speak");
+    void refresh();
+  });
+  speakLabel.append(speakBox, document.createTextNode("speak"));
+  controls.appendChild(speakLabel);
+
+  const bodyLabel = el("label", "ck");
+  const bodyBox = document.createElement("input");
+  bodyBox.type = "checkbox";
+  bodyBox.checked = (resolution ? resolution.body : record && record.body) !== false;
+  bodyBox.addEventListener("change", () => {
+    void call(window.aitherCast.setActor(key, { body: bodyBox.checked }), "Body");
+    void refresh();
+  });
+  bodyLabel.append(bodyBox, document.createTextNode("body"));
+  controls.appendChild(bodyLabel);
+
+  const clear = el("button", "chip small danger", "Clear override");
+  clear.addEventListener("click", async () => {
+    if (await call(window.aitherCast.clearActor(key), "Clear")) void refresh();
+  });
+  controls.appendChild(clear);
+
+  row.appendChild(controls);
+  void current; // read above field-by-field; kept for clarity, not reused directly
+  return row;
+}
+
+function renderOnStage() {
+  const listEl = document.getElementById("onStageList");
+  listEl.replaceChildren();
+  const onStage = (last && last.onStage) || [];
+  const snapshot = (last && last.snapshot) || {};
+  const configuredKeys = new Set(Object.keys(snapshot.actors || {}));
+  const onStageKeys = new Set(onStage.map((row) => row.origin));
+
+  if (onStage.length === 0 && configuredKeys.size === 0) {
+    listEl.appendChild(el("div", "empty", "Nobody is on stage, and the file names no actor yet."));
+    return;
+  }
+
+  for (const row of onStage) {
+    const title = (row.resolution && row.resolution.displayName) || row.agent || row.actorId || row.origin;
+    const subtitle = [row.actorKind, row.actorId, row.slotId].filter(Boolean).join(" · ");
+    listEl.appendChild(actorRow({
+      key: row.origin, title, subtitle, resolution: row.resolution, tag: "on stage",
+    }));
+  }
+
+  for (const key of configuredKeys) {
+    if (onStageKeys.has(key)) continue; // already rendered above, with a live resolution
+    const record = snapshot.actors[key] || {};
+    listEl.appendChild(actorRow({
+      key, title: record.displayName || key, subtitle: key, record, tag: "configured · not on stage",
+    }));
+  }
+}
+
+// ─── who may speak ────────────────────────────────────────────────────────
+
+function whoRow(key, seenRow, onStageRow) {
+  const row = el("div", "row");
+  const who = el("div", "who");
+  who.appendChild(el("div", "name", key));
+  const bits = [seenRow.kind, seenRow.channel].filter(Boolean);
+  if (seenRow.count) bits.push(`seen ${seenRow.count}x`);
+  if (seenRow.lastSeen) bits.push(`last ${seenRow.lastSeen}`);
+  who.appendChild(el("div", "sub", bits.join(" · ")));
+  if (seenRow.sample) who.appendChild(el("div", "sample", `"${seenRow.sample}"`));
+
+  let voicedTag;
+  if (onStageRow && onStageRow.resolution) {
+    voicedTag = onStageRow.resolution.voiced
+      ? el("span", "tag", "audible")
+      : el("span", "tag warn", onStageRow.resolution.voicedReason || "not audible");
+  } else {
+    // Not on stage right now — presence/voice have not been resolved for this
+    // origin, so this is a description of the DEFAULT, not a live verdict:
+    // relay origins start silent until their channel is named voiced; every
+    // other origin defaults to audible (presence:"normal").
+    voicedTag = el("span", "tag", seenRow.kind === "relay" ? "silent by default (relay)" : "audible by default");
+  }
+  who.appendChild(voicedTag);
+  row.appendChild(who);
+
+  const controls = el("div", "controls");
+  const voice = el("button", "chip small", "Voice it");
+  voice.addEventListener("click", async () => {
+    if (await call(window.aitherCast.reveal(key), "Voice it")) void refresh();
+  });
+  const mute = el("button", "chip small danger", "Mute");
+  mute.addEventListener("click", async () => {
+    if (await call(window.aitherCast.muteOrigin(key), "Mute")) void refresh();
+  });
+  controls.append(voice, mute);
+  row.appendChild(controls);
+  return row;
+}
+
+function renderWhoMaySpeak() {
+  const listEl = document.getElementById("whoMayList");
+  listEl.replaceChildren();
+  const seen = (last && last.seen) || {};
+  const keys = Object.keys(seen);
+  if (keys.length === 0) {
+    listEl.appendChild(el("div", "empty", "Nothing has spoken into this desk yet."));
+    return;
+  }
+  const onStageByKey = new Map(((last && last.onStage) || []).map((row) => [row.origin, row]));
+  // Newest sighting first — that is what "who just showed up and is mute" needs.
+  keys.sort((a, b) => String(seen[b].lastSeen || "").localeCompare(String(seen[a].lastSeen || "")));
+  for (const key of keys) {
+    listEl.appendChild(whoRow(key, seen[key], onStageByKey.get(key)));
+  }
+}
+
+// ─── stage / voice defaults ───────────────────────────────────────────────
+
+function numberField(labelText, value, placeholder, opts, onSave) {
+  const wrap = el("div", "field");
+  wrap.appendChild(el("label", null, labelText));
+  const row = el("div", "controls");
+  const input = document.createElement("input");
+  input.type = "number";
+  if (opts && opts.min !== undefined) input.min = String(opts.min);
+  if (opts && opts.max !== undefined) input.max = String(opts.max);
+  if (opts && opts.step !== undefined) input.step = String(opts.step);
+  input.placeholder = String(placeholder);
+  if (value !== null && value !== undefined) input.value = value;
+  input.addEventListener("change", () => onSave(numOrNull(input.value)));
+  const clear = el("button", "chip small", "✕");
+  clear.title = "reset to built-in default";
+  clear.addEventListener("click", () => {
+    input.value = "";
+    onSave(null);
+  });
+  row.append(input, clear);
+  wrap.appendChild(row);
+  return wrap;
+}
+
+function textField(labelText, value, placeholder, onSave) {
+  const wrap = el("div", "field");
+  wrap.appendChild(el("label", null, labelText));
+  const row = el("div", "controls");
+  const input = document.createElement("input");
+  input.type = "text";
+  input.placeholder = String(placeholder);
+  input.value = value || "";
+  input.addEventListener("change", () => onSave(input.value.trim() || null));
+  const clear = el("button", "chip small", "✕");
+  clear.title = "reset to built-in default";
+  clear.addEventListener("click", () => {
+    input.value = "";
+    onSave(null);
+  });
+  row.append(input, clear);
+  wrap.appendChild(row);
+  return wrap;
+}
+
+function renderStage() {
+  const grid = document.getElementById("stageGrid");
+  grid.replaceChildren();
+  const stage = (last && last.snapshot && last.snapshot.stage) || {};
+  const save = (patch) => { void call(window.aitherCast.setStage(patch), "Stage").then(() => refresh()); };
+
+  grid.appendChild(numberField("Max bodies", stage.maxBodies, STAGE_DEFAULT.maxBodies,
+    { min: 0, max: 6, step: 1 }, (v) => save({ maxBodies: v })));
+  grid.appendChild(numberField("Idle seconds", stage.idleSeconds, STAGE_DEFAULT.idleSeconds,
+    { min: 30, step: 1 }, (v) => save({ idleSeconds: v })));
+  grid.appendChild(numberField("Cooldown seconds", stage.cooldownSeconds, STAGE_DEFAULT.cooldownSeconds,
+    { min: 0, step: 1 }, (v) => save({ cooldownSeconds: v })));
+  grid.appendChild(numberField("Gap ms", stage.gapMs, STAGE_DEFAULT.gapMs,
+    { min: 0, step: 10 }, (v) => save({ gapMs: v })));
+  grid.appendChild(numberField("Poll ms", stage.pollMs, STAGE_DEFAULT.pollMs,
+    { min: 250, step: 50 }, (v) => save({ pollMs: v })));
+  grid.appendChild(textField("Resident override", stage.resident, "(live .active-character)",
+    (v) => save({ resident: v })));
+}
+
+function renderVoice() {
+  const grid = document.getElementById("voiceGrid");
+  grid.replaceChildren();
+  const voice = (last && last.snapshot && last.snapshot.voice) || {};
+  const endpoint = voice.endpoint || {};
+  const speechFilter = voice.speechFilter || {};
+  const save = (patch) => { void call(window.aitherCast.setVoice(patch), "Voice").then(() => refresh()); };
+  // endpoint/speechFilter are their OWN sub-objects on a shallow merge
+  // (cast-config's setVoice: draft.voice = {...draft.voice, ...patch}) — a
+  // patch touching one sub-field must carry the WHOLE sub-object or it would
+  // wipe the other two fields sitting beside it.
+  const saveEndpoint = (field, v) => save({ endpoint: { ...endpoint, [field]: v } });
+  const saveFilter = (field, v) => save({ speechFilter: { ...speechFilter, [field]: v } });
+
+  const voiceWrap = el("div", "field");
+  voiceWrap.appendChild(el("label", null, "Default voice"));
+  const voiceInput = document.createElement("input");
+  voiceInput.type = "text";
+  voiceInput.setAttribute("list", "voice-options");
+  voiceInput.maxLength = 40;
+  voiceInput.placeholder = VOICE_DEFAULT.defaultVoice;
+  voiceInput.value = voice.defaultVoice || "";
+  voiceInput.addEventListener("change", () => save({ defaultVoice: voiceInput.value.trim() || null }));
+  voiceWrap.appendChild(voiceInput);
+  grid.appendChild(voiceWrap);
+
+  grid.appendChild(numberField("Default speed", voice.defaultSpeed, VOICE_DEFAULT.defaultSpeed,
+    { min: 0.25, max: 4, step: 0.05 }, (v) => save({ defaultSpeed: v })));
+  grid.appendChild(numberField("Max chars", voice.maxChars, VOICE_DEFAULT.maxChars,
+    { min: 40, max: 2000, step: 10 }, (v) => save({ maxChars: v })));
+  grid.appendChild(numberField("Affect intensity", voice.affectIntensity, VOICE_DEFAULT.affectIntensity,
+    { min: 0, max: 1, step: 0.1 }, (v) => save({ affectIntensity: v })));
+
+  grid.appendChild(textField("Endpoint host", endpoint.host, VOICE_DEFAULT.endpointHost,
+    (v) => saveEndpoint("host", v)));
+  grid.appendChild(numberField("Endpoint port", endpoint.port, VOICE_DEFAULT.endpointPort,
+    { min: 1, max: 65535, step: 1 }, (v) => saveEndpoint("port", v)));
+  grid.appendChild(textField("Endpoint path", endpoint.path, VOICE_DEFAULT.endpointPath,
+    (v) => saveEndpoint("path", v)));
+
+  grid.appendChild(numberField("Speech filter max chars", speechFilter.maxChars, VOICE_DEFAULT.speechFilterMaxChars,
+    { min: 40, max: 2000, step: 10 }, (v) => saveFilter("maxChars", v)));
+  const allowWrap = el("div", "field");
+  allowWrap.appendChild(el("label", null, "Speech filter allows code"));
+  const allowLabel = el("label", "ck");
+  const allowBox = document.createElement("input");
+  allowBox.type = "checkbox";
+  allowBox.checked = speechFilter.allowCode === true;
+  allowBox.addEventListener("change", () => saveFilter("allowCode", allowBox.checked));
+  allowLabel.append(allowBox, document.createTextNode("allow code blocks through the speech filter"));
+  allowWrap.appendChild(allowLabel);
+  grid.appendChild(allowWrap);
+}
+
+// ─── refresh loop ─────────────────────────────────────────────────────────
+
+async function refresh() {
+  const result = await call(window.aitherCast.describe(), "Describe");
+  if (result) last = result;
+  if (!last) {
+    stateEl.textContent = "cast pane unavailable";
+    return;
+  }
+  const onStageCount = (last.onStage || []).length;
+  const seenCount = Object.keys(last.seen || {}).length;
+  stateEl.textContent = `${onStageCount} on stage · ${seenCount} seen`;
+  renderBanner();
+  renderOnStage();
+  renderWhoMaySpeak();
+  renderStage();
+  renderVoice();
+}
+
+document.getElementById("refresh").addEventListener("click", () => void refresh());
+document.getElementById("capture").addEventListener("click", async () => {
+  const result = await call(window.aitherCast.captureStage(), "Capture");
+  if (result) {
+    say(result.captured ? `captured ${result.captured} place${result.captured === 1 ? "" : "s"}` : "nothing on stage to capture");
+    void refresh();
+  }
+});
+
+// Shared <datalist> for every free-text voice input on the page.
+const datalist = document.createElement("datalist");
+datalist.id = "voice-options";
+for (const name of VOICES) {
+  const opt = document.createElement("option");
+  opt.value = name;
+  datalist.appendChild(opt);
+}
+document.body.appendChild(datalist);
+
+// A body arrives/leaves as the room speaks and a mute is a one-click action
+// elsewhere (the tray, another Cast window) — poll rather than push, same
+// interval stage.html uses, so this pane never shows an arrangement that
+// changed five minutes ago.
+setInterval(() => void refresh(), 4000);
+void refresh();
+</script>
+</body>
+</html>

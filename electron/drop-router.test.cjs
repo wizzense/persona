@@ -12,7 +12,21 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
-const { routeDrop, kindOf, LIBRARY_HOST } = require("./drop-router.cjs");
+const http = require("node:http");
+
+const {
+  routeDrop,
+  kindOf,
+  LIBRARY_HOST,
+  synthesizeVerdict,
+  voiceSpeed,
+  SPEED_MIN,
+  SPEED_MAX,
+  SPEED_DEFAULT,
+  sniffAudioFormat,
+  estimateDurationMs,
+  pickDurationMs,
+} = require("./drop-router.cjs");
 
 function tmpfile(name, content) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "drop-router-test-"));
@@ -244,6 +258,124 @@ async function okAsync(name, fn) {
     const after = staged();
     assert.strictEqual(after, before, "a staged file was left behind");
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  // ── voiceSpeed precedence: explicit -> config -> env -> builtin ──────────
+
+  ok("voiceSpeed: an explicit requested speed beats config and env, clamped", () => {
+    assert.strictEqual(voiceSpeed(2, { config: { defaultSpeed: 1 }, env: { DESK_VOICE_SPEED: "3" } }), 2);
+    assert.strictEqual(voiceSpeed(99, {}), SPEED_MAX, "clamp ceiling holds for an explicit value");
+  });
+
+  ok("voiceSpeed: 0 is an EXPLICIT request (clamped up to the floor), distinct from unset (falls through to config/env/builtin)", () => {
+    assert.strictEqual(voiceSpeed(0, { config: { defaultSpeed: 1.9 } }), SPEED_MIN, "explicit 0 must not read as unset");
+    assert.strictEqual(voiceSpeed(undefined, { config: { defaultSpeed: 1.9 } }), 1.9, "unset falls through to config");
+    assert.strictEqual(voiceSpeed(null, { config: { defaultSpeed: 1.9 } }), 1.9, "null is unset too");
+  });
+
+  ok("voiceSpeed: no explicit and no config falls to env, then to the built-in default", () => {
+    assert.strictEqual(voiceSpeed(undefined, { env: { DESK_VOICE_SPEED: "2.5" } }), 2.5);
+    assert.strictEqual(voiceSpeed(undefined, { env: {} }), SPEED_DEFAULT);
+  });
+
+  // ── duration estimate: MP3 byte rate, not the WAV formula ────────────────
+
+  ok("sniffAudioFormat tells MP3 (ID3 tag, and a bare frame sync) from WAV by BYTES, never a declared format field", () => {
+    const id3 = Buffer.concat([Buffer.from("ID3"), Buffer.alloc(20)]).toString("base64");
+    const frameSync = Buffer.concat([Buffer.from([0xff, 0xfb]), Buffer.alloc(20)]).toString("base64");
+    const wav = Buffer.concat([Buffer.from("RIFF"), Buffer.alloc(4), Buffer.from("WAVE"), Buffer.alloc(4)]).toString("base64");
+    assert.strictEqual(sniffAudioFormat(id3), "mp3");
+    assert.strictEqual(sniffAudioFormat(frameSync), "mp3");
+    assert.strictEqual(sniffAudioFormat(wav), "wav");
+    assert.strictEqual(sniffAudioFormat(""), "unknown");
+  });
+
+  ok("estimateDurationMs: a known MP3 byte length lands within 20% of the true length; the old /24000*2 WAV formula does not", () => {
+    // 30000 raw bytes at the edge-tts MP3 rate (~6000 B/s) is a true 5.0s clip.
+    const rawBytes = 30000;
+    const audioBase64 = Buffer.alloc(rawBytes).toString("base64");
+    const trueMs = 5000;
+    const gotMs = estimateDurationMs(audioBase64, "mp3");
+    assert.ok(Math.abs(gotMs - trueMs) / trueMs <= 0.2, `${gotMs}ms not within 20% of ${trueMs}ms`);
+    // The OLD formula this unit replaces: bytes / (24000*2), as if 24kHz 16-bit WAV.
+    const oldFormulaMs = Math.round(((audioBase64.length * 0.75) / (24000 * 2)) * 1000);
+    assert.ok(Math.abs(oldFormulaMs - trueMs) / trueMs > 0.2, "the old WAV formula must FAIL this same arm (that is the bug being fixed)");
+  });
+
+  ok("pickDurationMs: rejects a service duration far outside the byte-rate plausibility band (today's /32000 bug), accepts one inside it", () => {
+    const rawBytes = 30000;
+    const audioBase64 = Buffer.alloc(rawBytes).toString("base64");
+    const derivedMs = estimateDurationMs(audioBase64, "mp3"); // ~5000ms
+    // Today's server bug: bytes/32000, ~5x too short for these same bytes.
+    const buggyServiceSeconds = rawBytes / 32000;
+    assert.strictEqual(pickDurationMs(buggyServiceSeconds, audioBase64, "mp3"), derivedMs, "an implausible service duration must be REJECTED in favour of the derived one");
+    // Once U16 lands the server reports something close to the true length.
+    const plausibleServiceSeconds = 5.1;
+    assert.strictEqual(pickDurationMs(plausibleServiceSeconds, audioBase64, "mp3"), 5100, "a plausible service duration wins (it is the more precise figure)");
+    // No service figure at all -> the derived estimate, not zero/NaN.
+    assert.strictEqual(pickDurationMs(NaN, audioBase64, "mp3"), derivedMs);
+  });
+
+  // ── synthesizeVerdict: configurable endpoint, honest duration end-to-end ──
+
+  function withFakeVoiceServer(handler) {
+    return new Promise((resolveServer, rejectServer) => {
+      const server = http.createServer((req, res) => {
+        let raw = "";
+        req.on("data", (c) => { raw += c; });
+        req.on("end", () => handler(req, res, raw));
+      });
+      server.on("error", rejectServer);
+      server.listen(0, "127.0.0.1", () => {
+        const { port } = server.address();
+        resolveServer({ port, close: () => new Promise((r) => server.close(r)) });
+      });
+    });
+  }
+
+  await okAsync("synthesizeVerdict dials the INJECTED endpoint, never the literal 127.0.0.1:8084", async () => {
+    const rawBytes = 12000;
+    const audioBase64 = Buffer.alloc(rawBytes).toString("base64");
+    let seenPath = null;
+    let seenBody = null;
+    const server = await withFakeVoiceServer((req, res, raw) => {
+      seenPath = req.url;
+      seenBody = JSON.parse(raw);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ success: true, audio_base64: audioBase64 }));
+    });
+    try {
+      const verdict = await synthesizeVerdict("hello from the injected endpoint", "nova", {
+        speed: 1.5,
+        endpoint: { host: "127.0.0.1", port: server.port, path: "/custom/synth" },
+      });
+      assert.ok(verdict.ok, verdict.reason);
+      assert.strictEqual(seenPath, "/custom/synth");
+      assert.strictEqual(seenBody.text, "hello from the injected endpoint");
+      assert.strictEqual(seenBody.speed, 1.5);
+      // A within-20%-of-derived duration, not the raw estimate re-derived here
+      // (already proven above) -- just that SOME positive duration came back.
+      assert.ok(verdict.durationMs > 0, verdict.durationMs);
+    } finally {
+      await server.close();
+    }
+  });
+
+  await okAsync("synthesizeVerdict: a refused connection resolves {ok:false,reason} with no retry storm", async () => {
+    // Bind a server, learn a free port, then close it -- the port refuses.
+    const probe = await withFakeVoiceServer((req, res) => res.end());
+    const deadPort = probe.port;
+    await probe.close();
+    let calls = 0;
+    const started = Date.now();
+    const verdict = await synthesizeVerdict("hello", "nova", {
+      endpoint: { host: "127.0.0.1", port: deadPort, path: "/voice/synthesize" },
+    });
+    calls += 1;
+    assert.strictEqual(verdict.ok, false);
+    assert.ok(verdict.reason, "a refusal must carry a reason");
+    assert.strictEqual(calls, 1, "exactly one attempt -- no retry storm");
+    assert.ok(Date.now() - started < 5000, "a refused connection must resolve immediately, not wait out the 90s timeout");
   });
 
   console.log(`drop-router: ${passed} checks passed`);

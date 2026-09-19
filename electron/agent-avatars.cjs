@@ -3,15 +3,26 @@
 /** Per-agent avatar assignment: Aither, Atlas, Demiurge, Lyra… each get a character,
  *  so switching who you are talking to switches who is on screen.
  *
- *  Stored in .agent-avatars.json as {agent: characterName}. Any surface that knows which
- *  agent is replying (AitherShell, adk, the MCP set_agent tool) can call this and the
- *  window follows. */
+ *  U05, owner 2026-09-18: this is now a THIN SHIM over cast-config.cjs's
+ *  `authors[*].character`, not a second store. cast.json (userData) is the
+ *  one real config plane; .agent-avatars.json (cast-config.LEGACY_AVATARS_FILE(),
+ *  the repo-root dotfile) is read ONCE, by cast-config.migrateLegacy(), to
+ *  fold its rows in — never renamed or deleted (ownerDecisions: that is the
+ *  one irreversible step in the plan and was not authorised), never read
+ *  again after that. The legacy file path is left to cast-config's own
+ *  resolution (not re-hardcoded here) so its DESK_AGENT_AVATARS_FILE test
+ *  seam still applies to this module's one migration call.
+ *
+ *  The three live consumers of this module — the room-stage io, the tray
+ *  Agents submenu, and deckState's agentCharacters (main.cjs) — keep their
+ *  EXACT signatures: getAgentAvatar/setAgentAvatar/clearAgentAvatar/loadMap
+ *  still take a bare agent name and a bare character string, so none of
+ *  them, nor the peer-held Deck.tsx that renders agentCharacters, need to
+ *  change for this to be true. */
 
 const fs = require("node:fs");
 const path = require("node:path");
-
-const ROOT = path.join(__dirname, "..");
-const MAP_FILE = path.join(ROOT, ".agent-avatars.json");
+const castConfig = require("./cast-config.cjs");
 
 /** Agents that exist in the platform roster; the map may hold any name, these are just
  *  what the menu offers out of the box.
@@ -86,38 +97,180 @@ function loadKnownAgents() {
 
 const KNOWN_AGENTS = loadKnownAgents();
 
-function loadMap() {
+/** Has cast-config's one-shot migration been asked to run, for this resolved
+ *  cast file, in THIS process? cast-config.migrateLegacy() already guards
+ *  itself with the on-disk `migratedLegacyAt` marker (so MAP_FILE is read at
+ *  most once ever, even across process restarts) — this Set is a cheap extra
+ *  tier so a hot path like listAgents() does not pay for a load()-and-return
+ *  round trip into cast-config on every call once this process already knows
+ *  the answer. Keyed on the resolved file, not global, because node --test
+ *  runs every test in one file inside a SHARED process and different arms
+ *  point DESK_CAST_FILE at different fixtures. */
+const migrationAttempted = new Set();
+
+function ensureMigrated() {
+  let file;
   try {
-    const parsed = JSON.parse(fs.readFileSync(MAP_FILE, "utf8"));
-    return parsed && typeof parsed === "object" ? parsed : {};
+    file = castConfig.CAST_FILE();
+  } catch {
+    return; // no Electron, no APPDATA, nothing resolvable — migration is skipped, not thrown
+  }
+  if (migrationAttempted.has(file)) return;
+  migrationAttempted.add(file);
+  try {
+    // No avatarsFile override: cast-config resolves .agent-avatars.json
+    // itself (LEGACY_AVATARS_FILE(), DESK_AGENT_AVATARS_FILE-overridable),
+    // which is the seam a test fixture uses to avoid folding this
+    // machine's REAL dotfile into a test's cast file.
+    castConfig.migrateLegacy({ file });
+  } catch {
+    /* fail-soft: a migration failure must never block an avatar read/write */
+  }
+}
+
+/** Pull a bare character string out of one authors[*] row. Back-compat reads
+ *  BOTH shapes on purpose: the shape cast-config's schema produces today
+ *  (a record, `{character, voice, ...}`) and a bare legacy-shaped string —
+ *  the exact shape .agent-avatars.json held, and the shape a hand-edited or
+ *  not-yet-normalised cast.json row could still carry. Neither caller of
+ *  this module has ever seen anything but a string or null; that contract
+ *  does not change here. */
+function characterOf(row) {
+  if (typeof row === "string") {
+    const trimmed = row.trim();
+    return trimmed ? trimmed : null;
+  }
+  if (row && typeof row === "object" && typeof row.character === "string" && row.character.trim()) {
+    return row.character;
+  }
+  return null;
+}
+
+/** Read authors{} straight off disk, RAW — not through cast-config.load()'s
+ *  validated snapshot. load() runs every authors[*] row through
+ *  validateRecord(), which requires an object and turns a bare legacy-shaped
+ *  string into {} (a dropped field, "expected an object"), which is exactly
+ *  the shape characterOf() above exists to still accept. Reading raw here is
+ *  what makes that contract real instead of aspirational.
+ *
+ *  Fail-soft to {} on anything — missing file, bad JSON, wrong top-level
+ *  shape — because a missing/unreadable cast file must read as "no avatars
+ *  assigned yet", not as an error surfaced to a caller that never checked
+ *  for one before. */
+function readAuthorsRaw() {
+  let file;
+  try {
+    file = castConfig.CAST_FILE();
+  } catch {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
+    const authors = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed.authors : null;
+    return authors && typeof authors === "object" && !Array.isArray(authors) ? authors : {};
   } catch {
     return {};
   }
 }
 
-function saveMap(map) {
+/** loadMap — {agent: characterString}, same flat shape .agent-avatars.json
+ *  always held, now sourced from cast.json's authors{}. Only agents with a
+ *  character actually assigned appear, same as before. */
+function loadMap() {
+  ensureMigrated();
+  const map = {};
   try {
-    fs.writeFileSync(MAP_FILE, JSON.stringify(map, null, 2));
-    return true;
+    for (const [key, row] of Object.entries(readAuthorsRaw())) {
+      const character = characterOf(row);
+      if (character) map[key] = character;
+    }
+  } catch {
+    return {};
+  }
+  return map;
+}
+
+/** saveMap — writes a WHOLE {agent: characterString} map through
+ *  cast-config.write() in one mutation, each entry landing at
+ *  authors[<normalised agent>].character. Kept for back-compat with any
+ *  caller that still holds a full map from loadMap() and wants to persist
+ *  it verbatim (setAgentAvatar/clearAgentAvatar below are the per-agent
+ *  path everything live actually uses). */
+function saveMap(map) {
+  ensureMigrated();
+  try {
+    const result = castConfig.write((draft) => {
+      if (!draft.authors || typeof draft.authors !== "object" || Array.isArray(draft.authors)) {
+        draft.authors = {};
+      }
+      for (const [agent, character] of Object.entries(map || {})) {
+        const key = castConfig.normaliseAuthor(agent);
+        if (!key) continue;
+        if (!draft.authors[key] || typeof draft.authors[key] !== "object" || Array.isArray(draft.authors[key])) {
+          draft.authors[key] = {};
+        }
+        draft.authors[key].character = character;
+      }
+      return draft;
+    });
+    return Boolean(result && result.ok);
   } catch {
     return false;
   }
 }
 
 function getAgentAvatar(agent) {
-  return loadMap()[String(agent).toLowerCase()] ?? null;
+  ensureMigrated();
+  try {
+    const key = castConfig.normaliseAuthor(agent);
+    if (!key) return null;
+    return characterOf(readAuthorsRaw()[key]);
+  } catch {
+    return null;
+  }
 }
 
 function setAgentAvatar(agent, character) {
-  const map = loadMap();
-  map[String(agent).toLowerCase()] = character;
-  return saveMap(map);
+  ensureMigrated();
+  try {
+    const key = castConfig.normaliseAuthor(agent);
+    if (!key) return false;
+    const result = castConfig.write((draft) => {
+      if (!draft.authors || typeof draft.authors !== "object" || Array.isArray(draft.authors)) {
+        draft.authors = {};
+      }
+      if (!draft.authors[key] || typeof draft.authors[key] !== "object" || Array.isArray(draft.authors[key])) {
+        draft.authors[key] = {};
+      }
+      draft.authors[key].character = character;
+      return draft;
+    });
+    return Boolean(result && result.ok);
+  } catch {
+    return false;
+  }
 }
 
+/** Removes only this agent's character, leaving its voice (and anything
+ *  else already authored on that row, e.g. presence, speed) untouched —
+ *  a full authors[key] delete would silently undo a voice the owner picked
+ *  separately. */
 function clearAgentAvatar(agent) {
-  const map = loadMap();
-  delete map[String(agent).toLowerCase()];
-  return saveMap(map);
+  ensureMigrated();
+  try {
+    const key = castConfig.normaliseAuthor(agent);
+    if (!key) return false;
+    const result = castConfig.write((draft) => {
+      const row = draft.authors && typeof draft.authors === "object" ? draft.authors[key] : null;
+      if (row && typeof row === "object" && !Array.isArray(row)) {
+        delete row.character;
+      }
+      return draft;
+    });
+    return Boolean(result && result.ok);
+  } catch {
+    return false;
+  }
 }
 
 /** Agents to show in menus: the known set plus anything already assigned.
@@ -137,5 +290,6 @@ module.exports = {
   getAgentAvatar,
   listAgents,
   loadMap,
+  saveMap,
   setAgentAvatar,
 };

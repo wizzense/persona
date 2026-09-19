@@ -94,6 +94,14 @@ const PANES = Object.freeze([
     id: "stage", label: "Stage", hint: "Who is standing, and where",
     kind: "file", file: "stage.html",
   }),
+  // Plan 40 cast pane: who appears and how they sound, authored in cast.json
+  // (U01) instead of a nested tray submenu click. `kind: "file"` on purpose --
+  // it needs no vite build, and src/** is the peer's territory this unit does
+  // not touch.
+  Object.freeze({
+    id: "cast", label: "Cast", hint: "Who appears, and how they sound",
+    kind: "file", file: "cast.html",
+  }),
   // 🚩 HOSTED, not framed, and the difference is the login. The AitherDesktop
   // shell keeps its session in the persist:living-desktop partition -- that is
   // where the vault-injected aither_auth_token lives and why the standalone

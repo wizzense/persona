@@ -342,9 +342,41 @@ function isDoorRefusal(r) {
 }
 
 /**
+ * The id the relay assigned to the record it just stored.
+ *
+ * 🚩 MEASURED in AitherRelay.py 2026-09-19, because a guess here is what made
+ * loop protection dead code: a message POST answers
+ * `{"success":true,"message":{…model_dump()}}` (AitherRelay.py:8586 ff) and a
+ * thread reply answers `{"success":true,"reply":{…},"thread_info":{…}}`
+ * (9494 ff). NEITHER carries the id at the top level, so `result.body.id` —
+ * the only thing noteOursToRoom could read before — was always undefined and
+ * the desk's own posts came back on the next poll as somebody else's words.
+ * `message_id` is accepted too: the forge-dispatch branch answers with that.
+ */
+function storedMessageId(parsed) {
+  if (!parsed || typeof parsed !== "object") return null;
+  const candidates = [
+    parsed.id,
+    parsed.message_id,
+    parsed.message && typeof parsed.message === "object" ? parsed.message.id : null,
+    parsed.reply && typeof parsed.reply === "object" ? parsed.reply.id : null,
+  ];
+  for (const c of candidates) {
+    if (typeof c === "string" && c) return c;
+  }
+  return null;
+}
+
+/**
  * One relay write with the door protocol around it. The write goes plainly
  * unless the relay has already told us this channel has a door; a 403-door
  * answer discards any cached attestation, presents once, and retries once.
+ *
+ * On 2xx the verdict CARRIES the relay's record: {ok, detail, id, body}. The
+ * id is the whole point — it is the only thing that identifies what THIS desk
+ * wrote (we post under the owner's own nick, so nick-based self-detection
+ * silences the owner instead, measured 2026-09-19). `ok` and `detail` keep
+ * their exact old meaning: main.cjs and relay-poller.cjs read only those two.
  */
 async function doorGatedWrite(channel, urlPath, payload, requestFn) {
   const door = doorFor(channel);
@@ -371,7 +403,14 @@ async function doorGatedWrite(channel, urlPath, payload, requestFn) {
     if (!a.ok) return { ok: false, detail: a.detail };
     r = await sendOnce({ [DOOR_HEADER]: a.attestation });
   }
-  if (r.status >= 200 && r.status < 300) return { ok: true, detail: "" };
+  if (r.status >= 200 && r.status < 300) {
+    let parsed;
+    try { parsed = JSON.parse(r.body); } catch { parsed = null; }
+    // A relay that answers 2xx with an unparseable body still stored the
+    // message; it just cannot tell us WHICH — id stays null and the bridge
+    // falls back to the room marker for loop protection.
+    return { ok: true, detail: "", id: storedMessageId(parsed), body: parsed };
+  }
   return {
     ok: false,
     detail: r.status === 0
@@ -616,12 +655,18 @@ async function postThreadReply(channel, messageId, text, requestFn = relayReques
     nick: RELAY_NICK,
     content: text.trim().slice(0, 1500),
   };
-  return doorGatedWrite(
+  const result = await doorGatedWrite(
     channel,
     `/v1/channels/${q}/messages/${encodeURIComponent(messageId)}/thread`,
     payload,
     requestFn,
   );
+  // A reply is ours too. The relay's history read can surface thread replies
+  // (reply_count walks the same records), and relay-poller.cjs acks every
+  // command order through THIS path — an unrecorded ack is the most repetitive
+  // thing the room could read back at the owner.
+  noteOursToRoom(result);
+  return result;
 }
 
 /** Test-only: clear the per-bearer join cache so a test can force a re-join. */

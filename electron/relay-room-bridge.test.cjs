@@ -17,6 +17,7 @@ const {
   toEvent,
   normaliseChannels,
   ROOM_MARKER,
+  MAX_TEXT,
 } = require("./relay-room-bridge.cjs");
 
 function row(over = {}) {
@@ -100,11 +101,29 @@ test("a burst is capped, newest kept", () => {
   assert.deepStrictEqual(picked.map((r) => r.id), ["m3", "m4", "m5"]);
 });
 
-test("an agent gets a voice, a human gets only presence", () => {
-  // The room stage refuses to voice actor kind `human` — that single field is
-  // the whole "never read the owner's words back to him" policy.
-  assert.strictEqual(toEvent(row({ agent: true })).actor.kind, "adk_agent");
-  assert.strictEqual(toEvent(row({ agent: false, author: "david" })).actor.kind, "human");
+test("MAX_TEXT bounds a single row too — 3 rows x 320 chars is the real ceiling, not one line", () => {
+  // A 500-char relay row is a paragraph: the room-stage BODY says a sentence,
+  // the panel keeps the whole text (module header, MAX_TEXT comment).
+  assert.equal(MAX_TEXT, 320);
+  const long = "x".repeat(500);
+  const picked = selectRows([row({ text: long, id: "long" })], freshState());
+  assert.equal(picked[0].text.length, 320);
+  assert.equal(picked[0].text, long.slice(0, 320));
+});
+
+test("an agent gets a voice ONLY once the channel policy grants it — the relay's agent flag alone never does", () => {
+  // Rule 6: MIRRORING GRANTS NOTHING. toEvent's `granted` comes from the
+  // `voiceable` selectRows already computed against cast.json, never from
+  // row.agent by itself — /v1/agent/join puts the OWNER's own nick in the
+  // trusted set, so agent===true on #agents for the owner's own messages too.
+  // A row with no policy attached (as a caller who skipped selectRows would
+  // pass) must land as `human`: presence, never a voice.
+  assert.strictEqual(toEvent(row({ agent: true })).actor.kind, "human",
+    "agent:true with no explicit grant must NOT be voiced");
+  assert.strictEqual(toEvent(row({ agent: true }), { voiceable: true }).actor.kind, "adk_agent",
+    "an explicit grant (from selectRows' policy gate) is what actually voices a row");
+  assert.strictEqual(toEvent(row({ agent: false, author: "david" }), { voiceable: true }).actor.kind, "human",
+    "the room stage refuses to voice actor kind `human` regardless of the channel grant");
 });
 
 test("an author keeps one body: the actor id is stable and namespaced", () => {
@@ -114,6 +133,20 @@ test("an author keeps one body: the actor id is stable and namespaced", () => {
   assert.strictEqual(a.actor.id, "relay:demiurge");
   assert.strictEqual(a.payload.source, "awrelay");
   assert.strictEqual(a.type, "agent_message");
+});
+
+test("toEvent always stamps payload.channel — the polled channel wins, never the row's own", () => {
+  // The origin key the cast resolver derives (`relay:<channel>[:<nick>]`) is
+  // keyed on payload.channel. It must be present even when the row carries no
+  // channel field, and the CALLER's channel (what we actually polled) must
+  // win over a channel value that arrived inside a payload the poster
+  // influences — a key read out of that field is a grant list you do not
+  // control (module header, "WHAT IS LOCALLY STAMPED").
+  const noChannelOnRow = toEvent(row({ channel: undefined }), { channel: "#agents" });
+  assert.strictEqual(noChannelOnRow.payload.channel, "#agents");
+  const rowClaimsAnother = toEvent(row({ channel: "#spoofed" }), { channel: "#agents" });
+  assert.strictEqual(rowClaimsAnother.payload.channel, "#agents",
+    "the polled channel wins over whatever the row itself claims");
 });
 
 test("the FIRST sight of a channel speaks nothing — it only sets the watermark", async () => {
@@ -152,6 +185,63 @@ test("a refused publish does NOT advance the watermark — the next tick retries
   publisher.ok = true;
   const retried = await bridge.mirror("#agents", [row({ at: 7000, id: "pending" })]);
   assert.strictEqual(retried.mirrored, 1);
+});
+
+test("a channel with no grant yields rows for presence/history, and none marked voiceable", () => {
+  // Rule 6 / the DEFAULT_CHANNEL_POLICY: mirroring is not a privilege escalation.
+  // selectRows' default policy (no cast.json entry) is {voiced:false}, so the
+  // rows still travel — the body and the panel need them — but each is
+  // stamped voiceable:false, which is what keeps them off the speakers.
+  const rows = [row({ agent: true, id: "a" }), row({ agent: true, id: "b", at: 1100 })];
+  const picked = selectRows(rows, freshState());
+  assert.strictEqual(picked.length, 2, "presence/history still get the rows");
+  assert.ok(picked.every((r) => r.voiceable === false), "none are marked voiceable");
+  assert.ok(picked.every((r) => toEvent(r, { channel: "#agents" }).actor.kind === "human"),
+    "and toEvent, fed that flag honestly, never grants a voice");
+});
+
+test("presence:'off' takes no part in the room, and does not re-queue the same rows every tick", async () => {
+  // The policy gate refuses in selectRows, EARLY — that placement is the
+  // point (selectRows' own docstring): a gate applied only at publish time
+  // would leave the watermark unmoved and re-select the same ungranted rows
+  // on every 2 s poll forever.
+  const publisher = fakePublisher();
+  const bridge = new RelayRoomBridge({
+    publisher,
+    statusFile,
+    channelPolicy: () => ({ voiced: false, presence: "off" }),
+  });
+  await bridge.mirror("#agents", []); // prime cold
+  const first = await bridge.mirror("#agents", [row({ at: 7000, id: "silenced" })]);
+  assert.strictEqual(first.mirrored, 0);
+  assert.strictEqual(publisher.sent.length, 0);
+  // The SAME row, offered again on the next tick, is not attempted a second
+  // time: the watermark already moved past it, unlike the daemon-refusal case
+  // above where the row stays pending.
+  const second = await bridge.mirror("#agents", [row({ at: 7000, id: "silenced" })]);
+  assert.strictEqual(second.skipped, 1, "handled, not re-queued as pending");
+  assert.strictEqual(publisher.sent.length, 0);
+});
+
+test("publishOut stamps ROOM_MARKER on the way out, and records the id so the round trip is recognised", async () => {
+  const bridge = new RelayRoomBridge({ publisher: fakePublisher(), statusFile });
+  const posted = [];
+  const fakePost = async (channel, text) => {
+    posted.push({ channel, text });
+    return { ok: true, detail: "", id: "out-1" };
+  };
+  const verdict = await bridge.publishOut("#agents", "the fix landed", { post: fakePost });
+  assert.strictEqual(verdict.ok, true);
+  assert.strictEqual(posted[0].text, `${ROOM_MARKER} the fix landed`);
+  assert.ok(bridge.ours.has("out-1"),
+    "the id the relay returned is recorded so mirror() recognises the round trip");
+  // AND the marker itself is what protects a bridge that never learns the id
+  // (a relay that answers 2xx with no parseable body): selectRows drops it.
+  const picked = selectRows(
+    [row({ id: "z", text: `${ROOM_MARKER} the fix landed` })],
+    freshState(),
+  );
+  assert.deepStrictEqual(picked, [], "a marked row is skipped inbound even with no id to match");
 });
 
 test("channels come from config, with or without the hash", () => {
