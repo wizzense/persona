@@ -18,7 +18,9 @@ const read = (name) => fs.readFileSync(path.join(HERE, name), "utf8");
 
 test("every pane resolves to a page that exists", () => {
   const panes = paneSources("http://127.0.0.1:5173");
-  assert.equal(panes.length, 6);
+  // The count is asserted so a pane cannot be DROPPED by an edit that only meant
+  // to reorder the rail; bump it deliberately when one is added.
+  assert.equal(panes.length, 7);
   for (const pane of panes) {
     if (pane.kind !== "file") continue;
     assert.ok(

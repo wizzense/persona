@@ -85,6 +85,15 @@ const PANES = Object.freeze([
     id: "chat", label: "Chat", hint: "The company room",
     kind: "view", query: "chat=1",
   }),
+  // Plan 40 slice G, the surface half: who is standing on the stage and the
+  // arrangements, in a list. Every other way to manage a body is a GESTURE on
+  // that body (drag, right-drag, wheel, right-click) -- useless when the body is
+  // hidden, tiny or behind a window, which is how the owner lost control of the
+  // stage in the first place.
+  Object.freeze({
+    id: "stage", label: "Stage", hint: "Who is standing, and where",
+    kind: "file", file: "stage.html",
+  }),
   // 🚩 HOSTED, not framed, and the difference is the login. The AitherDesktop
   // shell keeps its session in the persist:living-desktop partition -- that is
   // where the vault-injected aither_auth_token lives and why the standalone

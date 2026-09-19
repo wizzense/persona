@@ -34,6 +34,7 @@ const { showConsole, PANES, paneSources } = require("./console-window.cjs");
 const { ensureCommandIpc } = require("./command-window.cjs");
 const { ensureFleetIpc, getControl: getFleetControl } = require("./fleet-window.cjs");
 const { ensureSessionsIpc } = require("./sessions-window.cjs");
+const { ensureStageIpc } = require("./stage-window.cjs");
 
 const results = [];
 let judged = true;
@@ -49,6 +50,7 @@ const EXPECTED_BRIDGE = {
   sessions: "aitherSessions",
   cards: "deskBridge",
   chat: "deskBridge",
+  stage: "aitherStage",
 };
 
 async function run() {
@@ -72,6 +74,13 @@ async function run() {
   ensureFleetIpc();
   ensureCommandIpc(getFleetControl(), { createFleetWindow: () => {} });
   ensureSessionsIpc();
+  // Stubbed the way main wires it: the pane must ANSWER, not merely have a bridge.
+  ensureStageIpc({
+    bodies: () => [{ slotId: "slot0", name: "Aither", agent: "aither", resident: true }],
+    arrange: () => {},
+    focus: () => {},
+    remove: () => { throw new Error("slot0 is not a removable body"); },
+  });
 
   const paletteRan = [];
   const win = showConsole({
@@ -182,6 +191,28 @@ async function run() {
       + ".catch((e) => 'ERR ' + String(e && e.message || e))",
     );
     check("sessions pane's handler is registered", answer === "ok", String(answer).slice(0, 90));
+  }
+
+  // 3d. The Stage pane must ANSWER too -- its whole purpose is to be the path
+  //     that works when hitting a 3D body with the mouse does not.
+  await win.webContents.executeJavaScript("document.getElementById('tab-stage').click()");
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  const stageFrame = win.webContents.mainFrame.framesInSubtree
+    .find((f) => String(f.url || "").includes("stage.html"));
+  if (!stageFrame) {
+    check("stage pane answers", false, "the stage frame vanished");
+  } else {
+    const seen = await stageFrame.executeJavaScript(
+      "window.aitherStage.bodies().then((r) => (r && r.ok ? 'rows:' + r.bodies.length : JSON.stringify(r)))"
+      + ".catch((e) => 'ERR ' + String(e && e.message || e))",
+    );
+    check("stage pane's handler is registered", seen === "rows:1", String(seen).slice(0, 90));
+    const rendered = await stageFrame.executeJavaScript(
+      "({ rows: document.querySelectorAll('#list .row').length,"
+      + " arrangements: document.querySelectorAll('#arrangements .chip').length })",
+    );
+    check("stage pane lists the bodies and the arrangements",
+      rendered.rows === 1 && rendered.arrangements === 5, JSON.stringify(rendered));
   }
 
   // 3c. The Fleet pane must SAY what it is doing. Its first probe walks the
