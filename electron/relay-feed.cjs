@@ -481,6 +481,13 @@ function shapeRows(parsed, channel, limit) {
 /**
  * Recent messages in a channel, shaped for the deck: [{channel, author,
  * text, at, id, threadId, replyCount, agent}]. [] on any failure.
+ *
+ * Every successful read also feeds relay-room-bridge, which turns what is NEW
+ * in a voiced channel into room events — so the agents coordinating in #agents
+ * get bodies on the stage instead of scrolling past in a panel (owner,
+ * 2026-09-18: "make the room more connected to ... awrelay/AitherRelay").
+ * Fire-and-forget on purpose: the panel must render at poll speed whether or
+ * not the room daemon is up, and the bridge swallows its own failures.
  */
 async function fetchHistory(channel = RELAY_CHANNEL, limit = HISTORY_LIMIT, execFn = spawn) {
   const { code, stdout } = await runAwrelay(
@@ -489,9 +496,23 @@ async function fetchHistory(channel = RELAY_CHANNEL, limit = HISTORY_LIMIT, exec
   );
   if (code !== 0) return [];
   try {
-    return shapeRows(JSON.parse(stdout), channel, limit);
+    const rows = shapeRows(JSON.parse(stdout), channel, limit);
+    mirrorToRoom(channel, rows);
+    return rows;
   } catch {
     return [];
+  }
+}
+
+/** Hand fresh rows to the room bridge. Never throws, never awaited. */
+function mirrorToRoom(channel, rows) {
+  try {
+    const { sharedBridge } = require("./relay-room-bridge.cjs");
+    // RELAY_NICK is this desk's own voice in the channel: its rows are ours.
+    const bridge = sharedBridge({ selfNicks: [RELAY_NICK] });
+    void Promise.resolve(bridge.mirror(channel, rows)).catch(() => {});
+  } catch {
+    /* the bridge is optional: a desk with no room daemon just shows the panel */
   }
 }
 
