@@ -23,7 +23,7 @@
  * resolveActor() below. Two rules earn their own line:
  *
  *   FAIL SOFT, NEVER THROW. Every settings reader in this tree fails soft
- *   (loadSavedSize, sanitizeLayout, content-rating-loader). A loader that
+ *   (loadSavedSize, sanitizeLayout, content-rating). A loader that
  *   throws on a bad byte would be the only thing here that can brick launch,
  *   so a malformed file keeps the LAST GOOD snapshot, copies the bad bytes to
  *   cast.invalid.json and surfaces an `error` string — it never silently

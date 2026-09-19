@@ -159,7 +159,6 @@ const {
   listCharacters,
 } = require("./character-roster.cjs");
 const { invalidateGate, isHidden } = require("./content-rating.cjs");
-const { packContentDir } = require("./content-rating-loader.cjs");
 const fs = require("node:fs");
 const {
   getAgentAvatar,
@@ -1341,18 +1340,13 @@ function isValidCharacterName(name) {
   );
 }
 
-/** Where a visible character's model file lives (roster dir first, then the
- *  content pack), as a file:// URL — the deck's preview renderer loads it.
+/** Where a visible character's model file lives (the roster dir -- the mature
+ *  content pack that used to be a second candidate is gone from the product,
+ *  2026-09-19), as a file:// URL — the deck's preview renderer loads it.
  *  Only main knows the real roster root, so the deck never builds these. */
 function characterModelUrl(name) {
   if (!isValidCharacterName(name)) return null;
   const candidates = [path.join(ROSTER_DIR, name, "model.vrm")];
-  try {
-    const packDir = packContentDir("persona:characters-mature", "persona");
-    if (packDir) candidates.push(path.join(packDir, "characters", name, "model.vrm"));
-  } catch {
-    /* no pack configured — roster only */
-  }
   for (const candidate of candidates) {
     try {
       if (fs.existsSync(candidate)) return pathToFileURL(candidate).href;
