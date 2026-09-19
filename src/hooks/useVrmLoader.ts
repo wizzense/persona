@@ -83,8 +83,24 @@ const MODEL_GRAVITY_MIN_CHAINS = 3;
 
 interface DeskSpringJoint {
   bone?: DeskNamedNode;
-  settings?: { gravityPower?: number; gravityDir?: THREE.Vector3 };
+  settings?: { gravityPower?: number; gravityDir?: THREE.Vector3; stiffness?: number };
 }
+
+/** 🚩 A DEFAULT MAY NEVER OUT-PULL THE STIFFNESS THAT HOLDS THE CHAIN'S SHAPE
+ *  (owner, 2026-09-18: the fox tail is "not properly resting on the buttocks,
+ *  it's like completely in the butt cheeks"). three-vrm adds `stiffness * dt`
+ *  along the chain's rest direction and `gravityPower * dt` downward, so a
+ *  joint settles atan(gravity / stiffness) off its authored pose, and that
+ *  angle compounds down the chain. gold-kitsune's tail authors stiffness 0.1:
+ *  against a 1.0 default that is atan(10) ≈ 84° per joint — the tail loses its
+ *  authored backward arc entirely and falls vertically THROUGH the body. Capped
+ *  at 1x stiffness it droops ~45° per joint and keeps the arc. The cap is
+ *  measured against the result the owner accepted on 2026-09-11: the demon tail
+ *  authors stiffness 0.64, and 0.6 gravity put its tip at y −0.80 — a real
+ *  droop. It applies ONLY to a value we invent; an authored pull is never
+ *  capped, and a chain with no stiffness at all is a rope, so it takes the
+ *  full default. */
+const MAX_DEFAULT_GRAVITY_PER_STIFFNESS = 1.0;
 
 /** The gravity this model authors for itself, or null when it authors none. */
 export function modelAuthoredGravity(joints: DeskSpringJoint[]): number | null {
@@ -124,7 +140,9 @@ export function applyDefaultSpringGravity(vrm: VRM) {
     const gravity = Number(settings.gravityPower);
     if (gravity >= AUTHORED_GRAVITY_FLOOR) continue;
     if (modelGravity !== null && gravity === modelGravity) continue;
-    settings.gravityPower = fallback;
+    const stiffness = Number(settings.stiffness);
+    const cap = stiffness > 0 ? stiffness * MAX_DEFAULT_GRAVITY_PER_STIFFNESS : Infinity;
+    settings.gravityPower = Math.min(fallback, cap);
     settings.gravityDir = settings.gravityDir ?? new THREE.Vector3(0, -1, 0);
   }
 }

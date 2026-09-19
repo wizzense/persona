@@ -126,6 +126,26 @@ describe('applyDefaultSpringGravity', () => {
     }
   });
 
+  it('never invents a gravity stronger than the stiffness holding the chain (2026-09-18 tail)', () => {
+    // gold-kitsune's tail authors stiffness 0.1. At the 1.0 default that is
+    // atan(10) ~= 84 degrees of deflection per joint, compounding over seven
+    // joints: the tail lost its backward arc and fell through the buttocks.
+    // The demon tail (stiffness 0.64) is unaffected — 0.64 still droops it.
+    const joints = new Set([
+      { bone: { name: 'tail_1' }, settings: { gravityPower: 0, stiffness: 0.1 } },
+      { bone: { name: 'J_Opt_C_FoxTail1_01' }, settings: { gravityPower: 0, stiffness: 0.64 } },
+      { bone: { name: 'J_Sec_Hair1_04' }, settings: { gravityPower: 0, stiffness: 2 } },
+      { bone: { name: 'rope_1' }, settings: { gravityPower: 0, stiffness: 0 } },
+    ]);
+    const vrm = { springBoneManager: { joints } } as unknown as VRM;
+    applyDefaultSpringGravity(vrm);
+    const byName = Object.fromEntries([...joints].map((j) => [j.bone.name, j.settings.gravityPower]));
+    expect(byName['tail_1']).toBeCloseTo(0.1);
+    expect(byName['J_Opt_C_FoxTail1_01']).toBeCloseTo(0.64);
+    expect(byName['J_Sec_Hair1_04']).toBe(1.0); // cap above the default: unchanged
+    expect(byName['rope_1']).toBe(1.0); // no stiffness at all: a rope, full default
+  });
+
   it('is a no-op on a vrm with no manager or no joints', () => {
     expect(() => applyDefaultSpringGravity({} as VRM)).not.toThrow();
     expect(() => applyDefaultSpringGravity({ springBoneManager: {} } as unknown as VRM)).not.toThrow();
