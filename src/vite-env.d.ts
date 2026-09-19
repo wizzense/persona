@@ -46,6 +46,10 @@ type AvatarBridgeEvent =
   // drops the slot's stored spot/scale so it returns to the default transform.
   | { type: 'focus-avatar'; slotId: string | null }
   | { type: 'reset-avatar-layout'; slotId: string }
+  // Plan 40 slice G: main names an ARRANGEMENT and the renderer places every
+  // live body (src/stage/arrangements.ts holds the geometry, beside the bounds).
+  // `slotId` is the subject for `focus`; `pair` names the two for `pair`.
+  | { type: 'stage-arrange'; arrangement: string; slotId?: string | null; pair?: string[] }
   // Drop-to-avatar (2026-08-29): main TTS'd the drop verdict and hands the
   // audio over for playback + lip sync in the avatar window.
   | { type: 'speak'; audioBase64: string; slotId?: string };

@@ -8,6 +8,7 @@ import { Avatar, type AvatarProps } from './Avatar';
 import type { AnimationType } from '../animation-catalog';
 import { calculateFullBodyFraming } from '../camera-framing';
 import { POSITION_BOUND, useAvatarLayout, type AvatarTransform } from '../hooks/useAvatarLayout';
+import { arrange, isArrangement } from '../stage/arrangements';
 import { useAvatarDrag } from '../hooks/useAvatarDrag';
 import { freeSpot } from '../hooks/stagePlacement';
 import { anyoneAudible } from '../hooks/voiceLevels';
@@ -501,9 +502,28 @@ export function Scene(props: SceneProps) {
         focusSlot(event.slotId);
       } else if (event.type === 'reset-avatar-layout') {
         clearSlot(event.slotId);
+      } else if (event.type === 'stage-arrange') {
+        // Plan 40 slice G. Main names an ARRANGEMENT; the geometry lives here,
+        // beside the bounds it has to respect (src/stage/arrangements.ts).
+        const name = event.arrangement;
+        if (!isArrangement(name)) return;
+        const ids = ['slot0', ...extraSlots.map((slot) => slot.slotId)];
+        if (name === 'reset') {
+          ids.forEach((id) => clearSlot(id));
+          return;
+        }
+        const placed = arrange(name, ids, {
+          focus: event.slotId ?? null,
+          pair: Array.isArray(event.pair) ? event.pair : [],
+        });
+        for (const [id, transform] of Object.entries(placed)) {
+          setPosition(id, transform.position);
+          setScale(id, transform.scale);
+          setYaw(id, transform.yaw ?? 0);
+        }
       }
     });
-  }, [focusSlot, clearSlot]);
+  }, [focusSlot, clearSlot, extraSlots, setPosition, setScale, setYaw]);
 
   return (
     <Canvas

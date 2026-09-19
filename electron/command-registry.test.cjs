@@ -104,9 +104,15 @@ test("every command either has a handler or a dynamic submenu", () => {
       continue;
     }
     // A command is answerable three ways: a case in the switch, a dynamic submenu,
-    // or DATA on its own record (the size presets) that the default branch applies.
+    // or DATA on its own record -- the size presets and the stage arrangements --
+    // which the default branch applies without a case per entry.
     if (command.size) {
-      assert.match(body, /command\.size/, "the data-driven branch is gone");
+      assert.match(body, /command\.size/, "the size branch is gone");
+      continue;
+    }
+    if (command.arrangement) {
+      assert.match(body, /command\.arrangement/, "the arrangement branch is gone");
+      assert.match(body, /stage-arrange/, "nothing sends the arrangement to the renderer");
       continue;
     }
     assert.ok(body.includes(`"${command.id}"`), `${command.id} has no case in runCommand`);

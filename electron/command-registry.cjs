@@ -103,6 +103,30 @@ const COMMANDS = Object.freeze([
     id: "characters.pick", label: "Characters", group: "avatar",
     surfaces: ["tray", "avatar-menu", "palette"], dynamic: true,
   }),
+  // Plan 40 slice G, "think macOS Stage Manager": the verbs for a stage with
+  // several bodies on it. Arranging four avatars by dragging each one is the work
+  // this removes, and on a frameless overlay it is also the least accurate work
+  // there is. The renderer owns the geometry; a command only names the shape.
+  Object.freeze({
+    id: "stage.row", label: "Stage: line them up", group: "stage",
+    surfaces: ["tray", "avatar-menu", "palette"], arrangement: "row",
+  }),
+  Object.freeze({
+    id: "stage.arc", label: "Stage: gather in an arc", group: "stage",
+    surfaces: ["tray", "avatar-menu", "palette"], arrangement: "arc",
+  }),
+  Object.freeze({
+    id: "stage.pair", label: "Stage: face each other", group: "stage",
+    surfaces: ["tray", "avatar-menu", "palette"], arrangement: "pair",
+  }),
+  Object.freeze({
+    id: "stage.focus", label: "Stage: focus one, others step back", group: "stage",
+    surfaces: ["tray", "avatar-menu", "palette"], arrangement: "focus",
+  }),
+  Object.freeze({
+    id: "stage.reset", label: "Stage: reset everyone", group: "stage",
+    surfaces: ["tray", "avatar-menu", "palette"], arrangement: "reset",
+  }),
   Object.freeze({
     id: "about", label: "About Desk", group: "app",
     surfaces: ["tray", "palette"],
