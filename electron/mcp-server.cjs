@@ -375,7 +375,7 @@ function createDeskMcpServer({
       // `listAnimations` was accepted as a constructor option and passed in by main.cjs,
       // but NO tool ever exposed it — so `FILE:<name>.vrma` playback worked while a caller
       // had no way to discover which packs existed short of listing the assets directory
-      // by hand. Registering it closes that (D-1660 in the AitherOS ledger).
+      // by hand. Registering it closes that (recorded in the AitherOS ledger).
       async () => textResult(JSON.stringify(await listAnimations())),
     );
   }

@@ -35,7 +35,7 @@ body {
   background: transparent !important;
 }
 
-/* D-2170: frameless (frame:false in main.cjs) means there is no title bar
+/* Measured: frameless (frame:false in main.cjs) means there is no title bar
    to grab, so the window looked undraggable. A drag region on the CANVAS
    was tried first and reverted — Windows treats an app-region:drag element
    as non-client area (same as a title bar), which swallows right-click
@@ -988,3 +988,110 @@ body {
   font-weight: 600;
 }
 .deck-drop-reason { color: #e06060; }
+
+/* ── Wakes (awrise scheduled jobs) ───────────────────────────────────────── */
+/* The clock line sits ABOVE the rows on purpose: a list of enabled jobs with a
+   silent clock reads as healthy and is not. When it is stale it is the loudest
+   thing in the section. */
+.deck-wake-clock {
+  font-size: 11px;
+  color: var(--deck-muted);
+  margin: 0 0 8px;
+}
+
+.deck-wake-clock-ok {
+  color: var(--deck-muted);
+}
+
+.deck-wake-clock-stale {
+  color: #f0b429;
+  font-weight: 700;
+}
+
+/* Liveness NOT measured (no token, daemon error, cached snapshot, never ticked).
+   It must not read as the healthy state, and must not cry wolf like the stale
+   state either — it is an absence of evidence, and looks like one. */
+.deck-wake-clock-unknown {
+  color: var(--deck-muted);
+  font-style: italic;
+  opacity: 0.85;
+}
+
+.deck-wake-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  background: var(--deck-panel);
+  border: 1px solid var(--deck-edge);
+  border-radius: 10px;
+  padding: 8px 12px;
+  margin-bottom: 6px;
+}
+
+.deck-wake-badge {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--deck-edge);
+  color: var(--deck-muted);
+}
+
+.deck-wake-ok { color: var(--deck-muted); }
+.deck-wake-running { color: var(--deck-accent); border-color: var(--deck-accent); }
+.deck-wake-failing { color: #ff6b6b; border-color: #ff6b6b; }
+.deck-wake-disabled { color: var(--deck-muted); opacity: 0.7; }
+
+.deck-wake-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: hidden;
+}
+
+.deck-wake-text strong {
+  font-size: 12px;
+  color: var(--deck-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.deck-wake-meta {
+  font-size: 10.5px;
+  color: var(--deck-muted);
+}
+
+.deck-wake-reason {
+  font-size: 10.5px;
+  color: var(--deck-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.deck-wake-actions {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 6px;
+}
+
+.deck-wake-actions .deck-btn {
+  padding: 4px 8px;
+  font-size: 11px;
+}
+
+.deck-wake-actions .deck-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.deck-wake-note {
+  font-size: 10.5px;
+  color: var(--deck-accent);
+}

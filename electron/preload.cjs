@@ -112,7 +112,7 @@ window.addEventListener(
   true,
 );
 
-// D-2170: LEFT-drag rotates the model (OrbitControls) and RIGHT-drag pans it,
+// Measured: LEFT-drag rotates the model (OrbitControls) and RIGHT-drag pans it,
 // so neither button is free to move the WINDOW without breaking something
 // that already works. A dedicated top-edge drag strip exists but is only
 // 18px tall and easy to miss ("the avatar is trapped in a box" — reported

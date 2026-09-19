@@ -224,7 +224,7 @@ function detachAvatarToOwnWindow(slotId) {
   return true;
 }
 
-// D-2170: 430x680 on a 3840x2112 4K display reads as "trapped in a tiny box" —
+// Measured: 430x680 on a 3840x2112 4K display reads as "trapped in a tiny box" —
 // it's genuinely small on a real screen, independent of camera framing. Kept
 // the same ~0.63 aspect ratio, just bigger. Still user-resizable (min 320x480).
 const WINDOW_WIDTH = 600;
@@ -238,7 +238,7 @@ const WINDOW_HEIGHT = 950;
 // true and useless. Fixed the same way window MOVE already is: menu items +
 // shortcuts driving setBounds() directly, not relying on an edge nobody can
 // click. Size is persisted so it survives a restart instead of resetting to
-// the D-2170 default every time.
+// the measured default every time.
 // The presets themselves live in command-registry.cjs, as commands: the palette
 // lists them one per row while the menus nest them, and a second copy of the
 // numbers here is how one surface ends up offering a size another does not.
@@ -561,7 +561,7 @@ function createWindow() {
   ipcMain.removeAllListeners("desk:context-menu");
   ipcMain.on("desk:context-menu", () => createDeckWindow());
 
-  // D-2170: middle-mouse-drag window move (preload.cjs sends these). Tracks
+  // Measured: middle-mouse-drag window move (preload.cjs sends these). Tracks
   // the mouse's screen position at drag start against the window's own
   // position at drag start, then repositions by the same delta on every
   // move — works from anywhere on the avatar, doesn't touch left/right

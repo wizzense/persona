@@ -362,7 +362,7 @@ async function routeDrop({ filePath, mime = "" }, deps = {}) {
 /**
  * TTS the verdict so the avatar can SPEAK it. Direct host route to
  * AitherVoice's /voice/synthesize with return_base64 (proven 2026-08-29;
- * the gateway synthesize_speech tool is ledgered D-2296). Fail-soft:
+ * the gateway synthesize_speech tool is ledgered). Fail-soft:
  * {ok:false, reason} when the voice service is unreachable.
  *
  * ENDPOINT (U06, owner: nothing was listening on 127.0.0.1:8084 on a bare
