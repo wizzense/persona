@@ -613,6 +613,17 @@ function emitToRenderer(event) {
   pendingRendererEvents.delete(event.type);
 }
 
+/** Fire-and-forget event at the avatar window (menus, stage arrangements).
+ *  Module level, because a stage command can come from the tray or the palette
+ *  as well as from a body's own menu -- as a local it was a ReferenceError the
+ *  moment the arrangement was picked anywhere but the menu (caught by eslint,
+ *  no-undef, before it ever ran). */
+function sendToAvatar(type, payload = {}) {
+  if (avatarWindow && !avatarWindow.isDestroyed()) {
+    avatarWindow.webContents.send("desk:event", { type, ...payload });
+  }
+}
+
 function handleBridgeEvent(event) {
   if (event.type !== "audio-level" || event.level > 0.025) debugLog("event", event);
   if (event.type === "state") {
@@ -961,12 +972,6 @@ function popupAvatarMenu(slotId) {
   const displayName = isDefault ? getActiveCharacter() || "Aither" : info.name;
   const agent = isDefault ? "aither" : info.agent || null;
 
-  const sendToAvatar = (type, payload) => {
-    if (avatarWindow && !avatarWindow.isDestroyed()) {
-      avatarWindow.webContents.send("desk:event", { type, ...payload });
-    }
-  };
-
   // CONSOLIDATED 2026-09-13 (owner: "all 3 of these menus so full of
   // duplication"). This menu is about THIS AVATAR and the window it lives in —
   // nothing here launches a fleet surface, because the console does that and
@@ -980,6 +985,19 @@ function popupAvatarMenu(slotId) {
     { label: "Frame everyone", click: () => sendToAvatar("focus-avatar", { slotId: null }) },
     { label: "Reset position & size", click: () => sendToAvatar("reset-avatar-layout", { slotId }) },
     { type: "separator" },
+    {
+      // Plan 40 slice G. Same commands as the tray and the palette, but here the
+      // FOCUS subject is the body that was right-clicked -- the one case where a
+      // gesture carries information the other surfaces cannot.
+      label: "Stage",
+      submenu: commandRegistry.groupFor("stage", "avatar-menu").map((command) => ({
+        label: commandRegistry.labelOf(command, {}),
+        click: () => sendToAvatar("stage-arrange", {
+          arrangement: command.arrangement,
+          slotId: command.arrangement === "focus" ? slotId : null,
+        }),
+      })),
+    },
     {
       label: "Avatar window",
       submenu: [
@@ -1304,7 +1322,7 @@ function refreshTrayMenu() {
     submenus: { "characters.pick": buildCharacterMenu() },
     // The tray NESTS the size group under one label; the palette lists the same
     // six commands one row each. Both read the registry.
-    nest: { "window-size": "Avatar window size" },
+    nest: { "window-size": "Avatar window size", stage: "Stage" },
   });
   // A dead voice listener is otherwise INVISIBLE (see voice-tray-line.cjs). It is
   // a STATUS line rather than a command, so it is spliced in after the avatar
@@ -1336,11 +1354,16 @@ function runCommand(id) {
       isQuitting = true;
       return void app.quit();
     default: {
-      // The size presets are DATA on their registry records, so a new preset is
-      // one line there and needs no case here.
+      // The size presets and the stage arrangements are DATA on their registry
+      // records, so a new one is a line there and needs no case here.
       const command = commandRegistry.byId(id);
       if (command && command.size) {
         return void setWindowSize(command.size.width, command.size.height);
+      }
+      if (command && command.arrangement) {
+        // The renderer holds the geometry (src/stage/arrangements.ts) because the
+        // stage bounds live there; main names the shape and nothing else.
+        return void sendToAvatar("stage-arrange", { arrangement: command.arrangement });
       }
       console.warn(`[desk] command ${id} has no handler`);
     }
