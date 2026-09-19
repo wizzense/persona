@@ -972,6 +972,36 @@ function removeAvatarSlot(slotId) {
  * one the owner is looking at. Everything else is a name forwarded to the
  * renderer, which owns the geometry.
  */
+/**
+ * Push-to-talk from ANYWHERE (Plan 40 slice C).
+ *
+ * The mic already existed, inside the deck's chat box: to talk to the agents the
+ * owner had to find that pane first. The capture happens in the avatar window
+ * (open whenever the overlay is), and main only says when to listen -- so the
+ * tray item, the palette and the global hotkey all reach the same recorder.
+ *
+ * A transcript is not a note: it goes through commandAction, which the room
+ * publisher is attached to, so the owner's words land in the company room as the
+ * OWNER and the reply is spoken back by whichever agent answers.
+ */
+let listenState = "idle";
+
+function listeningNow() {
+  return listenState === "listening";
+}
+
+function toggleListening() {
+  if (!avatarWindow || avatarWindow.isDestroyed()) {
+    // Nothing to capture with: show the avatar rather than failing silently,
+    // which is what "the hotkey does nothing" looked like.
+    showOverlay();
+  }
+  const want = !listeningNow();
+  listenState = want ? "listening" : "transcribing";
+  sendToAvatar("listen", { listening: want });
+  refreshTrayMenu();
+}
+
 function stagePaneImpl() {
   return {
     bodies: () => [
@@ -1357,7 +1387,12 @@ function refreshTrayMenu() {
   // capability to one menu and forgetting the others is no longer possible by
   // hand. Slice 1 of docs/UX-REIMPLEMENTATION.md.
   const trayTemplate = commandRegistry.buildMenu("tray", runCommand, {
-    ctx: { avatarShown, decisionsWaiting: waiting, decisionsTotal: openDecisions.length },
+    ctx: {
+      avatarShown,
+      decisionsWaiting: waiting,
+      decisionsTotal: openDecisions.length,
+      listening: listeningNow(),
+    },
     submenus: { "characters.pick": buildCharacterMenu() },
     // The tray NESTS the size group under one label; the palette lists the same
     // six commands one row each. Both read the registry.
@@ -1386,6 +1421,7 @@ function runCommand(id) {
     case "console.open": return void openConsole();
     case "inbox.open": return void openInbox();
     case "avatar.toggle": return void toggleOverlay();
+    case "voice.talk": return void toggleListening();
     case "window.size.bigger": return void growWindow();
     case "window.size.smaller": return void shrinkWindow();
     case "about": return void showAboutDesk();
@@ -1716,6 +1752,7 @@ function openConsole() {
     // stale set -- and no capability is gesture-only again.
     commands: {
       list: () => commandRegistry.paletteRows({
+        listening: listeningNow(),
         avatarShown: Boolean(avatarWindow && !avatarWindow.isDestroyed() && avatarWindow.isVisible()),
         decisionsWaiting: decisionCards.actionableCount(openDecisions),
         decisionsTotal: openDecisions.length,
@@ -1987,6 +2024,26 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
     // Push-to-talk (2026-08-29): base64 wav from the renderer's MediaRecorder
     // -> temp file -> gateway transcribe_audio -> transcript. Errors return
     // "ERROR: ..." strings so the renderer can show them without a throw.
+    // Slice C. The transcript is a COMMAND: commandAction is what the room
+    // publisher is attached to, so the owner's words appear in the room and the
+    // answer comes back through the avatar's voice.
+    ipcMain.handle("desk:voice-heard", async (_event, text) => {
+      const said = String(text || "").trim();
+      listenState = "idle";
+      refreshTrayMenu();
+      if (!said) return { ok: false, error: "nothing was heard" };
+      debugLog("voice heard", said.slice(0, 120));
+      try {
+        const result = await commandAction(said, { source: "voice" });
+        return { ok: true, text: said, result };
+      } catch (error) {
+        return { ok: false, text: said, error: String((error && error.message) || error) };
+      }
+    });
+    ipcMain.on("desk:voice-listen-state", (_event, state) => {
+      listenState = String(state || "idle");
+      refreshTrayMenu();
+    });
     ipcMain.handle("desk:voice-transcribe", async (_event, audioB64, format) => {
       try {
         if (typeof audioB64 !== "string" || audioB64.length === 0) {
@@ -2426,6 +2483,9 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
       ["CommandOrControl+Shift+A", toggleOverlay],
       ["CommandOrControl+Shift+=", () => growWindow()],
       ["CommandOrControl+Shift+-", () => shrinkWindow()],
+      // Slice C's "anywhere hotkey": the owner can talk to the agents without
+      // finding a window first, which was the whole complaint.
+      ["CommandOrControl+Shift+Space", () => toggleListening()],
     ]) {
       if (!globalShortcut.register(accel, action)) {
         console.warn(`[desk] shortcut ${accel} is held by another app -- use the tray menu`);
