@@ -50,6 +50,17 @@ type AvatarBridgeEvent =
   // live body (src/stage/arrangements.ts holds the geometry, beside the bounds).
   // `slotId` is the subject for `focus`; `pair` names the two for `pair`.
   | { type: 'stage-arrange'; arrangement: string; slotId?: string | null; pair?: string[] }
+  // An AUTHORED placement for one body (the cast file, relayed by main). Every
+  // field is optional and an omitted one leaves that component alone; yaw is
+  // radians. Bounds are the renderer's (stagePlacement.authoredFields) -- an
+  // out-of-stage value is DROPPED, never clamped.
+  | {
+      type: 'place-avatar';
+      slotId: string;
+      position?: [number, number, number];
+      scale?: number;
+      yaw?: number;
+    }
   // Drop-to-avatar (2026-08-29): main TTS'd the drop verdict and hands the
   // audio over for playback + lip sync in the avatar window.
   | { type: 'speak'; audioBase64: string; slotId?: string }
