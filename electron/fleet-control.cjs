@@ -31,6 +31,10 @@ const { readGpuHolders, summarizeHolders } = require("./gpu-holders.cjs");
 const { probeSurfaces, summarizeSurfaces } = require("./surfaces.cjs");
 
 const DEFAULT_SCRIPT = "C:\\AitherOS-Fresh\\.DEPLOYMENT\\scripts\\llm-quiesce-distro.py";
+// ARC command and control -- the same script awsh and the terminal run, so a
+// verb means one thing everywhere (owner, 2026-09-19: "i need controls in awdesk
+// and awsh"). It runs in-distro here; from a Windows shell it hops itself.
+const DEFAULT_ARC_SCRIPT = "C:\\AitherOS-Fresh\\.DEPLOYMENT\\scripts\\arc-control.py";
 const DEFAULT_DISTRO = "Debian";
 
 /** action -> argv for the distro script. `down`/`up` are the owner-facing names
@@ -43,11 +47,20 @@ const ACTIONS = Object.freeze({
   resume: ["resume"],
   up: ["resume"],
   adopt: ["adopt"],
+  // ARC: is it solving and learning; start it (hold off, mask off, both units);
+  // run it NOW for four hours despite quiet hours (attributed, self-expiring);
+  // stop the solver (the world model stays up).
+  "arc-status": ["status"],
+  "arc-start": ["start"],
+  "arc-now": ["start", "--now", "4"],
+  "arc-stop": ["stop"],
 });
+/** Which script an action belongs to. Everything not named here is the fleet script. */
+const ARC_ACTIONS = new Set(["arc-status", "arc-start", "arc-now", "arc-stop"]);
 const ACTION_NAMES = Object.freeze(Object.keys(ACTIONS));
 
 /** Actions that take the fleet (or part of it) DOWN — the window double-confirms these. */
-const DESTRUCTIVE = new Set(["down", "gaming", "quiesce"]);
+const DESTRUCTIVE = new Set(["down", "gaming", "quiesce", "arc-stop"]);
 
 /** How long an action may run before the child is killed. `up` after `down`
  *  reloads a 26 GB model through gpu-boot (measured 2026-09-07: 590 s was not
@@ -60,6 +73,10 @@ const TIMEOUT_MS = Object.freeze({
   down: 900_000,
   resume: 1_800_000,
   up: 1_800_000,
+  "arc-status": 300_000,
+  "arc-start": 400_000,
+  "arc-now": 400_000,
+  "arc-stop": 200_000,
 });
 
 /** `C:\a\b.py` -> `/mnt/c/a/b.py` (the distro's view of a Windows file). */
@@ -80,10 +97,15 @@ function distroName() {
 /** The exact process to spawn for an action. The whole distro invocation is
  *  ONE string through `sh -c` (the WSL-hop rule: argv is never re-parsed, and
  *  a `$var` or backtick that survives the hop is a different command). */
-function buildCommand(action, { script = scriptPath(), distro = distroName() } = {}) {
+function arcScriptPath() {
+  return process.env.AWDESK_ARC_SCRIPT || DEFAULT_ARC_SCRIPT;
+}
+
+function buildCommand(action, { script = scriptPath(), arcScript = arcScriptPath(), distro = distroName() } = {}) {
   const argv = ACTIONS[action];
   if (!argv) throw new Error(`unknown fleet action "${action}" (one of ${ACTION_NAMES.join(", ")})`);
-  const inner = `python3 '${toDistroPath(script)}' ${argv.join(" ")} --json`;
+  const which = ARC_ACTIONS.has(action) ? arcScript : script;
+  const inner = `python3 '${toDistroPath(which)}' ${argv.join(" ")} --json`;
   return { file: "wsl.exe", args: ["-d", distro, "-u", "root", "sh", "-c", inner] };
 }
 
@@ -150,11 +172,12 @@ function classify(status) {
 }
 
 class FleetControl extends EventEmitter {
-  constructor({ spawnImpl = spawn, script, distro, gpuHolders = null, surfaces = null,
+  constructor({ spawnImpl = spawn, script, arcScript, distro, gpuHolders = null, surfaces = null,
     statusRetries = 1, retryDelayMs = 8000 } = {}) {
     super();
     this.spawnImpl = spawnImpl;
     this.script = script;
+    this.arcScript = arcScript;
     this.distro = distro;
     // Patience for the STATUS probe only (actions are long and deliberate by
     // design; retrying those would be retrying the owner's click). The probe is
@@ -197,7 +220,7 @@ class FleetControl extends EventEmitter {
         error: `busy: "${this.current.action}" has been running ${Math.round((Date.now() - this.current.startedAt) / 1000)} s`,
       });
     }
-    const cmd = buildCommand(action, { script: this.script, distro: this.distro });
+    const cmd = buildCommand(action, { script: this.script, arcScript: this.arcScript, distro: this.distro });
     this.current = { action, startedAt: Date.now() };
     this.emit("progress", { action, line: `> ${action}`, phase: "start" });
     this.inflight = new Promise((resolve) => {
@@ -319,6 +342,7 @@ class FleetControl extends EventEmitter {
 module.exports = {
   ACTIONS,
   ACTION_NAMES,
+  ARC_ACTIONS,
   DESTRUCTIVE,
   TIMEOUT_MS,
   FleetControl,

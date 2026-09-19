@@ -4,15 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
 
-const {
-  ACTIONS,
-  FleetControl,
-  buildCommand,
-  classify,
-  parseVerdict,
-  summarize,
-  toDistroPath,
-} = require("./fleet-control.cjs");
+const { ACTIONS, FleetControl, buildCommand, classify, parseVerdict, summarize, toDistroPath, ARC_ACTIONS, DESTRUCTIVE } = require("./fleet-control.cjs");
 
 test("toDistroPath maps a Windows path to the distro's /mnt view", () => {
   assert.equal(toDistroPath("C:\\AitherOS-Fresh\\.DEPLOYMENT\\scripts\\x.py"),
@@ -23,13 +15,20 @@ test("toDistroPath maps a Windows path to the distro's /mnt view", () => {
 
 test("buildCommand crosses the WSL hop as ONE sh -c string and knows every action", () => {
   for (const action of Object.keys(ACTIONS)) {
-    const cmd = buildCommand(action, { script: "C:\\x\\q.py", distro: "Debian" });
+    const cmd = buildCommand(action, { script: "C:\\x\\q.py", arcScript: "C:\\x\\arc.py", distro: "Debian" });
     assert.equal(cmd.file, "wsl.exe");
     assert.deepEqual(cmd.args.slice(0, 6), ["-d", "Debian", "-u", "root", "sh", "-c"]);
     assert.equal(cmd.args.length, 7, "the whole invocation is the single sh -c argument");
-    assert.match(cmd.args[6], /^python3 '\/mnt\/c\/x\/q\.py' /);
+    // ARC verbs run the ARC script; everything else the fleet script. One verb,
+    // one script -- a desk button and an awsh command execute the same file.
+    const expectScript = ARC_ACTIONS.has(action) ? /^python3 '\/mnt\/c\/x\/arc\.py' / : /^python3 '\/mnt\/c\/x\/q\.py' /;
+    assert.match(cmd.args[6], expectScript);
     assert.match(cmd.args[6], / --json$/);
   }
+  assert.match(buildCommand("arc-now", { arcScript: "C:\\x\\arc.py" }).args[6], / start --now 4 --json$/);
+  assert.match(buildCommand("arc-stop", { arcScript: "C:\\x\\arc.py" }).args[6], / stop --json$/);
+  assert.ok(DESTRUCTIVE.has("arc-stop"), "stopping the solver is a confirm-first verb");
+  assert.ok(!DESTRUCTIVE.has("arc-now"), "running ARC is not destructive");
   assert.match(buildCommand("down", { script: "C:\\x\\q.py" }).args[6], / quiesce --all --json$/);
   assert.match(buildCommand("up", { script: "C:\\x\\q.py" }).args[6], / resume --json$/);
   assert.match(buildCommand("gaming", { script: "C:\\x\\q.py" }).args[6], / quiesce --deep --json$/);

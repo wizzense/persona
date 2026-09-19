@@ -1405,7 +1405,7 @@ function refreshTrayMenu() {
     submenus: { "characters.pick": buildCharacterMenu() },
     // The tray NESTS the size group under one label; the palette lists the same
     // six commands one row each. Both read the registry.
-    nest: { "window-size": "Avatar window size", stage: "Stage" },
+    nest: { "window-size": "Avatar window size", stage: "Stage", fleet: "Fleet", arc: "ARC" },
   });
   // A dead voice listener is otherwise INVISIBLE (see voice-tray-line.cjs). It is
   // a STATUS line rather than a command, so it is spliced in after the avatar
@@ -1448,6 +1448,11 @@ function runCommand(id) {
         // The renderer holds the geometry (src/stage/arrangements.ts) because the
         // stage bounds live there; main names the shape and nothing else.
         return void sendToAvatar("stage-arrange", { arrangement: command.arrangement });
+      }
+      if (command && command.fleet) {
+        // Fleet and ARC verbs: the same runner the Fleet window, the bridge and
+        // MCP fleet_control use, so a tray click is not a second implementation.
+        return void runFleetCommand(command);
       }
       console.warn(`[desk] command ${id} has no handler`);
     }
@@ -1701,6 +1706,44 @@ function createChatWindow() {
 /** ONE entry point for every fleet surface (window buttons, tray, bridge
  *  /fleet/*, MCP fleet_control, `game`): the verb lands on the single
  *  FleetControl so nothing can race a second mask/unmask pass. */
+/** A menu row that changes the fleet: destructive verbs confirm first (a tray
+ *  menu has no second click to arm), every verb raises the Fleet window so the
+ *  outcome is SEEN, and the verdict lands in the tray tooltip. */
+async function runFleetCommand(command) {
+  const verb = command.fleet;
+  if (command.destructive) {
+    const { response } = await dialog.showMessageBox({
+      type: "warning",
+      buttons: ["Cancel", commandRegistry.labelOf(command)],
+      defaultId: 0,
+      cancelId: 0,
+      message: commandRegistry.labelOf(command),
+      detail: verb === "arc-stop"
+        ? "Stops the ARC solver. The world model stays up; training pauses until ARC is started again."
+        : "Stops the GPU models and routine runners. The rest of the fleet stays up.",
+    });
+    if (response !== 1) return;
+  }
+  const verdict = await fleetAction(verb, { fresh: verb === "arc-status" });
+  if (verb.startsWith("arc-")) {
+    const wm = verdict.world_model || {};
+    const unitState = verdict.units && verdict.units["aither-arcsolver"];
+    const summary = verdict.cannotJudge
+      ? `ARC: could not look (${verdict.error || "no answer"})`
+      : `ARC: ${verdict.verdict || (verdict.ok ? "OK" : "DEGRADED")}`
+        + (unitState ? ` · solver ${typeof unitState === "string" ? unitState : (unitState.active || unitState.state || "?")}` : "")
+        + (wm.train_steps != null ? ` · steps ${wm.train_steps}` : "")
+        + ((verdict.problems || []).length ? ` · ${verdict.problems.join("; ")}` : "");
+    console.log(`[desk] ${verb}: ${summary}`);
+    tray?.setToolTip(summary);
+    if (verb === "arc-status" && !command.destructive) {
+      void dialog.showMessageBox({ type: verdict.ok ? "info" : "warning", message: summary,
+        detail: (verdict.problems || []).join("\n") || undefined });
+    }
+  }
+  return verdict;
+}
+
 async function fleetAction(action, { fresh = false } = {}) {
   const control = getFleetControl();
   if (action === "open_panel" || action === "open") {

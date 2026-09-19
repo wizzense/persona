@@ -13,6 +13,7 @@ const {
   commandsFor,
   conformance,
 } = require("./command-registry.cjs");
+const { ACTIONS: fleetActions } = require("./fleet-control.cjs");
 
 test("the inventory itself is healthy", () => {
   assert.deepEqual(conformance(), []);
@@ -113,6 +114,15 @@ test("every command either has a handler or a dynamic submenu", () => {
     if (command.arrangement) {
       assert.match(body, /command\.arrangement/, "the arrangement branch is gone");
       assert.match(body, /stage-arrange/, "nothing sends the arrangement to the renderer");
+      continue;
+    }
+    if (command.fleet) {
+      // Fleet/ARC verbs are data too: the verb must be one the runner knows (or
+      // the panel opener), and the default branch must hand it over.
+      assert.match(body, /command\.fleet/, "the fleet branch is gone");
+      assert.match(body, /runFleetCommand/, "nothing routes a fleet verb to fleetAction");
+      const known = command.fleet === "open_panel" || Object.prototype.hasOwnProperty.call(fleetActions, command.fleet);
+      assert.ok(known, `${command.id} names fleet verb "${command.fleet}" that fleet-control.cjs does not know`);
       continue;
     }
     assert.ok(body.includes(`"${command.id}"`), `${command.id} has no case in runCommand`);

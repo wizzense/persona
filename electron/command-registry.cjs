@@ -43,6 +43,9 @@ const SURFACES = Object.freeze(["tray", "avatar-menu", "palette"]);
  * - `surfaces`  where it appears. Order within a surface follows this array.
  * - `group`     menu separators are derived from a group change, never placed by hand.
  * - `dynamic`   the submenu is built by main at popup time (roster, sizes).
+ * - `fleet`     a fleet/ARC verb (fleet-control.cjs ACTIONS, or `open_panel`);
+ *               main routes it to fleetAction. `destructive` marks the ones a
+ *               menu should not fire on a slip -- main confirms those first.
  * - `whySingle` REQUIRED when `surfaces` names exactly one. It is the review note
  *               that stops another gesture-only affordance being born by accident.
  */
@@ -136,6 +139,41 @@ const COMMANDS = Object.freeze([
   Object.freeze({
     id: "stage.reset", label: "Stage: reset everyone", group: "stage",
     surfaces: ["tray", "avatar-menu", "palette"], arrangement: "reset",
+  }),
+  // Command and control (owner, 2026-09-19: "i need controls in awdesk and awsh").
+  // Until today the fleet verbs lived on ONE page (the Fleet window) and the ARC
+  // verbs lived nowhere a human could click -- a solver that had been stopped
+  // twice overnight could only be restarted from a shell. A `fleet` record is
+  // DATA: main hands the verb to the same runner the Fleet window and the MCP
+  // `fleet_control` tool use, so a tray click, a palette row, an awsh command
+  // and an agent call execute the same script with the same argv.
+  Object.freeze({
+    id: "fleet.open", label: "Fleet window…", group: "fleet",
+    surfaces: ["tray", "palette"], fleet: "open_panel",
+  }),
+  Object.freeze({
+    id: "fleet.gaming", label: "GPU quiet (game on)", group: "fleet",
+    surfaces: ["tray", "palette"], fleet: "gaming", destructive: true,
+  }),
+  Object.freeze({
+    id: "fleet.resume", label: "GPU resume (game off)", group: "fleet",
+    surfaces: ["tray", "palette"], fleet: "resume",
+  }),
+  Object.freeze({
+    id: "arc.status", label: "ARC: is it solving?", group: "arc",
+    surfaces: ["tray", "palette"], fleet: "arc-status",
+  }),
+  Object.freeze({
+    id: "arc.now", label: "ARC: run now (4 h, overrides quiet hours)", group: "arc",
+    surfaces: ["tray", "palette"], fleet: "arc-now",
+  }),
+  Object.freeze({
+    id: "arc.start", label: "ARC: start (respect quiet hours)", group: "arc",
+    surfaces: ["tray", "palette"], fleet: "arc-start",
+  }),
+  Object.freeze({
+    id: "arc.stop", label: "ARC: stop the solver", group: "arc",
+    surfaces: ["tray", "palette"], fleet: "arc-stop", destructive: true,
   }),
   Object.freeze({
     id: "about", label: "About Desk", group: "app",
