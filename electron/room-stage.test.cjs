@@ -209,10 +209,19 @@ function harness({ rows = [], durationMs = 0, resolveOverrides = {} } = {}) {
     },
   };
   stage = new RoomStage(io, { idleMs: 5000, gapMs: 0, cooldownMs: 1000, maxBodies: 2, now: () => clock });
+  /** Resolve once `calls.speak` holds `n` utterances, or fail loudly after 3 s. */
+  const drained = async (n) => {
+    const deadline = Date.now() + 3000;
+    while (calls.speak.length < n) {
+      if (Date.now() > deadline) throw new Error(`only ${calls.speak.length}/${n} utterances spoken after 3 s`);
+      await new Promise((r) => setTimeout(r, 10));
+    }
+  };
   return {
     stage,
     calls,
     io,
+    drained,
     tick: (ms) => {
       clock += ms;
     },
@@ -238,7 +247,12 @@ test("RoomStage: a new agent gets a body, speaks in its voice, and the resident 
     { seq: 8, agent: true, author: "awdesk", kind: "agent_message", text: "done" },
   ];
   await h.stage.tick();
-  await new Promise((r) => setTimeout(r, 50));
+  // Wait for the QUEUE to drain, not for a fixed 50 ms: node --test runs every
+  // file as a parallel child process, and under that contention the third
+  // utterance landed after the sleep -- green alone, red in the full run
+  // (measured 2026-09-19 in the publish worktree: 437/1, the same file 30/0 by
+  // itself three times). A deadline keeps a real hang visible.
+  await h.drained(3);
   assert.deepEqual(h.calls.spawn.map((c) => [c[0], c[2]]), [["room-atlas", "atlas"], ["room-lyra", "lyra"]]);
   assert.equal(h.calls.spawn[1][1], "cara", "an assignedAvatar-style resolution is honoured");
   assert.notEqual(h.calls.spawn[0][1], RESIDENT_CHARACTER);
