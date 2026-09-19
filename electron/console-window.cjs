@@ -35,6 +35,8 @@
  */
 
 const path = require("node:path");
+// WHERE each surface is, with one owner (slice 2 of docs/UX-REIMPLEMENTATION.md).
+const { createSurfaceState } = require("./surface-state.cjs");
 
 // Required lazily, not at module load: `paneSources`, `detachedIds` and
 // `callWindow` are the parts worth asserting, and they are pure. A top-level
@@ -139,17 +141,62 @@ function resolveRendererUrl() {
   return "";
 }
 
-/** Which panes are currently living in their own window. */
-function detachedIds() {
-  return PANES.filter((pane) => {
+/**
+ * WHERE each pane is, with one owner (surface-state.cjs, slice 2 of
+ * docs/UX-REIMPLEMENTATION.md). The windows stay the oracle: `observeWindows()`
+ * asks them, `reconcile` folds the answer in, and subscribers hear about it once.
+ */
+const surfaces = createSurfaceState(PANES.map((pane) => pane.id));
+
+/** What the window creators say right now -- reality, not intention. */
+function observeWindows() {
+  const observed = {};
+  for (const pane of PANES) {
     const impl = windowsImpl[pane.id];
     try {
-      return Boolean(impl && typeof impl.isOpen === "function" && impl.isOpen());
+      observed[pane.id] = Boolean(impl && typeof impl.isOpen === "function" && impl.isOpen());
     } catch {
-      return false;
+      observed[pane.id] = false;
     }
-  }).map((pane) => pane.id);
+  }
+  return observed;
 }
+
+/** Which panes are currently living in their own window, re-measured. */
+function detachedIds() {
+  surfaces.reconcile(observeWindows());
+  return surfaces.detached();
+}
+
+// 🚩 The owner can close a detached window from ITS OWN title bar, and nothing
+// tells the console. Until now the rail only re-derived itself when the console
+// regained focus, so a pane could sit there labelled "detached" with no window
+// behind it -- reachable again only by clicking a Reattach that closes nothing.
+// While the console is open, poll the creators and push the map when it moves.
+const SURFACE_POLL_MS = 1000;
+let surfacePollTimer = null;
+
+function startSurfaceWatch() {
+  if (surfacePollTimer) return;
+  surfacePollTimer = setInterval(() => {
+    if (!consoleWindow || consoleWindow.isDestroyed()) return stopSurfaceWatch();
+    surfaces.reconcile(observeWindows());
+  }, SURFACE_POLL_MS);
+  surfacePollTimer.unref?.();
+}
+
+function stopSurfaceWatch() {
+  if (!surfacePollTimer) return;
+  clearInterval(surfacePollTimer);
+  surfacePollTimer = null;
+}
+
+// One subscriber, one message: the shell never keeps a second copy of this map,
+// it renders the one it is handed.
+surfaces.subscribe((snapshot) => {
+  if (!consoleWindow || consoleWindow.isDestroyed()) return;
+  consoleWindow.webContents.send("desk:console-surfaces", snapshot);
+});
 
 /**
  * Wait until a pane's window actually reaches the state we asked for.
@@ -341,8 +388,11 @@ function showConsole({ windows = {}, rendererUrl = null, urls = {}, autoShow = t
   });
   consoleWindow.on("closed", () => {
     dropHostedViews();
+    stopSurfaceWatch();
     consoleWindow = null;
   });
+  // The rail must follow the windows even when nobody touches the console.
+  startSurfaceWatch();
 
   void consoleWindow.loadFile(path.join(__dirname, "console.html"));
   return consoleWindow;

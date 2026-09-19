@@ -233,6 +233,24 @@ async function run() {
     && afterBack.frame === true && afterBack.state !== "detached"
     && afterBack.badge !== "detached",
     JSON.stringify(afterBack));
+
+  // 5. 🚩 The window goes away WITHOUT the console being told (the owner closing a
+  //    detached window from its own title bar). The rail used to keep saying
+  //    "detached" until the console next regained focus, offering a Reattach that
+  //    closes nothing -- the pane was stranded with no way back. Slice 2 gives the
+  //    map one owner in main, which pushes it; nothing here touches the console.
+  await win.webContents.executeJavaScript("document.getElementById('btn-detach').click()");
+  await new Promise((resolve) => setTimeout(resolve, 900));
+  const beforeExternal = await win.webContents.executeJavaScript(stageState);
+  // Closed from OUTSIDE: no IPC, no focus, nothing tells the console.
+  const at = opened.indexOf("fleet");
+  if (at >= 0) opened.splice(at, 1);
+  await new Promise((resolve) => setTimeout(resolve, 2500));   // one poll + slack
+  const afterExternal = await win.webContents.executeJavaScript(stageState);
+  check("a detached window closed from OUTSIDE un-detaches the rail",
+    beforeExternal.state === "detached" && afterExternal.state !== "detached"
+    && afterExternal.placeholders === 0 && afterExternal.frame === true,
+    `${JSON.stringify(beforeExternal)} -> ${JSON.stringify(afterExternal)}`);
 }
 
 app.whenReady().then(run).catch((error) => {

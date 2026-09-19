@@ -270,9 +270,24 @@ btnDetach.addEventListener("click", () => selected && detach(selected));
 btnReattach.addEventListener("click", () => selected && reattach(selected));
 document.getElementById("btn-close").addEventListener("click", () => window.aitherConsole.close());
 
-// The owner can close a detached window directly, so the rail is re-derived from
-// main every time this window regains focus. A rail that says "detached" over a
-// window that no longer exists strands the pane with no way back.
+// WHERE each pane is has ONE owner in main (surface-state.cjs); the shell renders
+// the map it is handed rather than keeping a second copy. This arrives whenever
+// the map moves -- including when the owner closes a detached window from its own
+// title bar, which the rail used to miss until the console next regained focus.
+if (typeof window.aitherConsole.onSurfaces === "function") {
+  window.aitherConsole.onSurfaces((snapshot) => {
+    const next = new Set(Object.entries(snapshot)
+      .filter(([, presentation]) => presentation === "detached")
+      .map(([paneId]) => paneId));
+    const same = next.size === detached.size && [...next].every((id) => detached.has(id));
+    if (same) return;
+    detached = next;
+    render();
+    reportStage();
+  });
+}
+// Backstop for a push that never arrived (a reload mid-transition): re-derive on
+// focus. Cheap, and it cannot contradict main -- it asks main.
 window.addEventListener("focus", () => { void refreshDetached(); });
 // A hosted view is positioned in DEVICE pixels by main and knows nothing about
 // the window changing size -- without this it stays the old size over the new
