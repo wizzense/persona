@@ -371,7 +371,7 @@ async function scanAsync(dir = storeDir(), cache = new Map(), fsp = fs.promises,
         const stamp = `${info.mtimeNs}:${info.size}`;
         const hit = cache.get(name);
         if (hit && hit.stamp === stamp) return;
-        let card = null;
+        let card;
         try {
           card = cardFromRaw(JSON.parse(await fsp.readFile(path.join(dir, name), "utf8")));
         } catch {
