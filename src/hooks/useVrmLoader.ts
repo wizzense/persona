@@ -27,19 +27,105 @@ import { holdModel, releaseModel } from './vrmLifetime';
 const DEFAULT_SPRING_GRAVITY = 1.0;
 const AUTHORED_GRAVITY_FLOOR = 0.1;
 
+/** 🚩 THE DEFAULT IS FOR CHAINS THAT HANG — NOT FOR BODY JIGGLE CHAINS
+ *  (owner, 2026-09-18: "the breasts are hanging straight down and swinging,
+ *  super stretched"). A bust/breast/butt chain is authored AT its rest shape
+ *  and its zero gravity is DESIGN, not omission: the author gives it a high
+ *  stiffness so it returns to that shape and only wobbles. Measured on the
+ *  on-stage gold-kitsune (VRM 0.x): `bust_root.L/R`, stiffness 2, gravityPower
+ *  0, four joints per side authored FORWARD (z +0.27, +0.17, +0.11, +0.11).
+ *  Flooring that to 1.0 deflects every joint ~atan(1/2) ≈ 26° downward and the
+ *  deflections COMPOUND down the chain — the tip ends up near-vertical and the
+ *  skin stretches with it. The same chains exist on the VRM 1.0 models, which
+ *  omit gravityPower outright (`J_Sec_L_Bust`, `J_Sec_R_Bust` — 252 omitting
+ *  joints across the roster), so this cannot be decided by VRM version: hair
+ *  chains author 0 on VRM 0.x models too (dozens of `J_Sec_Hair1_*`) and still
+ *  need the default. The chain's identity is the only honest discriminator. */
+const BODY_JIGGLE_CHAIN = /bust|breast|boob|mune|oppai|chichi|pectoral|butt|oshiri|胸|尻/i;
+const BODY_JIGGLE_ANCESTRY = 3;
+
+interface DeskNamedNode { name?: string; parent?: DeskNamedNode | null }
+
+function isBodyJiggleChain(bone: DeskNamedNode | undefined | null): boolean {
+  let node = bone;
+  for (let hop = 0; node && hop <= BODY_JIGGLE_ANCESTRY; hop += 1) {
+    if (BODY_JIGGLE_CHAIN.test(node.name ?? '')) return true;
+    node = node.parent;
+  }
+  return false;
+}
+
+/** 🚩 THE DEFAULT IS THE MODEL'S OWN GRAVITY WHEN IT HAS ONE — 1.0 only when
+ *  it has none (owner, 2026-09-18, minutes after the bust fix: "hair physics
+ *  are fucked up now"). The 0.1 floor above was generalised from ONE model:
+ *  the demon authors 0.06 on 2 chains of 14 and 0 everywhere else, so that
+ *  epsilon really was a rounding artifact. Measured across the roster, a
+ *  sub-floor value is far more often a model-wide authored choice:
+ *
+ *    model                  joints  mode  share  chains
+ *    smg-1-0-vrm-1             365  0.05   0.77      40   → authored, respect
+ *    tfw-2-0-vrm1              156  0.10   0.21       6   → authored, respect
+ *    demon-vrm-1-0              65  0.06   0.15       2   → artifact, lift
+ *    gold-kitsune                7  none      -       0   → nothing, lift
+ *
+ *  smg's hair is authored to hang at 0.05 against stiffness 0.95; forcing 1.0
+ *  put gravity ABOVE the stiffness that holds the strand's shape (equilibrium
+ *  deflection per joint is atan(gravity/stiffness), and it compounds down an
+ *  8-joint chain) — the curls collapsed into a stretched curtain. A value the
+ *  model uses widely (>= 20% of its joints AND on >= 3 separate chains) is its
+ *  house default: chains with NO gravity inherit THAT, not 1.0, so a model
+ *  never ends up with 0.05 strands hanging beside 1.0 ones. Only a model with
+ *  no such value falls back to VRoid Studio's 1.0 — which is the demon tail
+ *  case the default was written for (2026-09-11) and it still measures the
+ *  same there. */
+const MODEL_GRAVITY_MIN_SHARE = 0.2;
+const MODEL_GRAVITY_MIN_CHAINS = 3;
+
+interface DeskSpringJoint {
+  bone?: DeskNamedNode;
+  settings?: { gravityPower?: number; gravityDir?: THREE.Vector3 };
+}
+
+/** The gravity this model authors for itself, or null when it authors none. */
+export function modelAuthoredGravity(joints: DeskSpringJoint[]): number | null {
+  const bones = new Set(joints.map((joint) => joint.bone).filter(Boolean));
+  const share = new Map<number, number>();
+  const chains = new Map<number, number>();
+  for (const joint of joints) {
+    const gravity = Number(joint.settings?.gravityPower);
+    if (!(gravity > 0)) continue;
+    share.set(gravity, (share.get(gravity) ?? 0) + 1);
+    // A chain ROOT is a joint whose bone's parent is not itself a spring bone.
+    if (!bones.has(joint.bone?.parent as DeskNamedNode)) {
+      chains.set(gravity, (chains.get(gravity) ?? 0) + 1);
+    }
+  }
+  let best: number | null = null;
+  for (const [gravity, count] of share) {
+    if (count < joints.length * MODEL_GRAVITY_MIN_SHARE) continue;
+    if ((chains.get(gravity) ?? 0) < MODEL_GRAVITY_MIN_CHAINS) continue;
+    if (best === null || count > (share.get(best) ?? 0)) best = gravity;
+  }
+  return best;
+}
+
 export function applyDefaultSpringGravity(vrm: VRM) {
   const manager = vrm.springBoneManager as unknown as {
-    joints?: Set<{
-      settings?: { gravityPower?: number; gravityDir?: THREE.Vector3 };
-    }>;
+    joints?: Set<DeskSpringJoint>;
   } | null;
   if (!manager?.joints) return;
-  for (const joint of manager.joints) {
-    const settings = joint.settings;
-    if (settings && !(Number(settings.gravityPower) >= AUTHORED_GRAVITY_FLOOR)) {
-      settings.gravityPower = DEFAULT_SPRING_GRAVITY;
-      settings.gravityDir = settings.gravityDir ?? new THREE.Vector3(0, -1, 0);
-    }
+  // Body jiggle chains are out of the vote as well as out of the default: on
+  // tfw the bust and butt chains alone carry a third of the authored values.
+  const joints = [...manager.joints].filter((joint) => joint.settings && !isBodyJiggleChain(joint.bone));
+  const modelGravity = modelAuthoredGravity(joints);
+  const fallback = modelGravity ?? DEFAULT_SPRING_GRAVITY;
+  for (const joint of joints) {
+    const settings = joint.settings!;
+    const gravity = Number(settings.gravityPower);
+    if (gravity >= AUTHORED_GRAVITY_FLOOR) continue;
+    if (modelGravity !== null && gravity === modelGravity) continue;
+    settings.gravityPower = fallback;
+    settings.gravityDir = settings.gravityDir ?? new THREE.Vector3(0, -1, 0);
   }
 }
 
