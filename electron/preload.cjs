@@ -56,6 +56,12 @@ contextBridge.exposeInMainWorld("deskBridge", {
   // Returns the transcript text, or an error string starting with "ERROR:".
   voiceTranscribe: (audioB64, format) =>
     ipcRenderer.invoke("desk:voice-transcribe", audioB64, format ?? "wav"),
+  // Slice C: a finished transcript. Main posts it to the company room as the
+  // OWNER and runs it as a command, so the answer comes back through the same
+  // mouth the agents speak with.
+  voiceHeard: (text) => ipcRenderer.invoke("desk:voice-heard", String(text || "")),
+  /** listening / transcribing / idle / error: … — for the tray's mic line. */
+  voiceListenState: (state) => ipcRenderer.send("desk:voice-listen-state", String(state || "")),
   // Drop-to-avatar (2026-08-29): the renderer hands the File object over;
   // the sandboxed renderer cannot see paths, so webUtils resolves it here.
   // Main MIME-routes it (image/audio/video/doc) and resolves with the

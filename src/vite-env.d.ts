@@ -52,7 +52,11 @@ type AvatarBridgeEvent =
   | { type: 'stage-arrange'; arrangement: string; slotId?: string | null; pair?: string[] }
   // Drop-to-avatar (2026-08-29): main TTS'd the drop verdict and hands the
   // audio over for playback + lip sync in the avatar window.
-  | { type: 'speak'; audioBase64: string; slotId?: string };
+  | { type: 'speak'; audioBase64: string; slotId?: string }
+  // Plan 40 slice C ("I also want to be able to talk back"): main asks the avatar
+  // window to open the mic, because that window is up whenever the overlay is --
+  // the deck's chat box was the only place the owner could speak from before.
+  | { type: 'listen'; listening: boolean };
 
 /** The verdict of a dropped file (preload -> main -> drop-router). */
 interface DropVerdict {
@@ -72,5 +76,11 @@ interface Window {
     close(): void;
     avatarContextMenu(slotId: string): void;
     subscribe(listener: (event: AvatarBridgeEvent) => void): () => void;
+    /** Mic clip -> gateway transcribe_audio -> text (or an "ERROR: …" string). */
+    voiceTranscribe?(audioB64: string, format: string): Promise<string>;
+    /** A finished transcript: main posts it to the room and answers it. */
+    voiceHeard?(text: string): Promise<unknown>;
+    /** Listening / transcribing / idle, so the tray can say what the mic is doing. */
+    voiceListenState?(state: string): void;
   };
 }

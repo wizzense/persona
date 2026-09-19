@@ -99,6 +99,16 @@ const COMMANDS = Object.freeze([
     id: "window.size.smaller", label: "Smaller  (Ctrl+Shift+-)", group: "window-size",
     surfaces: ["tray", "avatar-menu", "palette"],
   }),
+  // Plan 40 slice C. The mic used to live in ONE React section of the deck, so
+  // talking to the agents meant finding that pane first. The label says which
+  // way the toggle goes, because a button that might already be listening is a
+  // button nobody presses.
+  Object.freeze({
+    id: "voice.talk", group: "avatar",
+    surfaces: ["tray", "avatar-menu", "palette"],
+    label: (ctx = {}) => (ctx.listening ? "Stop listening  (Ctrl+Shift+Space)"
+      : "Talk to the agents  (Ctrl+Shift+Space)"),
+  }),
   Object.freeze({
     id: "characters.pick", label: "Characters", group: "avatar",
     surfaces: ["tray", "avatar-menu", "palette"], dynamic: true,
