@@ -40,6 +40,112 @@ describe('applyDefaultSpringGravity', () => {
     expect(joint.settings.gravityDir).toBe(authoredDir);
   });
 
+  it('never pulls a body jiggle chain down — its zero gravity is design (2026-09-18 bust regression)', () => {
+    // gold-kitsune authors bust_root.L/R at stiffness 2, gravityPower 0, four
+    // joints per side pointing FORWARD. Flooring that to 1.0 deflects every
+    // joint ~26 degrees down and the deflections compound: "hanging straight
+    // down and swinging, super stretched". VRM 1.0 models omit the field on the
+    // same chains (J_Sec_L_Bust), so the chain name, not the file version, is
+    // the discriminator.
+    const bust = { name: 'bust_root.L' };
+    const bustTip = { name: 'bust.L.001_end', parent: { name: 'bust.L.001', parent: bust } };
+    const vroidBust = { name: 'J_Sec_L_Bust1' };
+    const butt = { name: 'Butt_L_4' };
+    const hair = { name: 'J_Sec_Hair1_03', parent: { name: 'J_Bip_C_Head' } };
+    const joints = new Set([
+      { bone: bust, settings: { gravityPower: 0 } as { gravityPower?: number } },
+      { bone: bustTip, settings: {} as { gravityPower?: number } },
+      { bone: vroidBust, settings: {} as { gravityPower?: number } },
+      { bone: butt, settings: { gravityPower: 0 } as { gravityPower?: number } },
+      { bone: hair, settings: { gravityPower: 0 } as { gravityPower?: number } },
+    ]);
+    const vrm = { springBoneManager: { joints } } as unknown as VRM;
+    applyDefaultSpringGravity(vrm);
+    const byName = Object.fromEntries([...joints].map((j) => [j.bone.name, j.settings.gravityPower]));
+    expect(byName['bust_root.L']).toBe(0);
+    expect(byName['bust.L.001_end']).toBeUndefined();
+    expect(byName['J_Sec_L_Bust1']).toBeUndefined();
+    expect(byName['Butt_L_4']).toBe(0);
+    expect(byName['J_Sec_Hair1_03']).toBe(1.0);
+  });
+
+  /** `chains` chains of `perChain` joints each, every joint at `gravityPower`. */
+  function chainsOf(prefix: string, chains: number, perChain: number, gravityPower: number) {
+    interface Bone { name: string; parent?: Bone }
+    const joints: Array<{ bone: Bone; settings: { gravityPower: number } }> = [];
+    for (let c = 0; c < chains; c += 1) {
+      let parent: Bone | undefined = { name: `${prefix}_anchor${c}` }; // head/hips: not a spring bone
+      for (let j = 0; j < perChain; j += 1) {
+        const bone: Bone = { name: `${prefix}${c}_${j}`, parent };
+        joints.push({ bone, settings: { gravityPower } });
+        parent = bone;
+      }
+    }
+    return joints;
+  }
+
+  it('inherits the gravity the MODEL authors widely, instead of forcing 1.0 (2026-09-18 hair regression)', () => {
+    // smg-1-0-vrm-1 authors 0.05 on 40 hair chains (0.77 of its joints) against
+    // stiffness 0.95: the strands are modelled hanging and barely swing. Forcing
+    // 1.0 put gravity above the stiffness holding their shape and the curls
+    // collapsed into a stretched curtain. Chains with no gravity inherit the
+    // model's own value, so nothing hangs at 0.05 beside a neighbour at 1.0.
+    const joints = new Set([
+      ...chainsOf('BCHair', 8, 8, 0.05),
+      ...chainsOf('hair_Back', 2, 4, 0),
+    ]);
+    const vrm = { springBoneManager: { joints } } as unknown as VRM;
+    applyDefaultSpringGravity(vrm);
+    for (const joint of joints) expect(joint.settings.gravityPower).toBeCloseTo(0.05);
+  });
+
+  it('still lifts an epsilon that only TWO chains carry (the demon 0.06)', () => {
+    // 12 joints of 65 (0.15) on 2 chains — below both the 0.2 share and the
+    // 3-chain floor, so it stays an artifact and the model falls back to 1.0.
+    const joints = new Set([
+      ...chainsOf('J_Sec_Hair1_1', 2, 6, 0.06),
+      ...chainsOf('J_Sec_Hair1_0', 10, 5, 0),
+    ]);
+    const vrm = { springBoneManager: { joints } } as unknown as VRM;
+    applyDefaultSpringGravity(vrm);
+    for (const joint of joints) expect(joint.settings.gravityPower).toBe(1.0);
+  });
+
+  it('keeps body jiggle chains out of the model vote as well as out of the default', () => {
+    // tfw-2-0-vrm1 carries 0.1 on its bust/butt chains. Those must not become
+    // the model's house gravity for the hair that authors none.
+    const joints = new Set([
+      ...chainsOf('Breast_L_', 3, 4, 0.1),
+      ...chainsOf('hair_side', 3, 4, 0),
+    ]);
+    const vrm = { springBoneManager: { joints } } as unknown as VRM;
+    applyDefaultSpringGravity(vrm);
+    for (const joint of joints) {
+      const expected = joint.bone.name.startsWith('Breast') ? 0.1 : 1.0;
+      expect(joint.settings.gravityPower).toBe(expected);
+    }
+  });
+
+  it('never invents a gravity stronger than the stiffness holding the chain (2026-09-18 tail)', () => {
+    // gold-kitsune's tail authors stiffness 0.1. At the 1.0 default that is
+    // atan(10) ~= 84 degrees of deflection per joint, compounding over seven
+    // joints: the tail lost its backward arc and fell through the buttocks.
+    // The demon tail (stiffness 0.64) is unaffected — 0.64 still droops it.
+    const joints = new Set([
+      { bone: { name: 'tail_1' }, settings: { gravityPower: 0, stiffness: 0.1 } },
+      { bone: { name: 'J_Opt_C_FoxTail1_01' }, settings: { gravityPower: 0, stiffness: 0.64 } },
+      { bone: { name: 'J_Sec_Hair1_04' }, settings: { gravityPower: 0, stiffness: 2 } },
+      { bone: { name: 'rope_1' }, settings: { gravityPower: 0, stiffness: 0 } },
+    ]);
+    const vrm = { springBoneManager: { joints } } as unknown as VRM;
+    applyDefaultSpringGravity(vrm);
+    const byName = Object.fromEntries([...joints].map((j) => [j.bone.name, j.settings.gravityPower]));
+    expect(byName['tail_1']).toBeCloseTo(0.1);
+    expect(byName['J_Opt_C_FoxTail1_01']).toBeCloseTo(0.64);
+    expect(byName['J_Sec_Hair1_04']).toBe(1.0); // cap above the default: unchanged
+    expect(byName['rope_1']).toBe(1.0); // no stiffness at all: a rope, full default
+  });
+
   it('is a no-op on a vrm with no manager or no joints', () => {
     expect(() => applyDefaultSpringGravity({} as VRM)).not.toThrow();
     expect(() => applyDefaultSpringGravity({ springBoneManager: {} } as unknown as VRM)).not.toThrow();

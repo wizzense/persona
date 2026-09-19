@@ -124,6 +124,25 @@
     </button>
   </div>
 
+  <div class="actions" id="arc-actions">
+    <button id="b-arc-now" class="up" data-action="arc-now">
+      <span class="t">ARC run now</span>
+      <span class="d">Solve + learn for 4 h, overriding quiet hours and any GPU hold. Attributed, self-expiring.</span>
+    </button>
+    <button id="b-arc-start" class="up" data-action="arc-start">
+      <span class="t">ARC start</span>
+      <span class="d">Unmask the solver and world model; quiet hours (23:00–07:00 PT) still apply.</span>
+    </button>
+    <button id="b-arc-status" class="quiet" data-action="arc-status">
+      <span class="t">ARC status</span>
+      <span class="d">Is it solving and is the world model learning (train_steps climbing)?</span>
+    </button>
+    <button id="b-arc-stop" class="down" data-action="arc-stop">
+      <span class="t">ARC stop</span>
+      <span class="d">Stop the solver. The world model stays up.</span>
+    </button>
+  </div>
+
   <div class="row">
     <button id="b-refresh">Refresh status</button>
     <button id="b-adopt" title="The fleet was stopped by hand (masks exist but nothing is recorded): record the masked set so Fleet UP knows what to start">Adopt hand-stopped state</button>
@@ -145,7 +164,7 @@
   const log = $("log");
   const pill = $("pill");
   const buttons = [...document.querySelectorAll("button[data-action]")];
-  const DESTRUCTIVE = new Set(["down", "gaming"]);
+  const DESTRUCTIVE = new Set(["down", "gaming", "arc-stop"]);
   let armed = null;      // button awaiting its confirming second click
   let armTimer = null;
   let busy = null;
@@ -336,6 +355,12 @@
     try {
       const verdict = await window.fleet.run(action);
       if (verdict.busy) { line(verdict.error, "err"); }
+      else if (action.startsWith("arc-") && !verdict.cannotJudge) {
+        const wm = verdict.world_model || {};
+        const steps = wm.train_steps != null ? ` · train_steps ${wm.train_steps}` : "";
+        const problems = (verdict.problems || []).length ? ` · ${verdict.problems.join("; ")}` : "";
+        line(`${action}: ${verdict.verdict || (verdict.ok ? "ok" : "refused")}${steps}${problems}`, verdict.ok ? "ok" : "err");
+      }
       else if (!verdict.ok) {
         line(`${action}: ${verdict.error || "refused"}`, "err");
         for (const f of verdict.failed || []) line(`  FAILED ${f.name || f.unit}: ${f.error || f.reason || ""}`, "err");

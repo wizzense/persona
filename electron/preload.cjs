@@ -56,6 +56,12 @@ contextBridge.exposeInMainWorld("deskBridge", {
   // Returns the transcript text, or an error string starting with "ERROR:".
   voiceTranscribe: (audioB64, format) =>
     ipcRenderer.invoke("desk:voice-transcribe", audioB64, format ?? "wav"),
+  // Slice C: a finished transcript. Main posts it to the company room as the
+  // OWNER and runs it as a command, so the answer comes back through the same
+  // mouth the agents speak with.
+  voiceHeard: (text) => ipcRenderer.invoke("desk:voice-heard", String(text || "")),
+  /** listening / transcribing / idle / error: … — for the tray's mic line. */
+  voiceListenState: (state) => ipcRenderer.send("desk:voice-listen-state", String(state || "")),
   // Drop-to-avatar (2026-08-29): the renderer hands the File object over;
   // the sandboxed renderer cannot see paths, so webUtils resolves it here.
   // Main MIME-routes it (image/audio/video/doc) and resolves with the
@@ -106,7 +112,7 @@ window.addEventListener(
   true,
 );
 
-// LEFT-drag rotates the model (OrbitControls) and RIGHT-drag pans it,
+// Measured: LEFT-drag rotates the model (OrbitControls) and RIGHT-drag pans it,
 // so neither button is free to move the WINDOW without breaking something
 // that already works. A dedicated top-edge drag strip exists but is only
 // 18px tall and easy to miss ("the avatar is trapped in a box" — reported

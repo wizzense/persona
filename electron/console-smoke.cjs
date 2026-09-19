@@ -34,6 +34,7 @@ const { showConsole, PANES, paneSources } = require("./console-window.cjs");
 const { ensureCommandIpc } = require("./command-window.cjs");
 const { ensureFleetIpc, getControl: getFleetControl } = require("./fleet-window.cjs");
 const { ensureSessionsIpc } = require("./sessions-window.cjs");
+const { ensureStageIpc } = require("./stage-window.cjs");
 
 const results = [];
 let judged = true;
@@ -49,6 +50,9 @@ const EXPECTED_BRIDGE = {
   sessions: "aitherSessions",
   cards: "deskBridge",
   chat: "deskBridge",
+  stage: "aitherStage",
+  // The Cast pane (cast.html / cast-preload.cjs): who appears and how they sound.
+  cast: "aitherCast",
 };
 
 async function run() {
@@ -72,9 +76,27 @@ async function run() {
   ensureFleetIpc();
   ensureCommandIpc(getFleetControl(), { createFleetWindow: () => {} });
   ensureSessionsIpc();
+  // Stubbed the way main wires it: the pane must ANSWER, not merely have a bridge.
+  ensureStageIpc({
+    bodies: () => [{ slotId: "slot0", name: "Aither", agent: "aither", resident: true }],
+    arrange: () => {},
+    focus: () => {},
+    remove: () => { throw new Error("slot0 is not a removable body"); },
+  });
 
+  const paletteRan = [];
   const win = showConsole({
     autoShow: false,
+    // main.cjs supplies these from the command registry; here they are stubbed,
+    // because this entry point must never load main (it would take the running
+    // Desk's single-instance lock).
+    commands: {
+      list: () => [
+        { id: "window.size.large", label: "Large", group: "window-size" },
+        { id: "console.open", label: "Aither Console…", group: "go" },
+      ],
+      run: (id) => paletteRan.push(id),
+    },
     rendererUrl: require("node:url")
       .pathToFileURL(path.join(__dirname, "..", "dist", "index.html")).href,
     windows: Object.fromEntries(PANES.map((p) => [p.id, stubWindow(p.id)])),
@@ -173,6 +195,28 @@ async function run() {
     check("sessions pane's handler is registered", answer === "ok", String(answer).slice(0, 90));
   }
 
+  // 3d. The Stage pane must ANSWER too -- its whole purpose is to be the path
+  //     that works when hitting a 3D body with the mouse does not.
+  await win.webContents.executeJavaScript("document.getElementById('tab-stage').click()");
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  const stageFrame = win.webContents.mainFrame.framesInSubtree
+    .find((f) => String(f.url || "").includes("stage.html"));
+  if (!stageFrame) {
+    check("stage pane answers", false, "the stage frame vanished");
+  } else {
+    const seen = await stageFrame.executeJavaScript(
+      "window.aitherStage.bodies().then((r) => (r && r.ok ? 'rows:' + r.bodies.length : JSON.stringify(r)))"
+      + ".catch((e) => 'ERR ' + String(e && e.message || e))",
+    );
+    check("stage pane's handler is registered", seen === "rows:1", String(seen).slice(0, 90));
+    const rendered = await stageFrame.executeJavaScript(
+      "({ rows: document.querySelectorAll('#list .row').length,"
+      + " arrangements: document.querySelectorAll('#arrangements .chip').length })",
+    );
+    check("stage pane lists the bodies and the arrangements",
+      rendered.rows === 1 && rendered.arrangements === 5, JSON.stringify(rendered));
+  }
+
   // 3c. The Fleet pane must SAY what it is doing. Its first probe walks the
   //     distro, seven doors and the GPU counters (24-73 s measured 2026-09-18),
   //     and the owner's 07:20 screenshot that day was the pane mid-probe: a grey
@@ -199,17 +243,97 @@ async function run() {
       JSON.stringify(seen));
   }
 
-  // 4. Detach/reattach really drives main's window creators.
-  const detach = await win.webContents.executeJavaScript(
-    "window.aitherConsole.detach('fleet')",
-  );
-  check("detach reaches main", detach && detach.ok === true, JSON.stringify(detach));
+  // 4. Detach/reattach really drives main's window creators -- driven through the
+  //    BUTTONS the owner clicks, not the preload bridge. The bridge reaches main
+  //    and repaints NOTHING, so a smoke run that calls it proves only half the
+  //    trip: "ok:true, and the screen never changed" is the whole complaint.
+  const stageState = "({ placeholders: document.querySelectorAll('.placeholder.active').length,"
+    + " placeholderNode: Boolean(document.getElementById('ph-fleet')),"
+    + " frame: Boolean(document.querySelector('#pane-fleet.active')),"
+    + " state: document.getElementById('bar-state').textContent,"
+    + " badge: document.querySelector('#tab-fleet .badge').textContent })";
+
+  await win.webContents.executeJavaScript("document.getElementById('btn-detach').click()");
+  await new Promise((resolve) => setTimeout(resolve, 900));
   check("detach is reported back", opened.includes("fleet"), opened.join(","));
-  const reattach = await win.webContents.executeJavaScript(
-    "window.aitherConsole.reattach('fleet')",
+  const whileOut = await win.webContents.executeJavaScript(stageState);
+  check("a detached pane paints its placeholder, and only that",
+    whileOut.placeholders === 1 && whileOut.frame === false
+    && whileOut.state === "detached" && whileOut.badge === "detached",
+    JSON.stringify(whileOut));
+
+  // 🚩 And on the way back, the SCREEN changes. Owner, 2026-09-18: "i did reattach
+  //    the inbox but it didnt update the ui". Two defects made that one symptom:
+  //    main read its detached list before the asynchronous close had landed, and
+  //    the shell left the placeholder -- absolutely positioned over the whole
+  //    stage -- painted on top of the pane that had come back. Neither is visible
+  //    in an ok:true reply, which is why this arm reads the DOM.
+  await win.webContents.executeJavaScript("document.getElementById('btn-reattach').click()");
+  await new Promise((resolve) => setTimeout(resolve, 900));
+  check("reattach closes the window", !opened.includes("fleet"), opened.join(","));
+  const afterBack = await win.webContents.executeJavaScript(stageState);
+  check("reattach puts the pane back ON SCREEN",
+    afterBack.placeholders === 0 && afterBack.placeholderNode === false
+    && afterBack.frame === true && afterBack.state !== "detached"
+    && afterBack.badge !== "detached",
+    JSON.stringify(afterBack));
+
+  // 5. 🚩 The window goes away WITHOUT the console being told (the owner closing a
+  //    detached window from its own title bar). The rail used to keep saying
+  //    "detached" until the console next regained focus, offering a Reattach that
+  //    closes nothing -- the pane was stranded with no way back. Slice 2 gives the
+  //    map one owner in main, which pushes it; nothing here touches the console.
+  await win.webContents.executeJavaScript("document.getElementById('btn-detach').click()");
+  await new Promise((resolve) => setTimeout(resolve, 900));
+  const beforeExternal = await win.webContents.executeJavaScript(stageState);
+  // Closed from OUTSIDE: no IPC, no focus, nothing tells the console.
+  const at = opened.indexOf("fleet");
+  if (at >= 0) opened.splice(at, 1);
+  await new Promise((resolve) => setTimeout(resolve, 2500));   // one poll + slack
+  const afterExternal = await win.webContents.executeJavaScript(stageState);
+  check("a detached window closed from OUTSIDE un-detaches the rail",
+    beforeExternal.state === "detached" && afterExternal.state !== "detached"
+    && afterExternal.placeholders === 0 && afterExternal.frame === true,
+    `${JSON.stringify(beforeExternal)} -> ${JSON.stringify(afterExternal)}`);
+
+  // 6. The palette: Ctrl+K, type, Enter. This is the path that makes a gesture
+  //    optional -- the failure it answers is "the size menu exists, somewhere,
+  //    behind a right-click that has to land on a body".
+  await win.webContents.executeJavaScript(
+    "document.dispatchEvent(new KeyboardEvent('keydown', "
+    + "{ key: 'k', ctrlKey: true, bubbles: true }))",
   );
-  check("reattach closes the window", reattach && reattach.ok === true
-    && !opened.includes("fleet"), opened.join(","));
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  const opened2 = await win.webContents.executeJavaScript(
+    "({ open: document.getElementById('scrim').classList.contains('open'),"
+    + " rows: document.querySelectorAll('#palette-list li').length })",
+  );
+  check("Ctrl+K opens the palette with the registry's rows",
+    opened2.open === true && opened2.rows === 2, JSON.stringify(opened2));
+
+  // Typing narrows it, and Enter runs what is selected.
+  await win.webContents.executeJavaScript(
+    "(() => { const i = document.getElementById('palette-input');"
+    + " i.value = 'larg'; i.dispatchEvent(new Event('input', { bubbles: true })); })()",
+  );
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  const filtered = await win.webContents.executeJavaScript(
+    "({ rows: [...document.querySelectorAll('#palette-list li span:first-child')]"
+    + ".map((n) => n.textContent) })",
+  );
+  check("typing filters the palette", filtered.rows.length === 1 && filtered.rows[0] === "Large",
+    JSON.stringify(filtered));
+
+  await win.webContents.executeJavaScript(
+    "document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))",
+  );
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  const closedAfterRun = await win.webContents.executeJavaScript(
+    "document.getElementById('scrim').classList.contains('open')",
+  );
+  check("Enter runs the command and closes the palette",
+    paletteRan.length === 1 && paletteRan[0] === "window.size.large" && closedAfterRun === false,
+    `${paletteRan.join(",") || "nothing ran"} · open=${closedAfterRun}`);
 }
 
 app.whenReady().then(run).catch((error) => {

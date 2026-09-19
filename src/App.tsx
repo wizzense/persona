@@ -7,6 +7,8 @@ import {
   type MutableRefObject,
   type SetStateAction,
 } from 'react';
+
+import { createPushToTalk } from './voice/pushToTalk';
 import { Scene } from './components/Scene';
 import { clearLevel, setLevel } from './hooks/voiceLevels';
 import { Deck } from './components/Deck';
@@ -131,6 +133,28 @@ function AvatarSceneApp() {
   // slot's previous one instead of stacking contexts and rAF loops.
   const slotAudioRefs = useRef(new Map<string, { current: AudioContext | null }>());
 
+  // Push-to-talk, driven by main (tray item, palette, global hotkey). Built once
+  // and kept in a ref: a recorder rebuilt on every render would lose the stream
+  // it is holding.
+  const talkRef = useRef<ReturnType<typeof createPushToTalk> | null>(null);
+  if (!talkRef.current && typeof window !== 'undefined') {
+    talkRef.current = createPushToTalk({
+      getStream: () => navigator.mediaDevices.getUserMedia({ audio: true }),
+      makeRecorder: (stream, mime) => new MediaRecorder(stream, { mimeType: mime }),
+      encode: async (blob) => {
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        let binary = '';
+        for (const b of bytes) binary += String.fromCharCode(b);
+        return btoa(binary);
+      },
+      transcribe: (base64, format) =>
+        window.deskBridge?.voiceTranscribe?.(base64, format) ?? Promise.resolve(''),
+      deliver: (text) => { void window.deskBridge?.voiceHeard?.(text); },
+      onState: (state) => window.deskBridge?.voiceListenState?.(state),
+      onError: (message) => window.deskBridge?.voiceListenState?.(`error: ${message}`),
+    });
+  }
+
   useEffect(() => {
     const bridge = window.deskBridge;
     if (!bridge) return;
@@ -175,6 +199,13 @@ function AvatarSceneApp() {
         clearLevel(event.slotId);
         slotAudioRefs.current.get(event.slotId)?.current?.close().catch(() => {});
         slotAudioRefs.current.delete(event.slotId);
+      } else if (event.type === 'listen') {
+        // Slice C. The recorder lives outside React (src/voice/pushToTalk.ts) so
+        // the mic is released on every exit path, including a throw from the
+        // gateway -- a stream left open keeps the OS mic light on, which reads
+        // as "it is still listening to me".
+        if (event.listening) void talkRef.current?.start();
+        else talkRef.current?.stop();
       } else if (event.type === 'speak') {
         // Drop-to-avatar (2026-08-29): main TTS'd a verdict and handed the
         // audio over. Play it through Web Audio and drive the SAME audioLevel

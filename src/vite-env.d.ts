@@ -46,9 +46,28 @@ type AvatarBridgeEvent =
   // drops the slot's stored spot/scale so it returns to the default transform.
   | { type: 'focus-avatar'; slotId: string | null }
   | { type: 'reset-avatar-layout'; slotId: string }
+  // Plan 40 slice G: main names an ARRANGEMENT and the renderer places every
+  // live body (src/stage/arrangements.ts holds the geometry, beside the bounds).
+  // `slotId` is the subject for `focus`; `pair` names the two for `pair`.
+  | { type: 'stage-arrange'; arrangement: string; slotId?: string | null; pair?: string[] }
+  // An AUTHORED placement for one body (the cast file, relayed by main). Every
+  // field is optional and an omitted one leaves that component alone; yaw is
+  // radians. Bounds are the renderer's (stagePlacement.authoredFields) -- an
+  // out-of-stage value is DROPPED, never clamped.
+  | {
+      type: 'place-avatar';
+      slotId: string;
+      position?: [number, number, number];
+      scale?: number;
+      yaw?: number;
+    }
   // Drop-to-avatar (2026-08-29): main TTS'd the drop verdict and hands the
   // audio over for playback + lip sync in the avatar window.
-  | { type: 'speak'; audioBase64: string; slotId?: string };
+  | { type: 'speak'; audioBase64: string; slotId?: string }
+  // Plan 40 slice C ("I also want to be able to talk back"): main asks the avatar
+  // window to open the mic, because that window is up whenever the overlay is --
+  // the deck's chat box was the only place the owner could speak from before.
+  | { type: 'listen'; listening: boolean };
 
 /** The verdict of a dropped file (preload -> main -> drop-router). */
 interface DropVerdict {
@@ -68,5 +87,11 @@ interface Window {
     close(): void;
     avatarContextMenu(slotId: string): void;
     subscribe(listener: (event: AvatarBridgeEvent) => void): () => void;
+    /** Mic clip -> gateway transcribe_audio -> text (or an "ERROR: …" string). */
+    voiceTranscribe?(audioB64: string, format: string): Promise<string>;
+    /** A finished transcript: main posts it to the room and answers it. */
+    voiceHeard?(text: string): Promise<unknown>;
+    /** Listening / transcribing / idle, so the tray can say what the mic is doing. */
+    voiceListenState?(state: string): void;
   };
 }

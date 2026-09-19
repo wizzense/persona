@@ -68,6 +68,7 @@ if (/^\d{2,5}$/.test(String(process.env.DESK_CDP_PORT || ""))) {
 }
 const decisionCards = require("./decision-cards.cjs");
 const {
+  fetchChannels: fetchRelayChannels,
   fetchHistory: fetchRelayHistory,
   fetchThread: fetchRelayThread,
   post: postToRelay,
@@ -86,6 +87,9 @@ const { routeDrop, synthesizeVerdict, stagePath, cleanupStage } = require("./dro
 const { desktopSnapshot } = require("./browser-client.cjs");
 const { connectSnapshot } = require("./connect-client.cjs");
 const { createBridgeServer, DEFAULT_PORT } = require("./bridge-server.cjs");
+// ONE inventory of what Desk can do and which menus carry it. Menus are rendered
+// from it; nothing lists a capability by hand (docs/UX-REIMPLEMENTATION.md).
+const commandRegistry = require("./command-registry.cjs");
 const {
   createDeskMcpHandler,
   getAnimationEventName,
@@ -119,8 +123,24 @@ const {
 } = require("./sessions-window.cjs");
 // The company room, both halves: the awdk daemon room (local, fleet-independent)
 // and the relay channels (#command / #agents) that the poller executes from.
-const { RoomPublisher } = require("./room-publisher.cjs");
+// `steerEvent` is the pure envelope builder for an ADDRESSED steer (U18); the
+// "room-steer" deck-action below is the ONLY thing in this file that uses it.
+const { RoomPublisher, steerEvent } = require("./room-publisher.cjs");
 const { RelayPoller } = require("./relay-poller.cjs");
+// U28: main delegates the company room's BUILD to room-stage-host.cjs (U07)
+// instead of constructing `new RoomStage(...)` inline -- see startRoomStage()
+// below and CAST004 (check_desk_cast_config.py), the static assert that this
+// delegation, and the resolver it carries, both stay wired.
+const roomStageHost = require("./room-stage-host.cjs");
+// room-address (U19): "which of these parallel tabs am I talking to?" -- the
+// text-address fallback the "room-steer" deck-action uses when the renderer
+// hands over free text instead of an already-picked session id.
+const { resolveAddress } = require("./room-address.cjs");
+// cast-config (U01): the one file everything above it defers to. Required
+// directly here (not only through room-stage-host) for stableCharacter --
+// see the deleted fallbackCharacterForAgent's replacement in "spawn-agent"
+// below, "so Add-Avatar and the room agree on what an agent looks like".
+const cast = require("./cast-config.cjs");
 const {
   configureHyprlandWindow,
   getHyprlandWindowPlacement,
@@ -139,7 +159,6 @@ const {
   listCharacters,
 } = require("./character-roster.cjs");
 const { invalidateGate, isHidden } = require("./content-rating.cjs");
-const { packContentDir } = require("./content-rating-loader.cjs");
 const fs = require("node:fs");
 const {
   getAgentAvatar,
@@ -159,6 +178,39 @@ const {
   isAppOpen,
 } = require("./living-desktop-window.cjs");
 const { openDetachedAvatar } = require("./detached-avatar-window.cjs");
+const {
+  ensureStageIpc,
+  createStageWindow,
+  closeStageWindow,
+  isStageWindowOpen,
+} = require("./stage-window.cjs");
+
+// U28 lands LAST and this plan's units build concurrently -- these two are
+// still in flight on this box as this unit lands. Guarded (not a top-level
+// destructure) so a peer unit's module landing AFTER this file does not
+// crash the whole desk at require() time; each is wired below ONLY when
+// present, and starts working with no further edit here once its own module
+// exists -- electron/*.cjs is read from disk at launch, so a restart is what
+// picks it up either way.
+let ensureCastIpc = null;
+let createCastWindow = null;
+let closeCastWindow = null;
+let isCastWindowOpen = null;
+try {
+  // U03: the Cast pane's window/IPC module -- names follow every OTHER
+  // *-window.cjs in this file (create<X>Window/close<X>Window/is<X>WindowOpen
+  // beside ensure<X>Ipc: stage-window.cjs, command-window.cjs, sessions-
+  // window.cjs, fleet-window.cjs all share this shape).
+  ({ ensureCastIpc, createCastWindow, closeCastWindow, isCastWindowOpen } = require("./cast-window.cjs"));
+} catch (error) {
+  console.warn("[desk] cast-window.cjs not present yet (U03) -- Cast pane unavailable:", error?.message || error);
+}
+let resolveSpeech = null;
+try {
+  ({ resolveSpeech } = require("./voice-resolve.cjs")); // U06: the per-origin audibility gate
+} catch (error) {
+  console.warn("[desk] voice-resolve.cjs not present yet (U06) -- speakAloud is ungated:", error?.message || error);
+}
 
 /** "Detach to own window" — pull one extra avatar out of the shared canvas into its own
  *  real, separately-draggable/resizable OS window. See detached-avatar-window.cjs. */
@@ -172,7 +224,7 @@ function detachAvatarToOwnWindow(slotId) {
   return true;
 }
 
-// 430x680 on a 3840x2112 4K display reads as "trapped in a tiny box" —
+// Measured: 430x680 on a 3840x2112 4K display reads as "trapped in a tiny box" —
 // it's genuinely small on a real screen, independent of camera framing. Kept
 // the same ~0.63 aspect ratio, just bigger. Still user-resizable (min 320x480).
 const WINDOW_WIDTH = 600;
@@ -186,13 +238,10 @@ const WINDOW_HEIGHT = 950;
 // true and useless. Fixed the same way window MOVE already is: menu items +
 // shortcuts driving setBounds() directly, not relying on an edge nobody can
 // click. Size is persisted so it survives a restart instead of resetting to
-// the old default every time.
-const SIZE_PRESETS = [
-  { label: "Small", width: 430, height: 680 },
-  { label: "Medium", width: WINDOW_WIDTH, height: WINDOW_HEIGHT },
-  { label: "Large", width: 800, height: 1266 },
-  { label: "Extra Large", width: 1000, height: 1583 },
-];
+// the measured default every time.
+// The presets themselves live in command-registry.cjs, as commands: the palette
+// lists them one per row while the menus nest them, and a second copy of the
+// numbers here is how one surface ends up offering a size another does not.
 const SIZE_STATE_PATH = () => path.join(app.getPath("userData"), "window-size.json");
 
 function loadSavedSize() {
@@ -242,16 +291,13 @@ function shrinkWindow(factor = 1.15) {
   setWindowSize(width / factor, height / factor);
 }
 
-function buildSizeMenu() {
-  return [
-    ...SIZE_PRESETS.map((preset) => ({
-      label: preset.label,
-      click: () => setWindowSize(preset.width, preset.height),
-    })),
-    { type: "separator" },
-    { label: "Bigger  (Ctrl+Shift+=)", click: () => growWindow() },
-    { label: "Smaller  (Ctrl+Shift+-)", click: () => shrinkWindow() },
-  ];
+/** The size choices, from the registry — the SAME list the palette lists flat.
+ *  Two renderings of one inventory; neither can carry an entry the other lacks. */
+function buildSizeMenu(surface = "avatar-menu") {
+  return commandRegistry.groupFor("window-size", surface).map((command) => ({
+    label: commandRegistry.labelOf(command, {}),
+    click: () => runCommand(command.id),
+  }));
 }
 const startInBackground = process.argv.includes("--background");
 /** "Open the Desk panel at startup" — the owner's quick path into the panel, and a
@@ -515,7 +561,7 @@ function createWindow() {
   ipcMain.removeAllListeners("desk:context-menu");
   ipcMain.on("desk:context-menu", () => createDeckWindow());
 
-  // Middle-mouse-drag window move (preload.cjs sends these). Tracks
+  // Measured: middle-mouse-drag window move (preload.cjs sends these). Tracks
   // the mouse's screen position at drag start against the window's own
   // position at drag start, then repositions by the same delta on every
   // move — works from anywhere on the avatar, doesn't touch left/right
@@ -616,6 +662,17 @@ function emitToRenderer(event) {
   pendingRendererEvents.delete(event.type);
 }
 
+/** Fire-and-forget event at the avatar window (menus, stage arrangements).
+ *  Module level, because a stage command can come from the tray or the palette
+ *  as well as from a body's own menu -- as a local it was a ReferenceError the
+ *  moment the arrangement was picked anywhere but the menu (caught by eslint,
+ *  no-undef, before it ever ran). */
+function sendToAvatar(type, payload = {}) {
+  if (avatarWindow && !avatarWindow.isDestroyed()) {
+    avatarWindow.webContents.send("desk:event", { type, ...payload });
+  }
+}
+
 function handleBridgeEvent(event) {
   if (event.type !== "audio-level" || event.level > 0.025) debugLog("event", event);
   if (event.type === "state") {
@@ -635,9 +692,39 @@ function handleBridgeEvent(event) {
  *  ONE path for every caller -- the drop lane, POST /speak, the MCP `speak`
  *  tool -- so the orchestrator, a routine, awvoice and a Claude Code session
  *  all sound the same. Owner, 2026-09-18: "we have AitherVoice + awvoice +
- *  aither-orchestrator -- integrate this." Fail-soft: {ok:false, reason}. */
-async function speakAloud(text, voice = "nova", speed = undefined, slotId = "slot0") {
-  const tts = await synthesizeVerdict(text, voice || "nova", { speed, maxChars: 2000 });
+ *  aither-orchestrator -- integrate this." Fail-soft: {ok:false, reason}.
+ *
+ *  `origin` (U28) is the STAMPED caller identity -- "bridge:/speak",
+ *  "mcp:speak", "desk:drop", or a room-stage row's own origin key -- never a
+ *  value taken from a request body (see cast-config.cjs's ORIGIN KEY GRAMMAR:
+ *  a payload-supplied origin/actor field is a grant list, not caller
+ *  authorization). It is the ONE refusal funnel U06's voice-resolve.cjs
+ *  consults: three speech doors exist (this function, POST /speak, the MCP
+ *  `speak` tool) and a room-only gate would leave two of them open. Fails
+ *  open (today's ungated behaviour) when voice-resolve.cjs has not landed
+ *  yet on this box -- see the guarded require above. */
+async function speakAloud(text, voice = "nova", speed = undefined, slotId = "slot0", origin = "service:awdesk") {
+  let effectiveVoice = voice || "nova";
+  let effectiveSpeed = speed;
+  let effectiveMaxChars = 2000;
+  if (typeof resolveSpeech === "function") {
+    let gate;
+    try {
+      gate = resolveSpeech({ origin, slotId, text });
+    } catch (error) {
+      debugLog("voice-resolve gate threw; failing open", origin, error?.message || error);
+      gate = null;
+    }
+    if (gate && gate.allowed === false) {
+      return { ok: false, reason: gate.reason || `${origin} is not audible` };
+    }
+    if (gate) {
+      if (gate.voice) effectiveVoice = gate.voice;
+      if (gate.speed != null) effectiveSpeed = gate.speed;
+      if (gate.maxChars != null) effectiveMaxChars = gate.maxChars;
+    }
+  }
+  const tts = await synthesizeVerdict(text, effectiveVoice, { speed: effectiveSpeed, maxChars: effectiveMaxChars });
   if (!tts.ok) return { ok: false, reason: tts.reason || "voice service unavailable" };
   let delivered = 0;
   for (const win of BrowserWindow.getAllWindows()) {
@@ -652,34 +739,41 @@ async function speakAloud(text, voice = "nova", speed = undefined, slotId = "slo
   return { ok: true, chars: text.length, windows: delivered, durationMs: tts.durationMs || 0, slotId: slotId || "slot0" };
 }
 
+/** Deps shared by room-stage-host's startRoomStage() and castPaneImpl() --
+ *  see room-stage-host.cjs's own doc for the exact shape each reads (only
+ *  startRoomStage needs roomPublisher/spawnAvatarSlot/removeAvatarSlot/
+ *  speakAloud; castPaneImpl reads none of those, and an extra field is
+ *  harmless). Built fresh per call, never cached: `roomPublisher` is null
+ *  until app.whenReady's own sequence assigns it, and reading it here at
+ *  CALL time (not at require time) is what makes that ordering safe. */
+function roomStageDeps() {
+  return {
+    roomPublisher,
+    spawnAvatarSlot,
+    removeAvatarSlot,
+    speakAloud,
+    listCharacters,
+    // SAFE roster only: the content-rating gate decides what may have a body.
+    filterCharacters: require("./content-rating.cjs").filterCharacters,
+    getActiveCharacter,
+    sendToRenderer: emitToRenderer,
+    log: (...args) => debugLog(...args),
+    env: process.env,
+  };
+}
+
 /** The company room on stage: one avatar per agent, spoken in turn. Started
- *  beside the room publisher; DESK_ROOM_STAGE=0 leaves the room text-only. */
-let roomStage = null;
+ *  beside the room publisher; DESK_ROOM_STAGE=0 leaves the room text-only.
+ *
+ *  U28: this used to build `new RoomStage(...)` inline, closing over half a
+ *  dozen main-side functions with no resolver at all -- the room-stage's
+ *  `voices` option was plumbed end to end and nothing ever supplied it, which
+ *  is exactly the failure mode CAST004 (check_desk_cast_config.py) now
+ *  asserts statically can never happen again. room-stage-host.cjs (U07) owns
+ *  the build; this is a delegation only. */
 function startRoomStage() {
-  if (roomStage || !roomPublisher) return;
-  if (String(process.env.DESK_ROOM_STAGE || "1").trim() === "0") return;
-  const { RoomStage } = require("./room-stage.cjs");
-  const { filterCharacters } = require("./content-rating.cjs");
-  roomStage = new RoomStage(
-    {
-      recentChat: (opts) => roomPublisher.recentChat(opts),
-      spawn: (slotId, character, agent) => spawnAvatarSlot(slotId, character, agent),
-      remove: (slotId) => removeAvatarSlot(slotId),
-      speak: (text, voice, slotId) => speakAloud(text, voice, undefined, slotId),
-      // SAFE roster only: the content-rating gate decides what may have a body.
-      roster: () => filterCharacters(listCharacters()),
-      assignedAvatar: (agent) => getAgentAvatar(agent),
-      residentCharacter: () => {
-        try { return getActiveCharacter(); } catch { return null; }
-      },
-    },
-    {
-      idleMs: Math.max(60, Number(process.env.DESK_ROOM_IDLE_S) || 600) * 1000,
-      maxBodies: Math.max(0, Number(process.env.DESK_ROOM_MAX_BODIES) || 3),
-      log: (...args) => debugLog(...args),
-    },
-  );
-  roomStage.start();
+  if (!roomPublisher) return;
+  roomStageHost.startRoomStage(roomStageDeps());
 }
 
 
@@ -899,8 +993,11 @@ function applyCharacter(name) {
 /** Add a spawned avatar slot to the scene WITHOUT reloading. Slot "slot0" and
  *  variants of the default slot ID are reserved and refused. `agent`, when given,
  *  records which roster agent this slot represents (for the Remove Avatar label and
- *  future dialogue/arbitration routing) — it does not change which character renders. */
-function spawnAvatarSlot(slotId, name, agent) {
+ *  future dialogue/arbitration routing) — it does not change which character renders.
+ *  `place` (U28), when given, is cast.json's resolved {position,scale,yaw} for
+ *  this actor (see stagePlacement.ts's authoredTransform, U09) — sent as ONE
+ *  place-avatar event right after spawn, never a reload. */
+function spawnAvatarSlot(slotId, name, agent, place) {
   // Refuse slot IDs reserved for the default avatar
   if (slotId === "slot0" || slotId === "default" || slotId === "") return false;
 
@@ -920,6 +1017,11 @@ function spawnAvatarSlot(slotId, name, agent) {
       if (avatarSlots.get(slotId)?.modelUrl !== modelUrl || avatarSlots.get(slotId)?.name !== name) return;
       if (avatarWindow && !avatarWindow.isDestroyed()) {
         avatarWindow.webContents.send("desk:event", { type: "spawn-avatar", slotId, modelUrl });
+        if (place && typeof place === "object") {
+          avatarWindow.webContents.send("desk:event", {
+            type: "place-avatar", slotId, position: place.position, scale: place.scale, yaw: place.yaw,
+          });
+        }
       }
     },
     (error) => {
@@ -939,6 +1041,11 @@ function removeAvatarSlot(slotId) {
   if (!avatarSlots.has(slotId)) return false;
 
   avatarSlots.delete(slotId);
+  // U07's own bookkeeping (slots/lastSeen/lastVoiced) for this slot, so a
+  // hand-removed body does not linger as a ghost the idle sweep -- or a
+  // later resolve()'s `taken` set -- still believes is on stage. False (not
+  // a throw) when no room stage is running; a harmless no-op either way.
+  roomStageHost.evictSlot(slotId);
   debugLog("avatar slot removed", slotId);
   if (avatarWindow && !avatarWindow.isDestroyed()) {
     avatarWindow.webContents.send("desk:event", {
@@ -950,6 +1057,74 @@ function removeAvatarSlot(slotId) {
   return true;
 }
 
+/**
+ * What the Stage pane needs, and nothing more (Plan 40 slice G).
+ *
+ * `bodies` is the SAME list the deck and the avatar menus read (`avatarSlots`
+ * plus the resident), so the pane cannot show a stage that disagrees with the
+ * one the owner is looking at. Everything else is a name forwarded to the
+ * renderer, which owns the geometry.
+ */
+/**
+ * Push-to-talk from ANYWHERE (Plan 40 slice C).
+ *
+ * The mic already existed, inside the deck's chat box: to talk to the agents the
+ * owner had to find that pane first. The capture happens in the avatar window
+ * (open whenever the overlay is), and main only says when to listen -- so the
+ * tray item, the palette and the global hotkey all reach the same recorder.
+ *
+ * A transcript is not a note: it goes through commandAction, which the room
+ * publisher is attached to, so the owner's words land in the company room as the
+ * OWNER and the reply is spoken back by whichever agent answers.
+ */
+let listenState = "idle";
+
+function listeningNow() {
+  return listenState === "listening";
+}
+
+function toggleListening() {
+  if (!avatarWindow || avatarWindow.isDestroyed()) {
+    // Nothing to capture with: show the avatar rather than failing silently,
+    // which is what "the hotkey does nothing" looked like.
+    showOverlay();
+  }
+  const want = !listeningNow();
+  listenState = want ? "listening" : "transcribing";
+  sendToAvatar("listen", { listening: want });
+  refreshTrayMenu();
+}
+
+function stagePaneImpl() {
+  return {
+    bodies: () => [
+      { slotId: "slot0", name: getActiveCharacter() || "Aither", agent: "aither", resident: true },
+      ...[...avatarSlots.entries()].map(([slotId, info]) => ({
+        slotId,
+        name: info.name,
+        agent: info.agent || "",
+        resident: false,
+      })),
+    ],
+    arrange: (arrangement, options = {}) => {
+      sendToAvatar("stage-arrange", {
+        arrangement,
+        slotId: options.slotId || null,
+        pair: Array.isArray(options.pair) ? options.pair : [],
+      });
+    },
+    safety: () => {
+      const { isAdultContentVisible, noteGateState } = require("./content-rating.cjs");
+      noteGateState();
+      return { mature: isAdultContentVisible() ? "allowed" : "hidden" };
+    },
+    focus: (slotId) => sendToAvatar("focus-avatar", { slotId: slotId || null }),
+    remove: (slotId) => {
+      if (!removeAvatarSlot(slotId)) throw new Error(`${slotId} is not a removable body`);
+    },
+  };
+}
+
 /** Per-avatar context menu (2026-08-25). The renderer raycasts the right-click itself
  *  (the deck trigger cannot — it is window-level, and OrbitControls owns right-drag pan)
  *  and names the slot; this builds the native menu for THAT avatar. Actions are scoped
@@ -957,18 +1132,25 @@ function removeAvatarSlot(slotId) {
  *  already drives this avatar's speaking state and emotion animations over the same
  *  bridge — that IS the A2A integration), agent tools open the Desk panel whose agents
  *  section lists the same roster, and only a spawned slot offers removal. */
+/** Which room actor (if any) is behind a stage slot, for the avatar menu's
+ *  "Message this session…" item. Derived from room-stage-host's own status()
+ *  (U02's onStage rows carry actorId/actorKind) rather than a second piece of
+ *  bookkeeping -- room-stage-host.cjs is not this unit's file, so this reads
+ *  its PUBLIC status() the same way the deck and the bridge already do. null
+ *  when the slot is not a room actor (or no room stage is running). */
+function addressForSlot(slotId) {
+  const st = roomStageHost.status();
+  const row = st && Array.isArray(st.onStage) ? st.onStage.find((r) => r.slotId === slotId) : null;
+  return row && row.actorId ? { actorId: row.actorId, actorKind: row.actorKind || "" } : null;
+}
+
 function popupAvatarMenu(slotId) {
   const isDefault = slotId === "slot0" || slotId === "default";
   const info = isDefault ? null : avatarSlots.get(slotId);
   if (!isDefault && !info) return;
   const displayName = isDefault ? getActiveCharacter() || "Aither" : info.name;
   const agent = isDefault ? "aither" : info.agent || null;
-
-  const sendToAvatar = (type, payload) => {
-    if (avatarWindow && !avatarWindow.isDestroyed()) {
-      avatarWindow.webContents.send("desk:event", { type, ...payload });
-    }
-  };
+  const sessionAddress = addressForSlot(slotId); // U28: this body already knows its slot
 
   // CONSOLIDATED 2026-09-13 (owner: "all 3 of these menus so full of
   // duplication"). This menu is about THIS AVATAR and the window it lives in —
@@ -978,11 +1160,32 @@ function popupAvatarMenu(slotId) {
     { label: `${displayName}${agent ? " — " + agent : ""}`, enabled: false },
     { type: "separator" },
     { label: agent ? `Talk to ${agent}` : "Talk to Aither", click: () => openTalkWindow() },
+    {
+      // room.steer (U27/U11): a PEER-authority mailbox message to the live
+      // session behind this body -- distinct from "Talk to" (AitherShell).
+      // Disabled with no session id: an ordinary character has none to steer.
+      label: "Message this session…",
+      enabled: Boolean(sessionAddress),
+      click: () => createChatWindow(),
+    },
     { type: "separator" },
     { label: "Focus camera here", click: () => sendToAvatar("focus-avatar", { slotId }) },
     { label: "Frame everyone", click: () => sendToAvatar("focus-avatar", { slotId: null }) },
     { label: "Reset position & size", click: () => sendToAvatar("reset-avatar-layout", { slotId }) },
     { type: "separator" },
+    {
+      // Plan 40 slice G. Same commands as the tray and the palette, but here the
+      // FOCUS subject is the body that was right-clicked -- the one case where a
+      // gesture carries information the other surfaces cannot.
+      label: "Stage",
+      submenu: commandRegistry.groupFor("stage", "avatar-menu").map((command) => ({
+        label: commandRegistry.labelOf(command, {}),
+        click: () => sendToAvatar("stage-arrange", {
+          arrangement: command.arrangement,
+          slotId: command.arrangement === "focus" ? slotId : null,
+        }),
+      })),
+    },
     {
       label: "Avatar window",
       submenu: [
@@ -1021,19 +1224,6 @@ function nextFreeSlotId() {
     if (!avatarSlots.has(candidate)) return candidate;
   }
   return `slot${Date.now()}`; // pathological case, still a valid unique id
-}
-
-/** Deterministic (not random) fallback character for an agent with no assignment yet —
- *  so every agent in the roster is spawnable IMMEDIATELY from "Add Avatar" without first
- *  visiting Characters ▸ Agents ▸ Assign, and so a group of unassigned agents lands on
- *  DIFFERENT characters instead of all cloning roster[0]. A simple string hash into the
- *  roster is enough; this is cosmetic seeding, not an identity guarantee. Returns null
- *  when the roster is empty — nothing to fall back to. */
-function fallbackCharacterForAgent(agent, roster) {
-  if (roster.length === 0) return null;
-  let hash = 0;
-  for (let i = 0; i < agent.length; i += 1) hash = (hash * 31 + agent.charCodeAt(i)) >>> 0;
-  return roster[hash % roster.length];
 }
 
 /** "Add Avatar" — spawn an AGENT's avatar into the next free slot, not a bare VRM
@@ -1150,18 +1340,13 @@ function isValidCharacterName(name) {
   );
 }
 
-/** Where a visible character's model file lives (roster dir first, then the
- *  content pack), as a file:// URL — the deck's preview renderer loads it.
+/** Where a visible character's model file lives (the roster dir -- the mature
+ *  content pack that used to be a second candidate is gone from the product,
+ *  2026-09-19), as a file:// URL — the deck's preview renderer loads it.
  *  Only main knows the real roster root, so the deck never builds these. */
 function characterModelUrl(name) {
   if (!isValidCharacterName(name)) return null;
   const candidates = [path.join(ROSTER_DIR, name, "model.vrm")];
-  try {
-    const packDir = packContentDir("persona:characters-mature", "persona");
-    if (packDir) candidates.push(path.join(packDir, "characters", name, "model.vrm"));
-  } catch {
-    /* no pack configured — roster only */
-  }
   for (const candidate of candidates) {
     try {
       if (fs.existsSync(candidate)) return pathToFileURL(candidate).href;
@@ -1281,6 +1466,10 @@ function fsMkdirSafe(dir) {
 
 function refreshTrayMenu() {
   invalidateGate();
+  // Slice F: append a line the first time the gate MOVES. The desk cannot
+  // authenticate the flip (the platform writes the mirror), so what it attests
+  // is what it observed and when -- which is the part a desk can honestly claim.
+  require("./content-rating.cjs").noteGateState();
   enforceActiveCharacterRating();
   // SLIMMED 2026-08-25 (owner redesign: "move away from nested menus"). The
   // deck panel (right-click the avatar, or "Open the Desk panel") carries the
@@ -1296,62 +1485,114 @@ function refreshTrayMenu() {
   // console pane is listed here a second time.
   const waiting = decisionCards.actionableCount(openDecisions);
   const avatarShown = Boolean(avatarWindow && !avatarWindow.isDestroyed() && avatarWindow.isVisible());
-  tray?.setContextMenu(
-    Menu.buildFromTemplate([
-      { label: "Aither Console…", click: () => openConsole() },
-      {
-        label: waiting > 0
-          ? `Inbox — ${waiting} decision${waiting === 1 ? "" : "s"} waiting`
-          : openDecisions.length > 0
-            ? `Inbox — ${openDecisions.length} card${openDecisions.length === 1 ? "" : "s"}`
-            : "Inbox",
-        click: () => openInbox(),
-      },
-      { type: "separator" },
-      { label: avatarShown ? "Hide avatar" : "Show avatar", click: () => toggleOverlay() },
-      { label: "Characters", submenu: buildCharacterMenu() },
-      // A dead voice listener is otherwise INVISIBLE (see voice-tray-line.cjs).
-      ...voiceTrayItems(latestListenerStatus, app.isPackaged),
-      { type: "separator" },
-      {
-        label: "About Desk",
-        click: () => {
-          // No bundled character since 2026-09-10 (owner decision): the About
-          // surface says where a model comes from instead of crediting one,
-          // and points at a real window rather than restating a license.
-          void dialog
-            .showMessageBox({
-              type: "info",
-              title: "About Desk",
-              message: `Desk ${app.getVersion()}`,
-              detail: [
-                "The AitherOS desktop hub — avatar presence, decision cards, model & agent browsing, relay.",
-                "",
-                "Desk ships no character models. Add your own — VRoid Hub is the guided path;",
-                "any VRM 1.0 file you have the rights to works. Your models stay on this machine.",
-                "Full asset policy: ASSET_LICENSES.md.",
-              ].join("\n"),
-              buttons: ["Browse VRoid Hub…", "Close"],
-              defaultId: 1,
-              cancelId: 1,
-            })
-            .then(({ response }) => {
-              if (response === 0) {
-                void shell.openExternal("https://hub.vroid.com/en/");
-              }
-            });
-        },
-      },
-      { type: "separator" },
-      {
-        label: "Quit",
-        click: () => {
-          isQuitting = true;
-          app.quit();
-        },
-      },
-    ]),
-  );
+  // 🚩 RENDERED from command-registry.cjs, never hand-written. Three menus used
+  // to list capabilities by hand and drifted apart between consolidations; the
+  // avatar window's size ended up reachable through exactly one gesture. The
+  // registry owns the inventory and which surfaces carry each entry, so adding a
+  // capability to one menu and forgetting the others is no longer possible by
+  // hand. Slice 1 of docs/UX-REIMPLEMENTATION.md.
+  const trayTemplate = commandRegistry.buildMenu("tray", runCommand, {
+    ctx: {
+      avatarShown,
+      decisionsWaiting: waiting,
+      decisionsTotal: openDecisions.length,
+      listening: listeningNow(),
+    },
+    submenus: { "characters.pick": buildCharacterMenu() },
+    // The tray NESTS the size group under one label; the palette lists the same
+    // six commands one row each. Both read the registry.
+    nest: { "window-size": "Avatar window size", stage: "Stage", fleet: "Fleet", arc: "ARC" },
+  });
+  // A dead voice listener is otherwise INVISIBLE (see voice-tray-line.cjs). It is
+  // a STATUS line rather than a command, so it is spliced in after the avatar
+  // group rather than declared in the registry.
+  const voiceRows = voiceTrayItems(latestListenerStatus, app.isPackaged);
+  const appGroupAt = trayTemplate.findIndex((row) => row.label === "About Desk");
+  if (voiceRows.length && appGroupAt > 0) trayTemplate.splice(appGroupAt - 1, 0, ...voiceRows);
+  else trayTemplate.push(...voiceRows);
+  tray?.setContextMenu(Menu.buildFromTemplate(trayTemplate));
+}
+
+/**
+ * Perform a registry command.
+ *
+ * The registry holds WHAT and WHERE; this holds HOW, in one switch, so every
+ * surface that renders a command runs the identical action. An id with no case
+ * here is a menu row that does nothing -- the conformance test in
+ * command-registry.test.cjs and the arm below refuse to let that ship.
+ */
+function runCommand(id) {
+  switch (id) {
+    case "console.open": return void openConsole();
+    case "inbox.open": return void openInbox();
+    case "avatar.toggle": return void toggleOverlay();
+    case "voice.talk": return void toggleListening();
+    case "window.size.bigger": return void growWindow();
+    case "window.size.smaller": return void shrinkWindow();
+    // U27's cast.open record -- the one door onto cast.json from tray/avatar-
+    // menu/palette (see console-window.cjs's `cast` pane).
+    case "cast.open": {
+      openConsole();
+      focusPane("cast");
+      return;
+    }
+    // U27's room.steer record (palette surface only -- no slot in hand here;
+    // the avatar menu's OWN "Message this session…" item, added in
+    // popupAvatarMenu below, already knows its slot and does not reach this
+    // case). The chat pane's "Bodies on stage" picker (U20/U21) is where the
+    // session actually gets chosen.
+    case "room.steer": return void createChatWindow();
+    case "about": return void showAboutDesk();
+    case "quit":
+      isQuitting = true;
+      return void app.quit();
+    default: {
+      // The size presets and the stage arrangements are DATA on their registry
+      // records, so a new one is a line there and needs no case here.
+      const command = commandRegistry.byId(id);
+      if (command && command.size) {
+        return void setWindowSize(command.size.width, command.size.height);
+      }
+      if (command && command.arrangement) {
+        // The renderer holds the geometry (src/stage/arrangements.ts) because the
+        // stage bounds live there; main names the shape and nothing else.
+        return void sendToAvatar("stage-arrange", { arrangement: command.arrangement });
+      }
+      if (command && command.fleet) {
+        // Fleet and ARC verbs: the same runner the Fleet window, the bridge and
+        // MCP fleet_control use, so a tray click is not a second implementation.
+        return void runFleetCommand(command);
+      }
+      console.warn(`[desk] command ${id} has no handler`);
+    }
+  }
+}
+
+function showAboutDesk() {
+  // No bundled character since 2026-09-10 (owner decision): the About surface
+  // says where a model comes from instead of crediting one, and points at a real
+  // window rather than restating a license.
+  void dialog
+    .showMessageBox({
+      type: "info",
+      title: "About Desk",
+      message: `Desk ${app.getVersion()}`,
+      detail: [
+        "The AitherOS desktop hub — avatar presence, decision cards, model & agent browsing, relay.",
+        "",
+        "Desk ships no character models. Add your own — VRoid Hub is the guided path;",
+        "any VRM 1.0 file you have the rights to works. Your models stay on this machine.",
+        "Full asset policy: ASSET_LICENSES.md.",
+      ].join("\n"),
+      buttons: ["Browse VRoid Hub…", "Close"],
+      defaultId: 1,
+      cancelId: 1,
+    })
+    .then(({ response }) => {
+      if (response === 0) {
+        void shell.openExternal("https://hub.vroid.com/en/");
+      }
+    });
 }
 
 /** Everything the deck panel renders, in one object — the panel is a VIEW over
@@ -1396,7 +1637,7 @@ function deckState() {
     // session's tool calls — the half of the company room that outlives the fleet.
     room: roomFeed,
     roomStatus: roomPublisher ? (roomPublisher.lastError || "ok") : "not started",
-    roomStage: roomStage ? roomStage.status() : null,
+    roomStage: roomStageHost.status(),
     relayPoller: relayPoller ? relayPoller.status() : null,
   };
 }
@@ -1574,6 +1815,44 @@ function createChatWindow() {
 /** ONE entry point for every fleet surface (window buttons, tray, bridge
  *  /fleet/*, MCP fleet_control, `game`): the verb lands on the single
  *  FleetControl so nothing can race a second mask/unmask pass. */
+/** A menu row that changes the fleet: destructive verbs confirm first (a tray
+ *  menu has no second click to arm), every verb raises the Fleet window so the
+ *  outcome is SEEN, and the verdict lands in the tray tooltip. */
+async function runFleetCommand(command) {
+  const verb = command.fleet;
+  if (command.destructive) {
+    const { response } = await dialog.showMessageBox({
+      type: "warning",
+      buttons: ["Cancel", commandRegistry.labelOf(command)],
+      defaultId: 0,
+      cancelId: 0,
+      message: commandRegistry.labelOf(command),
+      detail: verb === "arc-stop"
+        ? "Stops the ARC solver. The world model stays up; training pauses until ARC is started again."
+        : "Stops the GPU models and routine runners. The rest of the fleet stays up.",
+    });
+    if (response !== 1) return;
+  }
+  const verdict = await fleetAction(verb, { fresh: verb === "arc-status" });
+  if (verb.startsWith("arc-")) {
+    const wm = verdict.world_model || {};
+    const unitState = verdict.units && verdict.units["aither-arcsolver"];
+    const summary = verdict.cannotJudge
+      ? `ARC: could not look (${verdict.error || "no answer"})`
+      : `ARC: ${verdict.verdict || (verdict.ok ? "OK" : "DEGRADED")}`
+        + (unitState ? ` · solver ${typeof unitState === "string" ? unitState : (unitState.active || unitState.state || "?")}` : "")
+        + (wm.train_steps != null ? ` · steps ${wm.train_steps}` : "")
+        + ((verdict.problems || []).length ? ` · ${verdict.problems.join("; ")}` : "");
+    console.log(`[desk] ${verb}: ${summary}`);
+    tray?.setToolTip(summary);
+    if (verb === "arc-status" && !command.destructive) {
+      void dialog.showMessageBox({ type: verdict.ok ? "info" : "warning", message: summary,
+        detail: (verdict.problems || []).join("\n") || undefined });
+    }
+  }
+  return verdict;
+}
+
 async function fleetAction(action, { fresh = false } = {}) {
   const control = getFleetControl();
   if (action === "open_panel" || action === "open") {
@@ -1622,12 +1901,29 @@ function openConsole() {
   ensureFleetIpc();
   ensureCommandIpc(getFleetControl(), { createFleetWindow });
   ensureSessionsIpc();
+  ensureStageIpc(stagePaneImpl());
+  // The Cast pane (U03/U07): who appears, and how they sound. Guarded --
+  // cast-window.cjs may not exist on this box yet (see the guarded require
+  // up top); the console still opens with every OTHER pane when it is absent.
+  if (ensureCastIpc) ensureCastIpc(roomStageHost.castPaneImpl(roomStageDeps()));
   // And "close" inside a pane now closes the console, rather than looking for a
   // standalone window that does not exist and silently doing nothing.
   setFleetCloseFallback(closeConsole);
   setCommandCloseFallback(closeConsole);
   return showConsole({
     rendererUrl,
+    // The palette reads the SAME registry the tray and the avatar menu render
+    // from, with labels resolved against live counts, so it can never offer a
+    // stale set -- and no capability is gesture-only again.
+    commands: {
+      list: () => commandRegistry.paletteRows({
+        listening: listeningNow(),
+        avatarShown: Boolean(avatarWindow && !avatarWindow.isDestroyed() && avatarWindow.isVisible()),
+        decisionsWaiting: decisionCards.actionableCount(openDecisions),
+        decisionsTotal: openDecisions.length,
+      }),
+      run: (id) => runCommand(id),
+    },
     windows: {
       command: {
         open: () => createCommandWindow(getFleetControl(), { createFleetWindow }),
@@ -1650,6 +1946,20 @@ function openConsole() {
           if (deckWindow && !deckWindow.isDestroyed()) deckWindow.close();
         },
         isOpen: () => Boolean(deckWindow && !deckWindow.isDestroyed()),
+      },
+      stage: {
+        open: () => createStageWindow(),
+        close: closeStageWindow,
+        isOpen: isStageWindowOpen,
+      },
+      // U03 guarded (see the require up top): no detach target exists on a
+      // box where cast-window.cjs has not landed yet -- open/close are then
+      // no-ops and isOpen stays false, matching sessions' own "no detach
+      // wiring yet" shape rather than throwing.
+      cast: {
+        open: () => (createCastWindow ? createCastWindow() : null),
+        close: () => { if (closeCastWindow) closeCastWindow(); },
+        isOpen: () => (isCastWindowOpen ? isCastWindowOpen() : false),
       },
       chat: {
         open: () => createChatWindow(),
@@ -1888,6 +2198,26 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
     // Push-to-talk (2026-08-29): base64 wav from the renderer's MediaRecorder
     // -> temp file -> gateway transcribe_audio -> transcript. Errors return
     // "ERROR: ..." strings so the renderer can show them without a throw.
+    // Slice C. The transcript is a COMMAND: commandAction is what the room
+    // publisher is attached to, so the owner's words appear in the room and the
+    // answer comes back through the avatar's voice.
+    ipcMain.handle("desk:voice-heard", async (_event, text) => {
+      const said = String(text || "").trim();
+      listenState = "idle";
+      refreshTrayMenu();
+      if (!said) return { ok: false, error: "nothing was heard" };
+      debugLog("voice heard", said.slice(0, 120));
+      try {
+        const result = await commandAction(said, { source: "voice" });
+        return { ok: true, text: said, result };
+      } catch (error) {
+        return { ok: false, text: said, error: String((error && error.message) || error) };
+      }
+    });
+    ipcMain.on("desk:voice-listen-state", (_event, state) => {
+      listenState = String(state || "idle");
+      refreshTrayMenu();
+    });
     ipcMain.handle("desk:voice-transcribe", async (_event, audioB64, format) => {
       try {
         if (typeof audioB64 !== "string" || audioB64.length === 0) {
@@ -1947,8 +2277,10 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
         : `📥 ${verdict.kind}: ${verdict.name} — ${String(verdict.summary).slice(0, 160)}`;
       const speakText = verdict.kind === "doc" ? verdict.summary : String(verdict.summary).slice(0, 220);
       // The avatar SPEAKS the verdict (fail-soft: a dead voice service must
-      // never fail the drop itself).
-      void speakAloud(speakText);
+      // never fail the drop itself). U28: origin STAMPED "desk:drop" -- same
+      // funnel as bridge:/speak and mcp:speak, so a channel/actor grant in
+      // cast.json can mute this lane without a code change.
+      void speakAloud(speakText, undefined, undefined, undefined, "desk:drop");
       // GAP-4 agent pass: post the notice to the cockpit channel; the deck's
       // own relay feed picks it up via refreshRelayFeed. Fire-and-forget —
       // a refused post must not fail the drop.
@@ -2080,15 +2412,49 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
           return true;
         case "relay-post": {
           if (typeof arg !== "string" || arg.length === 0) return false;
+          // Two payload shapes: the legacy bare string posts to the company
+          // room; a JSON {channel, text} posts to ONE live session channel
+          // (`#session-*` only -- the multiplayer attach lane, 2026-09-19).
+          // Anything else as a channel is refused here, not forwarded: the
+          // renderer must never be able to aim the owner's identity at an
+          // arbitrary channel through this verb.
+          let channel = RELAY_CHANNEL;
+          let text = arg;
+          if (arg.startsWith("{")) {
+            let parsed;
+            try { parsed = JSON.parse(arg); } catch { return "malformed relay-post payload"; }
+            if (!parsed || typeof parsed.text !== "string" || !parsed.text.trim()) return false;
+            if (typeof parsed.channel === "string" && parsed.channel) {
+              if (!/^#session-[a-f0-9]{8}$/.test(parsed.channel)) return "refused: not a live session channel";
+              channel = parsed.channel;
+            }
+            text = parsed.text;
+          }
           // AWAIT and report the real result: the fire-and-forget version
           // returned true while the relay 403'd the post (agent-only channel,
           // unjoined identity) -- the chat window then believed the message
           // sent. False must reach the renderer. A failure returns the
           // relay's OWN refusal reason (a string) so the chat window shows
           // WHY, not just "refused".
-          const sent = await postToRelay(RELAY_CHANNEL, arg);
-          if (sent && sent.ok) void refreshRelayFeed();
+          const sent = await postToRelay(channel, text);
+          if (sent && sent.ok && channel === RELAY_CHANNEL) void refreshRelayFeed();
           return sent && sent.ok ? true : (sent && sent.detail) || "the relay refused";
+        }
+        // Multiplayer attach (PRD REQ-1/9, 2026-09-19): the live session
+        // channels the relay lists, and one channel's history. Both are
+        // READS of the relay through the same CLI + bearer as the feed.
+        case "relay-channels": {
+          const names = await fetchRelayChannels();
+          return names.filter((n) => /^#session-[a-f0-9]{8}$/.test(n));
+        }
+        case "relay-history": {
+          if (typeof arg !== "string" || !arg.startsWith("{")) return [];
+          let parsed;
+          try { parsed = JSON.parse(arg); } catch { return []; }
+          if (!parsed || typeof parsed.channel !== "string") return [];
+          if (!/^#session-[a-f0-9]{8}$/.test(parsed.channel)) return [];
+          const limit = Math.max(1, Math.min(200, Number(parsed.limit) || 80));
+          return fetchRelayHistory(parsed.channel, limit);
         }
         // The per-avatar DIRECT chat send path: the conversation with a
         // spawned agent is the THREAD under its message (the relay's
@@ -2127,11 +2493,96 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
             return `ERROR: ${error instanceof Error ? error.message : String(error)}`;
           }
         }
+        // room-steer (U28 item 7): an ADDRESSED message to ONE live session,
+        // through the room spine's `to` field (U10/U18) and steer_dispatch.py's
+        // mailbox (U11/U13) -- explicitly NOT through CommandAgent, which would
+        // spawn a fresh `claude -p` at a hardcoded cwd and answer from an EMPTY
+        // context (room-address.cjs's own header names this trap). ChatView.tsx
+        // calls `.action('room-steer', JSON.stringify({ to, text, label }))`
+        // with an already-picked session id; the avatar menu's "Message this
+        // session…" item (popupAvatarMenu) currently just opens the pane for
+        // the owner to pick from there (a pre-targeted send is a possible
+        // follow-up, not wired here — see this unit's own report).
+        case "room-steer": {
+          if (typeof arg !== "string" || !arg.trim()) return false;
+          let parsed;
+          try {
+            parsed = JSON.parse(arg);
+          } catch {
+            return { ok: false, channel: "none", detail: "malformed room-steer payload" };
+          }
+          if (!parsed || typeof parsed !== "object") {
+            return { ok: false, channel: "none", detail: "malformed room-steer payload" };
+          }
+          const text = typeof parsed.text === "string" ? parsed.text.trim() : "";
+          if (!text) return { ok: false, channel: "none", detail: "nothing to send" };
+          let to = typeof parsed.to === "string" && parsed.to ? parsed.to : null;
+          let label = typeof parsed.label === "string" ? parsed.label : "";
+          // The avatar-menu path knows the SLOT, not the session id.
+          if (!to && typeof parsed.slotId === "string" && parsed.slotId) {
+            const addr = addressForSlot(parsed.slotId);
+            if (addr && addr.actorId) to = addr.actorId;
+          }
+          // No explicit target at all: fall back to room-address's text
+          // resolver over the live stage -- it REFUSES rather than guesses
+          // when a phrase matches more than one body (room-address.cjs's own
+          // header). `to` is a routing hint only either way; authority never
+          // travels through it (see steerEvent's doc in room-publisher.cjs).
+          if (!to) {
+            const st = roomStageHost.status();
+            const onStage = st && Array.isArray(st.onStage) ? st.onStage : [];
+            const titles = roomPublisher ? await roomPublisher.sessionTitles() : {};
+            const bodies = onStage.map((b) => ({
+              slotId: b.slotId, agent: b.agent, actorId: b.actorId, actorKind: b.actorKind,
+              title: titles[b.actorId] || null,
+            }));
+            const resolved = resolveAddress(text, bodies);
+            if (!resolved.to) {
+              return { ok: false, channel: "none", detail: resolved.reason || "could not address that session" };
+            }
+            to = resolved.to;
+            label = resolved.label || label;
+          }
+          if (!roomPublisher) return { ok: false, channel: "none", detail: "room publisher not started" };
+          const id = require("node:crypto").randomUUID();
+          const event = steerEvent({
+            id, text, to: [to], label, source: "desk:chat",
+            actor: { kind: "human", id: "owner", name: "owner" },
+          });
+          const published = await roomPublisher.publishSteer(event);
+          if (!published.ok) {
+            return { ok: false, channel: "none", detail: published.error || "the room refused the steer" };
+          }
+          // The publish only proves the SPINE took it -- steer_dispatch.py's
+          // OWN steering_receipt (U11) says what actually happened. Poll
+          // briefly rather than claim delivery from the publish alone
+          // (ChatView.tsx's own receiptFor() risk note names this exactly:
+          // "claiming delivery for something that is only queued").
+          const deadline = Date.now() + 4000;
+          const sinceSeq = Number(published.seq) || 0;
+          while (Date.now() < deadline) {
+            const receipts = await roomPublisher.recentReceipts({ sinceSeq });
+            const mine = receipts.find((r) => r.correlationId === id);
+            if (mine) return { ok: true, channel: mine.channel, landed_now: mine.channel === "pty", detail: mine.detail, queued: mine.queued };
+            await new Promise((resolve) => setTimeout(resolve, 400));
+          }
+          // No receipt within the budget: still ok (the spine took it), but
+          // NO channel fact yet -- ChatView.tsx's receiptFor() reads this as
+          // "still queued", never as delivered.
+          return { ok: true, channel: null, detail: "queued" };
+        }
         case "spawn-agent": {
           if (typeof arg !== "string" || arg.length === 0) return false;
-          const roster = listCharacters();
+          // U28: DELETED fallbackCharacterForAgent's own ad hoc hash in favour
+          // of cast-config's stableCharacter -- the SAME hash room-stage-host
+          // uses to seat an agent that arrives with no assignment, "so
+          // Add-Avatar and the room agree on what an agent looks like".
+          const { filterCharacters } = require("./content-rating.cjs");
+          const roster = filterCharacters(listCharacters());
           const assigned = getAgentAvatar(arg);
-          const character = assigned || fallbackCharacterForAgent(arg, roster);
+          const taken = [...avatarSlots.values()].map((info) => info.name).filter(Boolean);
+          const resident = getActiveCharacter() || null;
+          const character = assigned || cast.stableCharacter(arg, roster, { taken, resident });
           if (!character) return false;
           return spawnAvatarSlot(nextFreeSlotId(), character, arg);
         }
@@ -2194,7 +2645,9 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
       onRemoveAvatar: (slotId) => removeAvatarSlot(slotId),
       onFleet: (action, opts) => fleetAction(action, opts),
       onCommand: (text, opts) => commandAction(text, opts),
-      onSpeak: ({ text, voice, speed }) => speakAloud(text, voice, speed),
+      // U28: the MCP `speak` tool door -- origin STAMPED here, same reason as
+      // the bridge's speakHandler above.
+      onSpeak: ({ text, voice, speed }) => speakAloud(text, voice, speed, undefined, "mcp:speak"),
       onDesktop: (surface) => {
         if (surface === "overlay") showLivingDesktop();
         else if (surface === "app") showDesktopApp();
@@ -2211,13 +2664,15 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
       decisionsProvider: () => decisionCards.lastOpen(),
       fleetHandler: (verb, { fresh = false } = {}) => fleetAction(verb === "open" ? "open_panel" : verb, { fresh }),
       // awsh /desktop, adk desk desktop, awconnect's popup and `desk://` all land here.
-      speakHandler: ({ text, voice, speed, slot }) => speakAloud(text, voice, speed, slot),
+      // U28: this is the POST /speak door -- origin STAMPED here, never read
+      // off the request body (see speakAloud's own doc).
+      speakHandler: ({ text, voice, speed, slot }) => speakAloud(text, voice, speed, slot, "bridge:/speak"),
       consoleHandler: (pane) => {
         if (pane === "inbox" || pane === "cards") return { ok: openInbox() !== false, pane: "inbox" };
         openConsole();
         return { ok: focusPane(pane) !== false, pane };
       },
-      stageStatusProvider: () => ({ ...(roomStage ? roomStage.status() : { room: false }), mainLag, present: { mode: presentState.present, gpu: presentState.gpu } }),
+      stageStatusProvider: () => ({ ...(roomStageHost.status() || { room: false }), mainLag, present: { mode: presentState.present, gpu: presentState.gpu } }),
       avatarBoundsProvider: () =>
         avatarWindow && !avatarWindow.isDestroyed() && avatarWindow.isVisible()
           ? avatarWindow.getBounds()
@@ -2318,9 +2773,23 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
       },
     });
 
-    globalShortcut.register("CommandOrControl+Shift+A", toggleOverlay);
-    globalShortcut.register("CommandOrControl+Shift+=", () => growWindow());
-    globalShortcut.register("CommandOrControl+Shift+-", () => shrinkWindow());
+    // 🚩 register() RETURNS whether it got the accelerator, and the answer was
+    // thrown away. Another app holding Ctrl+Shift+= takes the only keyboard path
+    // to window size with no error anywhere -- the keys simply stop working,
+    // which is exactly what "i cant control the size anymore" looks like. Say it
+    // out loud; the tray menu is the path that does not depend on this.
+    for (const [accel, action] of [
+      ["CommandOrControl+Shift+A", toggleOverlay],
+      ["CommandOrControl+Shift+=", () => growWindow()],
+      ["CommandOrControl+Shift+-", () => shrinkWindow()],
+      // Slice C's "anywhere hotkey": the owner can talk to the agents without
+      // finding a window first, which was the whole complaint.
+      ["CommandOrControl+Shift+Space", () => toggleListening()],
+    ]) {
+      if (!globalShortcut.register(accel, action)) {
+        console.warn(`[desk] shortcut ${accel} is held by another app -- use the tray menu`);
+      }
+    }
     handleProtocolArgv(process.argv);
 
     audioListener = createAudioListener({

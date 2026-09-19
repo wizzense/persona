@@ -27,6 +27,10 @@ if (href.includes("command.html")) {
   require("./fleet-preload.cjs");
 } else if (href.includes("sessions.html")) {
   require("./sessions-preload.cjs");
+} else if (href.includes("stage.html")) {
+  require("./stage-preload.cjs");
+} else if (href.includes("cast.html")) {
+  require("./cast-preload.cjs");
 } else if (!href.includes("console.html")) {
   // The renderer bundle: ?deck=1 and ?chat=1 both live here. Loaded ONLY for
   // those frames, because preload.cjs also installs middle-drag window-move
@@ -42,9 +46,17 @@ contextBridge.exposeInMainWorld("aitherConsole", {
   detach: (paneId) => ipcRenderer.invoke("desk:console-detach", String(paneId)),
   /** Take it back: close the standalone window, re-embed the pane. */
   reattach: (paneId) => ipcRenderer.invoke("desk:console-reattach", String(paneId)),
-  /** Which panes are currently detached — the console asks on focus, because the
-   *  owner can close a detached window directly and the rail must not lie. */
+  /** Which panes are currently detached. Still asked on focus as a backstop; the
+   *  live answer arrives through onSurfaces below. */
   detached: () => ipcRenderer.invoke("desk:console-detached"),
+  /** WHERE every pane is, pushed by main whenever the map moves (slice 2). The
+   *  owner can close a detached window from its own title bar, and the rail used
+   *  to keep saying "detached" until the console next regained focus. */
+  onSurfaces: (listener) => {
+    const handler = (_event, snapshot) => listener(snapshot || {});
+    ipcRenderer.on("desk:console-surfaces", handler);
+    return () => ipcRenderer.off("desk:console-surfaces", handler);
+  },
   /** Report where a HOSTED pane should be painted, or null when it is hidden.
    *  Main owns the view; the shell owns the layout, and only it can measure it. */
   stage: (pane, rect) => ipcRenderer.invoke("desk:console-stage",
@@ -61,5 +73,9 @@ contextBridge.exposeInMainWorld("aitherConsole", {
     ipcRenderer.on("desk:console-inbox-count", handler);
     return () => ipcRenderer.off("desk:console-inbox-count", handler);
   },
+  /** Everything Desk can do, for the palette (Ctrl+K). Resolved labels, no logic. */
+  commands: () => ipcRenderer.invoke("desk:console-commands"),
+  /** Run one of them by id. */
+  runCommand: (id) => ipcRenderer.invoke("desk:console-command-run", String(id)),
   close: () => ipcRenderer.send("desk:console-close"),
 });

@@ -42,6 +42,17 @@ const FLEET_VERBS = Object.freeze({
   "game on": "gaming",
   "gpu resume": "resume",
   "game off": "resume",
+  // ARC command and control (owner, 2026-09-19). Longer phrases first: the
+  // classifier matches by inclusion, so "arc run now" must be seen before "arc".
+  "arc run now": "arc-now",
+  "run arc now": "arc-now",
+  "arc now": "arc-now",
+  "arc status": "arc-status",
+  "is arc running": "arc-status",
+  "arc stop": "arc-stop",
+  "stop arc": "arc-stop",
+  "arc start": "arc-start",
+  "start arc": "arc-start",
 });
 
 function transcriptPath() {

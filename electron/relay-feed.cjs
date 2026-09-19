@@ -145,7 +145,7 @@ function relayRequest(method, urlPath, body, { headers = {} } = {}) {
     );
     req.on("error", () => resolve({ status: 0, body: "" }));
     // A hard timeout: the relay's RBAC can stall on Identity resolution
-    // (measured 2.5s) and a hung socket otherwise
+    // (measured 2.5s, the relay instrumentation) and a hung socket otherwise
     // eats the user's message with no answer at all.
     req.setTimeout(15000, () => req.destroy(new Error("relay request timed out")));
     req.end(payload);
@@ -342,9 +342,41 @@ function isDoorRefusal(r) {
 }
 
 /**
+ * The id the relay assigned to the record it just stored.
+ *
+ * 🚩 MEASURED in AitherRelay.py 2026-09-19, because a guess here is what made
+ * loop protection dead code: a message POST answers
+ * `{"success":true,"message":{…model_dump()}}` (AitherRelay.py:8586 ff) and a
+ * thread reply answers `{"success":true,"reply":{…},"thread_info":{…}}`
+ * (9494 ff). NEITHER carries the id at the top level, so `result.body.id` —
+ * the only thing noteOursToRoom could read before — was always undefined and
+ * the desk's own posts came back on the next poll as somebody else's words.
+ * `message_id` is accepted too: the forge-dispatch branch answers with that.
+ */
+function storedMessageId(parsed) {
+  if (!parsed || typeof parsed !== "object") return null;
+  const candidates = [
+    parsed.id,
+    parsed.message_id,
+    parsed.message && typeof parsed.message === "object" ? parsed.message.id : null,
+    parsed.reply && typeof parsed.reply === "object" ? parsed.reply.id : null,
+  ];
+  for (const c of candidates) {
+    if (typeof c === "string" && c) return c;
+  }
+  return null;
+}
+
+/**
  * One relay write with the door protocol around it. The write goes plainly
  * unless the relay has already told us this channel has a door; a 403-door
  * answer discards any cached attestation, presents once, and retries once.
+ *
+ * On 2xx the verdict CARRIES the relay's record: {ok, detail, id, body}. The
+ * id is the whole point — it is the only thing that identifies what THIS desk
+ * wrote (we post under the owner's own nick, so nick-based self-detection
+ * silences the owner instead, measured 2026-09-19). `ok` and `detail` keep
+ * their exact old meaning: main.cjs and relay-poller.cjs read only those two.
  */
 async function doorGatedWrite(channel, urlPath, payload, requestFn) {
   const door = doorFor(channel);
@@ -371,7 +403,14 @@ async function doorGatedWrite(channel, urlPath, payload, requestFn) {
     if (!a.ok) return { ok: false, detail: a.detail };
     r = await sendOnce({ [DOOR_HEADER]: a.attestation });
   }
-  if (r.status >= 200 && r.status < 300) return { ok: true, detail: "" };
+  if (r.status >= 200 && r.status < 300) {
+    let parsed;
+    try { parsed = JSON.parse(r.body); } catch { parsed = null; }
+    // A relay that answers 2xx with an unparseable body still stored the
+    // message; it just cannot tell us WHICH — id stays null and the bridge
+    // falls back to the room marker for loop protection.
+    return { ok: true, detail: "", id: storedMessageId(parsed), body: parsed };
+  }
   return {
     ok: false,
     detail: r.status === 0
@@ -481,6 +520,13 @@ function shapeRows(parsed, channel, limit) {
 /**
  * Recent messages in a channel, shaped for the deck: [{channel, author,
  * text, at, id, threadId, replyCount, agent}]. [] on any failure.
+ *
+ * Every successful read also feeds relay-room-bridge, which turns what is NEW
+ * in a voiced channel into room events — so the agents coordinating in #agents
+ * get bodies on the stage instead of scrolling past in a panel (owner,
+ * 2026-09-18: "make the room more connected to ... awrelay/AitherRelay").
+ * Fire-and-forget on purpose: the panel must render at poll speed whether or
+ * not the room daemon is up, and the bridge swallows its own failures.
  */
 async function fetchHistory(channel = RELAY_CHANNEL, limit = HISTORY_LIMIT, execFn = spawn) {
   const { code, stdout } = await runAwrelay(
@@ -489,7 +535,45 @@ async function fetchHistory(channel = RELAY_CHANNEL, limit = HISTORY_LIMIT, exec
   );
   if (code !== 0) return [];
   try {
-    return shapeRows(JSON.parse(stdout), channel, limit);
+    const rows = shapeRows(JSON.parse(stdout), channel, limit);
+    mirrorToRoom(channel, rows);
+    return rows;
+  } catch {
+    return [];
+  }
+}
+
+/** Hand fresh rows to the room bridge. Never throws, never awaited. */
+function mirrorToRoom(channel, rows) {
+  try {
+    const { sharedBridge } = require("./relay-room-bridge.cjs");
+    // NOT selfNicks: [RELAY_NICK]. This desk posts under the OWNER's nick, so
+    // treating that nick as "ours" silenced the owner completely — measured
+    // 2026-09-19, the bridge read every message, advanced its watermark and
+    // mirrored nothing. What we wrote is identified by message id (noteOurs).
+    const bridge = sharedBridge();
+    void Promise.resolve(bridge.mirror(channel, rows)).catch(() => {});
+  } catch {
+    /* the bridge is optional: a desk with no room daemon just shows the panel */
+  }
+}
+
+/**
+ * The channel names the relay lists for this identity. [] on any failure.
+ * The Console filters this to `#session-*` -- the live Claude Code sessions
+ * the mirror hook publishes -- so attaching to a running session is one pick
+ * in the chat target menu, from any machine that reads the relay.
+ */
+async function fetchChannels(execFn = spawn) {
+  const { code, stdout } = await runAwrelay(["--json", "channels"], execFn);
+  if (code !== 0) return [];
+  try {
+    const parsed = JSON.parse(stdout);
+    const rows = Array.isArray(parsed) ? parsed : parsed?.channels;
+    if (!Array.isArray(rows)) return [];
+    return rows
+      .map((row) => (typeof row === "string" ? row : row && typeof row.name === "string" ? row.name : ""))
+      .filter(Boolean);
   } catch {
     return [];
   }
@@ -535,7 +619,25 @@ async function post(channel = RELAY_CHANNEL, text, requestFn = relayRequest) {
     nick: RELAY_NICK,
     content: text.trim().slice(0, 1500),
   };
-  return doorGatedWrite(channel, `/v1/channels/${q}/messages`, payload, requestFn);
+  const result = await doorGatedWrite(channel, `/v1/channels/${q}/messages`, payload, requestFn);
+  // Tell the room bridge this row is OURS, by id: the desk posts under the
+  // owner's own nick, so nothing else distinguishes what we wrote from what
+  // the owner wrote, and mirroring our own post would loop the room and the
+  // channel into each other.
+  noteOursToRoom(result);
+  return result;
+}
+
+/** Hand the id of a message WE just posted to the room bridge. Never throws. */
+function noteOursToRoom(result) {
+  try {
+    const id = result && (result.id || result.message_id || (result.body && result.body.id));
+    if (!id) return;
+    const { sharedBridge } = require("./relay-room-bridge.cjs");
+    sharedBridge().noteOurs(String(id));
+  } catch {
+    /* the bridge is optional */
+  }
 }
 
 /** Reply into a message's thread — the per-agent direct chat send path. */
@@ -553,12 +655,18 @@ async function postThreadReply(channel, messageId, text, requestFn = relayReques
     nick: RELAY_NICK,
     content: text.trim().slice(0, 1500),
   };
-  return doorGatedWrite(
+  const result = await doorGatedWrite(
     channel,
     `/v1/channels/${q}/messages/${encodeURIComponent(messageId)}/thread`,
     payload,
     requestFn,
   );
+  // A reply is ours too. The relay's history read can surface thread replies
+  // (reply_count walks the same records), and relay-poller.cjs acks every
+  // command order through THIS path — an unrecorded ack is the most repetitive
+  // thing the room could read back at the owner.
+  noteOursToRoom(result);
+  return result;
 }
 
 /** Test-only: clear the per-bearer join cache so a test can force a re-join. */
@@ -584,6 +692,7 @@ function _setBearerSourceForTests(fn) {
 }
 
 module.exports = {
+  fetchChannels,
   fetchHistory,
   fetchThread,
   post,

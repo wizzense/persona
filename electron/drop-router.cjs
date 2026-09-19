@@ -362,34 +362,140 @@ async function routeDrop({ filePath, mime = "" }, deps = {}) {
 /**
  * TTS the verdict so the avatar can SPEAK it. Direct host route to
  * AitherVoice's /voice/synthesize with return_base64 (proven 2026-08-29;
- * the gateway synthesize_speech tool is a known gap). Fail-soft:
+ * the gateway synthesize_speech tool is ledgered). Fail-soft:
  * {ok:false, reason} when the voice service is unreachable.
+ *
+ * ENDPOINT (U06, owner: nothing was listening on 127.0.0.1:8084 on a bare
+ * Windows box -- a hardcoded host is a verdict nobody can correct without a
+ * code edit): the endpoint is now cast.json's voice.endpoint, read through
+ * cast-config so re-pointing the desk at a real box is a file edit, not a
+ * patch. `opts.endpoint` is a TEST/caller override; when absent this module
+ * asks cast-config itself (lazy require -- cast-config never requires this
+ * file, so there is no cycle) and falls back to the historical literal
+ * 127.0.0.1:8084 if cast-config cannot be loaded at all (e.g. it is missing
+ * on an older checkout), so a box with no cast.json behaves exactly as
+ * before this unit landed.
  */
+const DEFAULT_ENDPOINT = Object.freeze({ host: "127.0.0.1", port: 8084, path: "/voice/synthesize" });
+const DEFAULT_MAX_CHARS = 220;
+
+/** Best-effort read of cast.json's voice defaults. Never throws: a missing
+ *  or unreadable cast-config module must degrade to DEFAULT_ENDPOINT, not
+ *  take the voice lane down. */
+function loadVoiceConfig() {
+  try {
+    const cast = require("./cast-config.cjs"); // lazy on purpose -- see doc above
+    const { snapshot } = cast.load();
+    return cast.resolveVoice(snapshot);
+  } catch {
+    return null;
+  }
+}
+
 // Playback rate for everything the avatar says. The fleet voices read slow
 // (owner, 2026-09-18: "the speech rate is too slow"); awsh already defaults to
-// 1.25x for the same reason. DESK_VOICE_SPEED overrides per host; the
-// service accepts 0.25-4.0.
+// 1.25x for the same reason. Precedence, most specific first: an EXPLICIT
+// requested speed (including 0 -- distinguished from "no speed was asked
+// for" and clamped up to SPEED_MIN rather than silently defaulted, the same
+// unset-vs-zero trap `Number(env) || 3` has everywhere else in this tree) ->
+// cast.json's voice.defaultSpeed (itself already folds in DESK_VOICE_SPEED
+// as ITS OWN fallback tier, see cast-config.resolveVoice) -> a direct
+// DESK_VOICE_SPEED read as a safety net if cast-config could not be loaded
+// at all -> the built-in 1.35. The service accepts 0.25-4.0.
 const SPEED_MIN = 0.25;
 const SPEED_MAX = 4.0;
 const SPEED_DEFAULT = 1.35;
-function voiceSpeed(requested, env = process.env) {
-  const raw = Number.isFinite(Number(requested)) && requested !== "" && requested != null
-    ? Number(requested)
-    : Number(env.DESK_VOICE_SPEED);
-  const speed = Number.isFinite(raw) && raw > 0 ? raw : SPEED_DEFAULT;
-  return Math.max(SPEED_MIN, Math.min(SPEED_MAX, speed));
+function clampSpeed(value) {
+  return Math.max(SPEED_MIN, Math.min(SPEED_MAX, value));
+}
+function voiceSpeed(requested, { env = process.env, config } = {}) {
+  const explicit = requested !== undefined && requested !== null && requested !== "";
+  if (explicit) {
+    const num = Number(requested);
+    if (Number.isFinite(num)) return clampSpeed(num); // 0 included: explicit beats every tier below it
+  }
+  const cfgSpeed = config && Number.isFinite(Number(config.defaultSpeed)) ? Number(config.defaultSpeed) : null;
+  if (cfgSpeed !== null && cfgSpeed > 0) return clampSpeed(cfgSpeed);
+  const envSpeed = Number(env.DESK_VOICE_SPEED);
+  if (Number.isFinite(envSpeed) && envSpeed > 0) return clampSpeed(envSpeed);
+  return SPEED_DEFAULT;
 }
 
-async function synthesizeVerdict(text, voice = "nova", { speed, maxChars = 220 } = {}) {
+// ─── duration estimate (U06: the ~5x-short bug that makes agents talk over
+// each other) ─────────────────────────────────────────────────────────────
+//
+// The service's own `duration_seconds` divides byte length by 32000 as if
+// the bytes were a 24 kHz 16-bit mono WAV; edge-tts actually emits ~24 kHz
+// 48 kbps mono MP3 (~6000 B/s) -- about a FIFTH of the true length -- and
+// room-stage paces the NEXT speaker on this number, so a short estimate is a
+// direct cause of overlapping voices. `format` in the response is a KNOWN
+// LIE (open gate VFH001: it says "wav" and sends mp3 bytes on purpose, a
+// shipped-decoder decision, not a bug this file can patch), so the bytes are
+// SNIFFED instead of trusted. The service's own duration is not IGNORED --
+// once U16's server-side fix lands it will be more precise than a flat
+// byte-rate guess -- but it is accepted only inside a PLAUSIBILITY band
+// around our own estimate (a guard, not a version check): today's /32000 bug
+// lands far outside that band and is rejected in favour of the honest
+// derived value.
+const MP3_BYTES_PER_SEC = 6000; // ~48 kbps / 8 -- edge-tts's default encode
+const WAV_BYTES_PER_SEC = 24000 * 2; // 24 kHz, 16-bit mono PCM
+
+/** Sniff the leading bytes of a base64 audio payload to tell WAV from MP3,
+ *  rather than trusting the response's declared (and known-lying) `format`. */
+function sniffAudioFormat(audioBase64) {
+  let head;
+  try {
+    head = Buffer.from(String(audioBase64 || "").slice(0, 24), "base64");
+  } catch {
+    return "unknown";
+  }
+  if (head.length >= 12 && head.toString("ascii", 0, 4) === "RIFF" && head.toString("ascii", 8, 12) === "WAVE") {
+    return "wav";
+  }
+  if (head.length >= 3 && head.toString("ascii", 0, 3) === "ID3") return "mp3"; // ID3v2 tag
+  if (head.length >= 2 && head[0] === 0xff && (head[1] & 0xe0) === 0xe0) return "mp3"; // MPEG frame sync
+  return "unknown";
+}
+
+function estimateDurationMs(audioBase64, sniffedFormat) {
+  const bytes = Math.floor(String(audioBase64 || "").length * 0.75); // base64 -> raw bytes
+  if (bytes <= 0) return 0;
+  const rate = sniffedFormat === "wav" ? WAV_BYTES_PER_SEC : MP3_BYTES_PER_SEC; // unknown defaults to mp3: that is what the service actually sends today
+  return Math.round((bytes / rate) * 1000);
+}
+
+function pickDurationMs(serviceSeconds, audioBase64, sniffedFormat) {
+  const derivedMs = estimateDurationMs(audioBase64, sniffedFormat);
+  const serviceMs = Number.isFinite(serviceSeconds) && serviceSeconds > 0 ? Math.round(serviceSeconds * 1000) : null;
+  if (serviceMs === null) return derivedMs;
+  if (derivedMs <= 0) return serviceMs;
+  // Half-to-double band: wide enough to admit a real encoder's true bitrate
+  // once U16 fixes the server, narrow enough to reject today's ~5x-short bug.
+  if (serviceMs >= derivedMs * 0.5 && serviceMs <= derivedMs * 2) return serviceMs;
+  return derivedMs;
+}
+
+async function synthesizeVerdict(text, voice = "nova", opts = {}) {
+  const { speed, endpoint: explicitEndpoint } = opts;
+  const voiceConfig = loadVoiceConfig();
+  const maxChars = Number.isFinite(Number(opts.maxChars)) && Number(opts.maxChars) > 0
+    ? Number(opts.maxChars)
+    : (voiceConfig && Number.isFinite(Number(voiceConfig.maxChars)) ? Number(voiceConfig.maxChars) : DEFAULT_MAX_CHARS);
   const short = String(text || "").slice(0, maxChars);
   if (!short) return { ok: false, reason: "nothing to say" };
+  const endpoint = {
+    host: (explicitEndpoint && explicitEndpoint.host) || (voiceConfig && voiceConfig.endpoint.host) || DEFAULT_ENDPOINT.host,
+    port: (explicitEndpoint && explicitEndpoint.port) || (voiceConfig && voiceConfig.endpoint.port) || DEFAULT_ENDPOINT.port,
+    path: (explicitEndpoint && explicitEndpoint.path) || (voiceConfig && voiceConfig.endpoint.path) || DEFAULT_ENDPOINT.path,
+  };
+  const resolvedSpeed = voiceSpeed(speed, { config: voiceConfig });
   return await new Promise((resolve) => {
-    const body = JSON.stringify({ text: short, voice, speed: voiceSpeed(speed), return_base64: true });
+    const body = JSON.stringify({ text: short, voice, speed: resolvedSpeed, return_base64: true });
     const req = http.request(
       {
-        host: "127.0.0.1",
-        port: 8084,
-        path: "/voice/synthesize",
+        host: endpoint.host,
+        port: endpoint.port,
+        path: endpoint.path,
         method: "POST",
         headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) },
         timeout: 90000,
@@ -403,15 +509,11 @@ async function synthesizeVerdict(text, voice = "nova", { speed, maxChars = 220 }
             const parsed = JSON.parse(text);
             const audio = parsed.audio_base64 || parsed.audioBase64 || parsed.base64;
             if (parsed.success && audio) {
-              const seconds = Number(parsed.duration_seconds);
+              const sniffed = sniffAudioFormat(audio);
               return resolve({
                 ok: true,
                 audioBase64: audio,
-                // The service says how long it is; else estimate from a 24 kHz
-                // 16-bit mono WAV so a caller can wait for the mouth to close.
-                durationMs: Number.isFinite(seconds) && seconds > 0
-                  ? Math.round(seconds * 1000)
-                  : Math.round((audio.length * 0.75) / (24000 * 2) * 1000),
+                durationMs: pickDurationMs(Number(parsed.duration_seconds), audio, sniffed),
               });
             }
             resolve({ ok: false, reason: String(parsed.error || parsed.detail || "synthesis failed").slice(0, 200) });
@@ -433,6 +535,13 @@ module.exports = {
   synthesizeVerdict,
   voiceSpeed,
   SPEED_DEFAULT,
+  SPEED_MIN,
+  SPEED_MAX,
+  DEFAULT_ENDPOINT,
+  DEFAULT_MAX_CHARS,
+  sniffAudioFormat,
+  estimateDurationMs,
+  pickDurationMs,
   stagePath,
   cleanupStage,
   kindOf,

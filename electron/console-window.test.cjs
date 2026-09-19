@@ -18,7 +18,9 @@ const read = (name) => fs.readFileSync(path.join(HERE, name), "utf8");
 
 test("every pane resolves to a page that exists", () => {
   const panes = paneSources("http://127.0.0.1:5173");
-  assert.equal(panes.length, 6);
+  // The count is asserted so a pane cannot be DROPPED by an edit that only meant
+  // to reorder the rail; bump it deliberately when one is added.
+  assert.equal(panes.length, 8);
   for (const pane of panes) {
     if (pane.kind !== "file") continue;
     assert.ok(
@@ -27,6 +29,24 @@ test("every pane resolves to a page that exists", () => {
     );
     assert.equal(pane.src, `./${pane.file}`);
   }
+});
+
+test("the rail is in this exact order -- a drop or a reorder must fail here", () => {
+  // Listed explicitly rather than derived from PANES, so an edit that silently
+  // drops or reshuffles an entry is caught here instead of only downstream.
+  assert.deepEqual(PANES.map((p) => p.id),
+    ["cards", "command", "fleet", "sessions", "chat", "stage", "cast", "desktop"]);
+});
+
+test("the Cast pane is a FILE pane, src resolved the same in dev-server and file:// modes", () => {
+  // Unlike a `kind: "view"` pane, a file pane's src never depends on the
+  // renderer base -- it must be non-null whether the desk is pointed at the
+  // vite dev server or a packaged file:// bundle.
+  const dev = paneSources("http://127.0.0.1:5173").find((p) => p.id === "cast");
+  const packaged = paneSources("file:///d/dist/index.html").find((p) => p.id === "cast");
+  assert.equal(dev.kind, "file");
+  assert.equal(dev.src, "./cast.html");
+  assert.equal(packaged.src, "./cast.html");
 });
 
 test("view panes carry the renderer base and their own query flag", () => {
@@ -63,7 +83,7 @@ test("an EMPTY renderer base is refused, never concatenated", () => {
   assert.equal(byId.command.src, "./command.html");
 });
 
-test("detach opens the pane's own window; reattach closes it", () => {
+test("detach opens the pane's own window; reattach closes it", async () => {
   const calls = [];
   let fleetOpen = false;
   __setWindowsForTest({
@@ -75,28 +95,97 @@ test("detach opens the pane's own window; reattach closes it", () => {
   });
 
   assert.deepEqual(detachedIds(), []);
-  const detached = callWindow("fleet", "open");
+  const detached = await callWindow("fleet", "open");
   assert.equal(detached.ok, true);
   assert.deepEqual(detached.detached, ["fleet"]);
 
-  const back = callWindow("fleet", "close");
+  const back = await callWindow("fleet", "close");
   assert.equal(back.ok, true);
   assert.deepEqual(back.detached, []);
   assert.deepEqual(calls, ["open", "close"]);
 });
 
-test("a missing target reports, and a throwing creator never escapes", () => {
+test("detachedIds()/callWindow accept the new cast id, same as any other pane", async () => {
+  // U28 (main.cjs, LAST in the plan) is what supplies the real window: this
+  // arm proves the rail's own machinery treats "cast" like any other pane id
+  // rather than needing a special case, independent of that later wiring.
+  let castOpen = false;
+  __setWindowsForTest({
+    cast: {
+      open: () => { castOpen = true; },
+      close: () => { castOpen = false; },
+      isOpen: () => castOpen,
+    },
+  });
+
+  assert.deepEqual(detachedIds(), []);
+  const detached = await callWindow("cast", "open");
+  assert.equal(detached.ok, true);
+  assert.deepEqual(detached.detached, ["cast"]);
+
+  const back = await callWindow("cast", "close");
+  assert.equal(back.ok, true);
+  assert.deepEqual(back.detached, []);
+  __setWindowsForTest({});
+});
+
+test("a reattach reply describes the windows AFTER the close lands", async () => {
+  // Electron's BrowserWindow.close() is asynchronous: isOpen() answers true for
+  // at least one turn afterwards. Read on the next line, the reply named the pane
+  // as still detached, and the shell painted the placeholder back over a pane that
+  // had in fact come home -- the owner's "I reattached the Inbox and the UI did
+  // not update".
+  let open = false;
+  __setWindowsForTest({
+    cards: {
+      open: () => { open = true; },
+      close: () => { setTimeout(() => { open = false; }, 60); },
+      isOpen: () => open,
+    },
+  });
+
+  await callWindow("cards", "open");
+  assert.deepEqual(detachedIds(), ["cards"]);
+
+  const back = await callWindow("cards", "close");
+  assert.equal(back.ok, true);
+  assert.deepEqual(back.detached, [], "the pane is back; the reply must say so");
+  __setWindowsForTest({});
+});
+
+test("a window that refuses to close still answers, bounded", async () => {
+  // The wait is bounded on purpose: a stuck window must not hang the rail, and
+  // the reply must report what is TRUE rather than what was asked for.
+  __setWindowsForTest({
+    fleet: { open: () => {}, close: () => {}, isOpen: () => true },
+  });
+  const started = Date.now();
+  const back = await callWindow("fleet", "close");
+  assert.equal(back.ok, true);
+  assert.deepEqual(back.detached, ["fleet"], "it never closed -- say so");
+  assert.ok(Date.now() - started < 5000, "the settle wait must be bounded");
+  __setWindowsForTest({});
+});
+
+test("a missing target reports, and a throwing creator never escapes", async () => {
   __setWindowsForTest({
     fleet: { open: () => { throw new Error("boom"); }, close: () => {}, isOpen: () => false },
   });
-  const missing = callWindow("cards", "open");
+  const missing = await callWindow("cards", "open");
   assert.equal(missing.ok, false);
   assert.match(missing.error, /no open target for pane cards/);
 
-  const threw = callWindow("fleet", "open");
+  const threw = await callWindow("fleet", "open");
   assert.equal(threw.ok, false);
   assert.equal(threw.error, "boom");
   __setWindowsForTest({});
+});
+
+test("the shell DESTROYS a reattached pane's placeholder, not just its class", () => {
+  // The placeholder is position:absolute over the whole stage. Leaving it in the
+  // DOM with .active hides the pane that just came back.
+  const html = read("console.html");
+  assert.match(html, /if \(!isDetached && stale\) stale\.remove\(\);/);
 });
 
 test("EVERY pane is reachable from main, both directions", () => {
@@ -121,7 +210,7 @@ test("the console preload COMPOSES the pane preloads, never copies them", () => 
   // deskBridge alone is 20 verbs. A hand-copied bridge drifts, and a pane would
   // then behave differently inside the console than in its detached window.
   const preload = read("console-preload.cjs");
-  for (const dep of ["./command-preload.cjs", "./fleet-preload.cjs", "./preload.cjs"]) {
+  for (const dep of ["./command-preload.cjs", "./fleet-preload.cjs", "./cast-preload.cjs", "./preload.cjs"]) {
     assert.ok(preload.includes(`require("${dep}")`), `console-preload must require ${dep}`);
   }
   // Exactly one namespace of its own; the other three come from the files above.

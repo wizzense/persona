@@ -5,10 +5,6 @@ const os = require("node:os");
 const path = require("node:path");
 
 const { filterCharacters, isHidden } = require("./content-rating.cjs");
-const {
-  packProvides,
-  packContentDir,
-} = require("./content-rating-loader.cjs");
 
 const ROOT = path.join(__dirname, "..");
 // Test seam: content-rating.test.cjs points this at a per-process temp dir so
@@ -26,37 +22,7 @@ const ASSET_DIRS = [
   path.join(ROOT, "dist", "assets"),
 ];
 
-/**
- * Get pack characters if the desk:characters-mature capability is available.
- * Returns a list of character names from the pack, or [] if unavailable.
- */
-function getPackCharacters() {
-  if (!packProvides("persona:characters-mature")) {
-    return [];
-  }
-  const packDir = packContentDir("persona:characters-mature", "persona");
-  if (!packDir) {
-    return [];
-  }
-  try {
-    const charDir = path.join(packDir, "characters");
-    if (!fs.existsSync(charDir)) {
-      return [];
-    }
-    const entries = fs.readdirSync(charDir, { withFileTypes: true });
-    return entries
-      .filter(
-        (entry) =>
-          entry.isDirectory() &&
-          fs.existsSync(path.join(charDir, entry.name, "model.vrm")),
-      )
-      .map((entry) => entry.name);
-  } catch {
-    return [];
-  }
-}
-
-/** Every character on disk (dev tree + pack), ratings ignored. Internal — callers that show a
+/** Every character on disk, ratings ignored. Internal — callers that show a
  *  character to a human must use listCharacters() instead. */
 function listAllCharacters() {
   let devCharacters;
@@ -73,9 +39,7 @@ function listAllCharacters() {
     devCharacters = [];
   }
 
-  const packCharacters = getPackCharacters();
-  const combined = [...devCharacters, ...packCharacters];
-  return Array.from(new Set(combined)).sort();
+  return Array.from(new Set(devCharacters)).sort();
 }
 
 /** The roster as a human may see it: R18/R15 characters are dropped entirely
@@ -135,18 +99,13 @@ function getActiveCharacter() {
 function installCharacter(name) {
   if (isHidden(name)) return false;
 
-  // Try dev tree first, then pack
-  let source = path.join(ROSTER_DIR, name);
-  let model = path.join(source, "model.vrm");
-
-  if (!fs.existsSync(model)) {
-    // Try loading from pack
-    const packDir = packContentDir("persona:characters-mature", "persona");
-    if (packDir) {
-      source = path.join(packDir, "characters", name);
-      model = path.join(source, "model.vrm");
-    }
-  }
+  // 🚩 The roster dir is the ONLY source (owner, 2026-09-19: "help people connect
+  // and find their own avatars"). The mature content pack that used to be the
+  // fallback here is gone from the product; the per-character age-rating gate
+  // (content-rating.cjs) stays, because VRoid Hub models arrive with r15/r18
+  // flags and honouring them is what keeps a downloaded roster safe.
+  const source = path.join(ROSTER_DIR, name);
+  const model = path.join(source, "model.vrm");
 
   if (!fs.existsSync(model)) return false;
 
@@ -217,17 +176,13 @@ function enrollNewestDownload(preferredName = null) {
 function planSlotInstall(name, slotId) {
   if (isHidden(name)) return null;
 
-  // Try dev tree first, then pack
-  let source = path.join(ROSTER_DIR, name);
-  let model = path.join(source, "model.vrm");
-
-  if (!fs.existsSync(model)) {
-    const packDir = packContentDir("persona:characters-mature", "persona");
-    if (packDir) {
-      source = path.join(packDir, "characters", name);
-      model = path.join(source, "model.vrm");
-    }
-  }
+  // 🚩 The roster dir is the ONLY source (owner, 2026-09-19: "help people connect
+  // and find their own avatars"). The mature content pack that used to be the
+  // fallback here is gone from the product; the per-character age-rating gate
+  // (content-rating.cjs) stays, because VRoid Hub models arrive with r15/r18
+  // flags and honouring them is what keeps a downloaded roster safe.
+  const source = path.join(ROSTER_DIR, name);
+  const model = path.join(source, "model.vrm");
 
   if (!fs.existsSync(model)) return null;
 

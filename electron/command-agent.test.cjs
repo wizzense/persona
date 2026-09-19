@@ -84,6 +84,7 @@ function agentWith({ claude = null, fleetControl = fakeFleetControl(), relay = n
 
 test("classifyCommand detects fleet verbs", () => {
   for (const t of ["fleet down", "fleet up", "fleet status", "fleet quiesce", "gpu quiet", "gpu resume",
+    "arc status", "arc run now", "arc stop", "start arc",
     "game on", "game off", "shut the fleet down", "bring the fleet up", "FLEET STATUS", "  fleet   status  "]) {
     assert.equal(classifyCommand(t).kind, "fleet", t);
   }
@@ -309,4 +310,14 @@ test("CommandAgent: an unresolvable backend falls back to the inherited env, VIS
     "no override on failure -- the desk's env is inherited, exactly the pre-fix behaviour");
   assert.ok(progress.some((t) => /\[backend\] deepseek NOT resolved .*vault unreachable/.test(t)),
     "the fallback is a rendered state, not a silent one");
+});
+
+test("classifyCommand: ARC phrases map to the ARC verbs, and the long phrase wins", () => {
+  const { classifyCommand } = require("./command-agent.cjs");
+  assert.deepEqual(classifyCommand("arc run now"), { kind: "fleet", action: "arc-now" });
+  assert.deepEqual(classifyCommand("please run arc now"), { kind: "fleet", action: "arc-now" });
+  assert.deepEqual(classifyCommand("ARC status"), { kind: "fleet", action: "arc-status" });
+  assert.deepEqual(classifyCommand("stop arc"), { kind: "fleet", action: "arc-stop" });
+  assert.deepEqual(classifyCommand("arc start"), { kind: "fleet", action: "arc-start" });
+  assert.equal(classifyCommand("tell me about the story arc").kind, "agent", "a bare 'arc' is not a verb");
 });

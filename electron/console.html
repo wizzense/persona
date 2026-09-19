@@ -55,6 +55,24 @@
   .placeholder strong { display: block; color: var(--fg); font-size: 15px; margin-bottom: 8px; }
   .placeholder p { margin: 0 0 16px; font-size: 12px; line-height: 1.6; }
   #error { color: #ff8b8f; font-size: 11px; padding: 0 14px 8px; min-height: 0; }
+
+  /* The palette: one keystroke to everything, because a capability that lives
+     only in a menu is one gesture change away from being unreachable. */
+  .scrim { position: fixed; inset: 0; background: rgba(6, 8, 12, .55); display: none;
+    align-items: flex-start; justify-content: center; padding-top: 12vh; z-index: 50; }
+  .scrim.open { display: flex; }
+  .palette { width: min(560px, 90vw); background: var(--panel); border: 1px solid var(--line);
+    border-radius: 12px; box-shadow: 0 24px 60px rgba(0, 0, 0, .55); overflow: hidden; }
+  .palette input { width: 100%; border: 0; border-bottom: 1px solid var(--line); background: #10141d;
+    color: var(--fg); font: 14px/1.4 system-ui; padding: 13px 15px; outline: none; }
+  .palette ul { list-style: none; margin: 0; padding: 6px; max-height: 46vh; overflow-y: auto; }
+  .palette li { padding: 9px 11px; border-radius: 7px; cursor: pointer; display: flex;
+    justify-content: space-between; gap: 12px; font-size: 13px; }
+  .palette li .where { color: var(--muted); font-size: 11px; }
+  .palette li[aria-selected="true"] { background: var(--btn-hi); }
+  .palette .empty { padding: 14px 15px; color: var(--muted); font-size: 12px; }
+  .palette .hint { border-top: 1px solid var(--line); padding: 8px 15px; color: var(--muted);
+    font-size: 11px; }
 </style>
 </head>
 <body>
@@ -77,6 +95,15 @@
     <div id="error"></div>
     <div class="stage" id="stage"></div>
   </main>
+
+  <div class="scrim" id="scrim">
+    <div class="palette" role="dialog" aria-label="Command palette">
+      <input id="palette-input" type="text" placeholder="Type a command — size, inbox, console…"
+             autocomplete="off" spellcheck="false" />
+      <ul id="palette-list"></ul>
+      <div class="hint">Enter runs · Esc closes · Ctrl+K opens</div>
+    </div>
+  </div>
 
 <script>
 "use strict";
@@ -191,6 +218,13 @@ function render() {
     const existing = document.getElementById("pane-" + pane.id);
     if (isDetached && existing) existing.remove();
 
+    // ...and symmetrically, a REATTACHED pane's placeholder is destroyed. The
+    // placeholder is absolutely positioned over the whole stage, so leaving it
+    // .active paints "Inbox is in its own window" ON TOP of the pane that just
+    // came back -- a reattach that changed everything except what is on screen.
+    const stale = document.getElementById("ph-" + pane.id);
+    if (!isDetached && stale) stale.remove();
+
     if (isSelected) {
       const node = isDetached ? placeholderFor(pane) : frameFor(pane);
       node.classList.add("active");
@@ -263,9 +297,24 @@ btnDetach.addEventListener("click", () => selected && detach(selected));
 btnReattach.addEventListener("click", () => selected && reattach(selected));
 document.getElementById("btn-close").addEventListener("click", () => window.aitherConsole.close());
 
-// The owner can close a detached window directly, so the rail is re-derived from
-// main every time this window regains focus. A rail that says "detached" over a
-// window that no longer exists strands the pane with no way back.
+// WHERE each pane is has ONE owner in main (surface-state.cjs); the shell renders
+// the map it is handed rather than keeping a second copy. This arrives whenever
+// the map moves -- including when the owner closes a detached window from its own
+// title bar, which the rail used to miss until the console next regained focus.
+if (typeof window.aitherConsole.onSurfaces === "function") {
+  window.aitherConsole.onSurfaces((snapshot) => {
+    const next = new Set(Object.entries(snapshot)
+      .filter(([, presentation]) => presentation === "detached")
+      .map(([paneId]) => paneId));
+    const same = next.size === detached.size && [...next].every((id) => detached.has(id));
+    if (same) return;
+    detached = next;
+    render();
+    reportStage();
+  });
+}
+// Backstop for a push that never arrived (a reload mid-transition): re-derive on
+// focus. Cheap, and it cannot contradict main -- it asks main.
 window.addEventListener("focus", () => { void refreshDetached(); });
 // A hosted view is positioned in DEVICE pixels by main and knows nothing about
 // the window changing size -- without this it stays the old size over the new
@@ -275,6 +324,110 @@ window.addEventListener("resize", () => { reportStage(); });
 // Main routing a surface here -- today a decision card, which used to spawn its
 // own Tk popup. `param` names one card; the pane is reloaded with it so "show me
 // THIS card" lands somewhere specific instead of merely opening the deck.
+// ── The command palette ───────────────────────────────────────────────────────
+// Ctrl+K anywhere in the console. Rows come from main's command registry, which
+// is also what renders the tray and the avatar menu -- so the palette cannot
+// offer a stale set, and a capability can never again be reachable through one
+// gesture only. The shell holds no command of its own; it renders and calls back.
+const scrim = document.getElementById("scrim");
+const paletteInput = document.getElementById("palette-input");
+const paletteList = document.getElementById("palette-list");
+let paletteRows = [];
+let paletteCursor = 0;
+
+function paletteMatches() {
+  const needle = paletteInput.value.trim().toLowerCase();
+  if (!needle) return paletteRows;
+  // Every word must appear somewhere in the label or the id: "win la" finds
+  // "Large" under window-size without anyone learning the id.
+  const words = needle.split(/\s+/);
+  return paletteRows.filter((row) => {
+    const hay = `${row.label} ${row.id} ${row.group}`.toLowerCase();
+    return words.every((word) => hay.includes(word));
+  });
+}
+
+function renderPalette() {
+  const rows = paletteMatches();
+  if (paletteCursor >= rows.length) paletteCursor = Math.max(0, rows.length - 1);
+  paletteList.replaceChildren();
+  if (!rows.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = paletteRows.length
+      ? "Nothing matches that."
+      : "No commands came back — main did not wire the registry.";
+    paletteList.appendChild(empty);
+    return;
+  }
+  rows.forEach((row, index) => {
+    const item = document.createElement("li");
+    item.setAttribute("aria-selected", String(index === paletteCursor));
+    const label = document.createElement("span");
+    label.textContent = row.label;
+    const where = document.createElement("span");
+    where.className = "where";
+    where.textContent = row.group;
+    item.append(label, where);
+    item.addEventListener("click", () => runPalette(row.id));
+    paletteList.appendChild(item);
+  });
+}
+
+async function runPalette(id) {
+  closePalette();
+  const result = await window.aitherConsole.runCommand(id);
+  // A command that could not run says so where the owner is looking, rather than
+  // leaving a palette that appears to have done something.
+  if (!result || result.ok !== true) say((result && result.error) || `could not run ${id}`);
+}
+
+async function openPalette() {
+  try {
+    paletteRows = (await window.aitherConsole.commands()) || [];
+  } catch (error) {
+    paletteRows = [];
+    say(String((error && error.message) || error));
+  }
+  paletteCursor = 0;
+  paletteInput.value = "";
+  scrim.classList.add("open");
+  renderPalette();
+  paletteInput.focus();
+}
+
+function closePalette() {
+  scrim.classList.remove("open");
+  paletteInput.blur();
+}
+
+paletteInput.addEventListener("input", () => { paletteCursor = 0; renderPalette(); });
+scrim.addEventListener("mousedown", (event) => { if (event.target === scrim) closePalette(); });
+document.addEventListener("keydown", (event) => {
+  const open = scrim.classList.contains("open");
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+    event.preventDefault();
+    return void (open ? closePalette() : openPalette());
+  }
+  if (!open) return;
+  if (event.key === "Escape") { event.preventDefault(); return closePalette(); }
+  const rows = paletteMatches();
+  if (event.key === "ArrowDown") {
+    event.preventDefault();
+    paletteCursor = rows.length ? (paletteCursor + 1) % rows.length : 0;
+    return renderPalette();
+  }
+  if (event.key === "ArrowUp") {
+    event.preventDefault();
+    paletteCursor = rows.length ? (paletteCursor - 1 + rows.length) % rows.length : 0;
+    return renderPalette();
+  }
+  if (event.key === "Enter" && rows[paletteCursor]) {
+    event.preventDefault();
+    return void runPalette(rows[paletteCursor].id);
+  }
+});
+
 window.aitherConsole.onFocus((payload) => {
   if (!payload || !payload.pane) return;
   const pane = panes.find((p) => p.id === payload.pane);

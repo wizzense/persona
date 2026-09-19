@@ -8,12 +8,17 @@ import { Avatar, type AvatarProps } from './Avatar';
 import type { AnimationType } from '../animation-catalog';
 import { calculateFullBodyFraming } from '../camera-framing';
 import { POSITION_BOUND, useAvatarLayout, type AvatarTransform } from '../hooks/useAvatarLayout';
+import { arrange, isArrangement } from '../stage/arrangements';
 import { useAvatarDrag } from '../hooks/useAvatarDrag';
-import { freeSpot } from '../hooks/stagePlacement';
+import { authoredFields, freeSpot } from '../hooks/stagePlacement';
 import { anyoneAudible } from '../hooks/voiceLevels';
 import type { VRM } from '@pixiv/three-vrm';
 import { applySpringScale } from '../hooks/useVrmLoader';
 
+/** How long an authored placement waits for its slot to go live (see applyPlace).
+ *  One render is all it needs; a second is generous and keeps a placement for a
+ *  slot that never spawns from lingering into the next body that reuses the id. */
+const PLACE_PENDING_MS = 1000;
 const MIN_SCALE = 0.3;
 const MAX_SCALE = 3;
 const clampScale = (value: number) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, value));
@@ -66,7 +71,7 @@ function FullBodyCamera({
 }) {
   const getThreeState = useThree((state) => state.get);
   const controlsReady = useThree((state) => Boolean(state.controls));
-  // This used to guard on `framedObject.current === object` and
+  // Measured: this used to guard on `framedObject.current === object` and
   // never re-run for the SAME avatar — so the window is user-resizable
   // (Electron default; nothing sets resizable:false) but resizing it left
   // the framing computed for the OLD aspect ratio in place, which reads as
@@ -100,12 +105,19 @@ function FullBodyCamera({
     }
     if (box.isEmpty()) return;
 
+    // 🚩 ZOOM FILLS THE FRAME WITH ONE PERSON; A GROUP MUST FIT. zoom 1.5 moves
+    // the camera a third closer than "everything fits", which is right for the
+    // resident alone and wrong the moment there are two: the union box is wide,
+    // a portrait overlay is width-bound, and the third that gets cropped is a
+    // BODY at the edge. Measured 2026-09-19 over CDP with three bodies in a
+    // 430x680 window: one clipped to a sliver, one entirely outside the frame,
+    // while the layout said all three stood within x = ±1.6.
     const framing = calculateFullBodyFraming(
       box,
       camera.fov,
       camera.aspect,
       1.12,
-      1.5,
+      framed.length > 1 ? 1 : 1.5,
     );
     camera.position.copy(framing.position);
     camera.near = Math.max(0.01, framing.distance / 100);
@@ -180,7 +192,6 @@ interface PlacedAvatarProps {
   onRotate: (yaw: number) => void;
   /** Clean LEFT-CLICK (no drag) on the avatar: the contextual "bring this one
    *  front and center" action — also the recovery move when an avatar got lost. */
-  onFocus?: (slotId: string) => void;
   avatarProps: Omit<AvatarProps, 'onReady'>;
   onReady: (scene: THREE.Object3D) => void;
 }
@@ -211,7 +222,7 @@ function resumeOrbit(orbit: { enabled?: boolean } | null) {
  *  position is committed to persisted layout state ONCE, on pointerup. All live values
  *  (y, scale) are read through refs so a re-render mid-drag can never strand the drag on
  *  a stale closure. */
-function PlacedAvatar({ slotId, transform, onDrag, onScale, onRotate, onFocus, avatarProps, onReady }: PlacedAvatarProps) {
+function PlacedAvatar({ slotId, transform, onDrag, onScale, onRotate, avatarProps, onReady }: PlacedAvatarProps) {
   const getThreeState = useThree((state) => state.get);
   const groupRef = useRef<THREE.Group>(null);
   const transformRef = useRef(transform);
@@ -372,17 +383,17 @@ function PlacedAvatar({ slotId, transform, onDrag, onScale, onRotate, onFocus, a
             onScale(clampScale(transformRef.current.scale - event.nativeEvent.deltaY * 0.001));
           }}
           onPointerUp={(event) => {
-            // Click vs drag: a left-click that never left the 6px band is the
-            // contextual FOCUS action (center this avatar), whatever the drag
-            // mode. A drag's pointerup either misses this handler (window-level
-            // listener owns it) or travels >6px and falls through.
+            // 🚩 A LEFT-CLICK DOES NOTHING TO THE CAMERA (2026-09-19, owner: "with
+            // multiple avatars on stage, clicking or interacting suddenly makes
+            // one or more of them completely disappear"). Until today a click
+            // that travelled <6px was "Focus camera here": FullBodyCamera then
+            // framed ONLY that body, and every other body fell out of the frame.
+            // Reproduced over CDP with three bodies -- one synthetic left click,
+            // two bodies gone. A vanish with no undo the owner can find ("Frame
+            // everyone" lives in a menu) is not a gesture; focus stays available
+            // where it is explicit, the per-avatar context menu.
             if (event.button !== 0 || !clickStartRef.current) return;
-            const travelled = Math.hypot(
-              event.nativeEvent.clientX - clickStartRef.current.x,
-              event.nativeEvent.clientY - clickStartRef.current.y,
-            );
             clickStartRef.current = null;
-            if (travelled < 6) onFocus?.(slotId);
           }}
           onContextMenu={(event) => {
             // OrbitControls preventDefault()s contextmenu (right-drag pans), which kills
@@ -429,6 +440,26 @@ export function Scene(props: SceneProps) {
   );
   const { layout, getTransform, setPosition, setScale, setYaw, clearSlot } = useAvatarLayout(defaultTransform);
   layoutRef.current = layout;
+  // An authored placement (`place-avatar`, the cast file via main) goes through the
+  // SAME setters a drag does, one component at a time: an omitted or rejected field
+  // leaves that component alone, so a defaulted slot keeps its free-spot placement
+  // instead of having the default frozen into the stored layout. authoredFields()
+  // has already dropped anything outside the stage bounds (drop, never clamp).
+  const applyPlace = useCallback(
+    (slotId: string, fields: ReturnType<typeof authoredFields>) => {
+      if (fields.position) setPosition(slotId, fields.position);
+      if (fields.scale !== undefined) setScale(slotId, fields.scale);
+      if (fields.yaw !== undefined) setYaw(slotId, fields.yaw);
+    },
+    [setPosition, setScale, setYaw],
+  );
+  // 🚩 spawn-avatar is handled by App and reaches Scene as a PROP one render later,
+  // so a place-avatar main sends right behind its spawn can arrive while the slot is
+  // not yet in extraSlots. Dropping it would read as "the setting does nothing";
+  // writing it straight into the layout would let a slot that never spawns leave a
+  // spot for whatever later body reuses the id (the leak cleared just below). So it
+  // waits here, briefly, and is applied the moment the slot goes live.
+  const pendingPlaceRef = useRef(new Map<string, { fields: ReturnType<typeof authoredFields>; at: number }>());
   // A removed slot's stored spot must not leak onto whatever LATER slot reuses that id
   // (nextFreeSlotId() reuses freed ids), so clear it the moment it drops out of extraSlots.
   const previousExtraIdsRef = useState(() => new Set<string>())[0];
@@ -439,7 +470,15 @@ export function Scene(props: SceneProps) {
     }
     previousExtraIdsRef.clear();
     liveIds.forEach((id) => previousExtraIdsRef.add(id));
-  }, [extraSlots, clearSlot, previousExtraIdsRef]);
+    const now = Date.now();
+    for (const [id, pending] of pendingPlaceRef.current) {
+      if (now - pending.at > PLACE_PENDING_MS) pendingPlaceRef.current.delete(id);
+      else if (liveIds.has(id)) {
+        pendingPlaceRef.current.delete(id);
+        applyPlace(id, pending.fields);
+      }
+    }
+  }, [extraSlots, clearSlot, previousExtraIdsRef, applyPlace]);
 
   // Every avatar's ready scene object, slot 0 plus each spawned extra — this is what
   // FullBodyCamera unions to frame all of them, not just slot 0. A plain object keyed by
@@ -479,8 +518,8 @@ export function Scene(props: SceneProps) {
   // to the state it mutates; App's own subscription handles the spawn/remove half and
   // both listeners coexist (the preload subscribe returns its own unsubscribe).
   const [focusUuid, setFocusUuid] = useState<string | null>(null);
-  // One focus entry point for both surfaces: the context menu's "Focus camera here"
-  // (main -> desk:event) and the left-CLICK on an avatar (PlacedAvatar onFocus).
+  // The one focus entry point: the context menu's "Focus camera here" (main ->
+  // desk:event). A left-click used to be a second one and it made bodies vanish.
   const focusSlot = useCallback(
     (slotId: string | null) => {
       if (!slotId) {
@@ -501,9 +540,40 @@ export function Scene(props: SceneProps) {
         focusSlot(event.slotId);
       } else if (event.type === 'reset-avatar-layout') {
         clearSlot(event.slotId);
+      } else if (event.type === 'stage-arrange') {
+        // Plan 40 slice G. Main names an ARRANGEMENT; the geometry lives here,
+        // beside the bounds it has to respect (src/stage/arrangements.ts).
+        const name = event.arrangement;
+        if (!isArrangement(name)) return;
+        const ids = ['slot0', ...extraSlots.map((slot) => slot.slotId)];
+        if (name === 'reset') {
+          ids.forEach((id) => clearSlot(id));
+          return;
+        }
+        const placed = arrange(name, ids, {
+          focus: event.slotId ?? null,
+          pair: Array.isArray(event.pair) ? event.pair : [],
+        });
+        for (const [id, transform] of Object.entries(placed)) {
+          setPosition(id, transform.position);
+          setScale(id, transform.scale);
+          setYaw(id, transform.yaw ?? 0);
+        }
+      } else if (event.type === 'place-avatar') {
+        // One AUTHORED body, from the cast file via main: an exact spot for a named
+        // agent, which is what the single free lane per side cannot express (see
+        // stagePlacement's STAGE_STEP note). Same bounds as every other write.
+        const id = event.slotId;
+        if (typeof id !== 'string' || !id) return;
+        const fields = authoredFields(event);
+        if (id === 'slot0' || extraSlots.some((slot) => slot.slotId === id)) {
+          applyPlace(id, fields);
+        } else {
+          pendingPlaceRef.current.set(id, { fields, at: Date.now() });
+        }
       }
     });
-  }, [focusSlot, clearSlot]);
+  }, [focusSlot, clearSlot, extraSlots, setPosition, setScale, setYaw, applyPlace]);
 
   return (
     <Canvas
@@ -548,7 +618,6 @@ export function Scene(props: SceneProps) {
         onDrag={(position) => setPosition('slot0', position)}
         onScale={(scale) => setScale('slot0', scale)}
         onRotate={(yaw) => setYaw('slot0', yaw)}
-        onFocus={focusSlot}
         avatarProps={props}
         onReady={handleAvatarReady}
       />
@@ -574,7 +643,6 @@ export function Scene(props: SceneProps) {
             onDrag={(position) => setPosition(slot.slotId, position)}
             onScale={(scale) => setScale(slot.slotId, scale)}
             onRotate={(yaw) => setYaw(slot.slotId, yaw)}
-            onFocus={focusSlot}
             avatarProps={avatarProps}
             onReady={(scene) => handleExtraReady(slot.slotId, scene)}
           />

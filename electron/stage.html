@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Stage</title>
+<style>
+  :root {
+    --bg: #0f1218; --panel: #171b24; --line: #262c3a; --fg: #e6e9f0; --muted: #8a93a6;
+    --btn: #222838; --btn-hi: #2c3447; --accent: #9ec1ff; --red: #ff8b8f;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+    font: 13px/1.45 system-ui, "Segoe UI", sans-serif; }
+  body { display: grid; grid-template-rows: 44px auto 1fr auto; height: 100vh; }
+
+  .bar { display: flex; align-items: center; gap: 10px; padding: 0 14px;
+    border-bottom: 1px solid var(--line); }
+  .bar .title { font-weight: 600; }
+  .bar .state { color: var(--muted); font-size: 12px; flex: 1; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chip { appearance: none; border: 1px solid var(--line); background: var(--btn);
+    color: var(--muted); border-radius: 6px; padding: 5px 10px; cursor: pointer;
+    font: 12px/1.2 system-ui; }
+  .chip:hover { background: var(--btn-hi); color: var(--fg); }
+  .chip.on { color: var(--fg); border-color: #2c4a7c; }
+  .chip.danger:hover { color: var(--red); border-color: #5a2c30; }
+
+  .arrangements { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 14px;
+    border-bottom: 1px solid var(--line); }
+
+  #list { overflow-y: auto; min-height: 0; padding: 6px 0; }
+  .row { display: flex; align-items: center; gap: 10px; padding: 9px 14px;
+    border-bottom: 1px solid #1c212c; }
+  .row .who { flex: 1; min-width: 0; display: grid; gap: 2px; }
+  .row .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .sub { color: var(--muted); font-size: 11px; }
+  .row .tag { font-size: 10px; border-radius: 999px; padding: 1px 7px;
+    border: 1px solid var(--line); color: var(--muted); }
+  .empty { color: var(--muted); padding: 22px 14px; }
+  .empty strong { display: block; color: var(--fg); margin-bottom: 6px; }
+  footer { border-top: 1px solid var(--line); padding: 8px 14px; color: var(--muted);
+    font-size: 11px; display: flex; gap: 10px; align-items: center; }
+  footer .err { color: var(--red); flex: 1; }
+</style>
+</head>
+<body>
+  <div class="bar">
+    <span class="title">Stage</span>
+    <span class="state" id="state">reading the stage…</span>
+    <button class="chip" id="refresh">Refresh</button>
+  </div>
+
+  <div class="arrangements" id="arrangements"></div>
+
+  <div id="list"></div>
+
+  <footer>
+    <span class="err" id="err"></span>
+    <span id="safety"></span>
+    <span>Bodies are also draggable on the stage itself — this pane is the path that needs no aim.</span>
+  </footer>
+
+<script>
+"use strict";
+
+// The Stage pane. It holds no geometry and no state: main lists the bodies, the
+// renderer places them (src/stage/arrangements.ts). Everything here is a name.
+const listEl = document.getElementById("list");
+const stateEl = document.getElementById("state");
+const errEl = document.getElementById("err");
+
+const ARRANGEMENTS = [
+  { id: "row", label: "Line them up" },
+  { id: "arc", label: "Gather in an arc" },
+  { id: "pair", label: "Face each other" },
+  { id: "focus", label: "Focus the selected" },
+  { id: "reset", label: "Reset everyone" },
+];
+
+let bodies = [];
+let selected = null;
+
+function say(message) {
+  errEl.textContent = message || "";
+}
+
+/** Every call reports; a verb that failed must not look like one that did nothing. */
+async function call(promise, what) {
+  try {
+    const result = await promise;
+    if (!result || result.ok !== true) {
+      say((result && result.error) || `${what} did not answer`);
+      return null;
+    }
+    say("");
+    return result;
+  } catch (error) {
+    say(`${what}: ${String((error && error.message) || error)}`);
+    return null;
+  }
+}
+
+function renderArrangements() {
+  const holder = document.getElementById("arrangements");
+  holder.replaceChildren();
+  for (const item of ARRANGEMENTS) {
+    const button = document.createElement("button");
+    button.className = "chip";
+    button.textContent = item.label;
+    button.dataset.arrangement = item.id;
+    // `focus` needs a subject; without a selection it would silently focus the
+    // resident, which reads as "the button picked the wrong body".
+    if (item.id === "focus" && !selected) button.disabled = true;
+    button.addEventListener("click", async () => {
+      await call(window.aitherStage.arrange(item.id, {
+        slotId: item.id === "focus" ? selected : null,
+        pair: item.id === "pair" && selected ? [selected] : [],
+      }), item.label);
+    });
+    holder.appendChild(button);
+  }
+}
+
+function renderBodies() {
+  listEl.replaceChildren();
+  if (!bodies.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    const head = document.createElement("strong");
+    head.textContent = "Nobody is on the stage";
+    const body = document.createElement("p");
+    body.textContent = "The resident avatar appears here once the window is open, and room "
+      + "agents appear as they speak. Arrangements apply to whoever is standing.";
+    empty.append(head, body);
+    listEl.appendChild(empty);
+    return;
+  }
+  for (const entry of bodies) {
+    const row = document.createElement("div");
+    row.className = "row";
+
+    const who = document.createElement("div");
+    who.className = "who";
+    const name = document.createElement("div");
+    name.className = "name";
+    name.textContent = entry.name || entry.slotId;
+    const sub = document.createElement("div");
+    sub.className = "sub";
+    sub.textContent = [entry.agent || null, entry.slotId].filter(Boolean).join(" · ");
+    who.append(name, sub);
+
+    const tag = document.createElement("span");
+    tag.className = "tag";
+    tag.textContent = entry.resident ? "resident" : "room";
+
+    const select = document.createElement("button");
+    select.className = "chip" + (selected === entry.slotId ? " on" : "");
+    select.textContent = selected === entry.slotId ? "Selected" : "Select";
+    select.addEventListener("click", () => {
+      selected = selected === entry.slotId ? null : entry.slotId;
+      renderBodies();
+      renderArrangements();
+    });
+
+    const frame = document.createElement("button");
+    frame.className = "chip";
+    frame.textContent = "Frame";
+    frame.addEventListener("click", () => call(window.aitherStage.focus(entry.slotId), "Frame"));
+
+    row.append(who, tag, select, frame);
+
+    // The resident is the desk's own avatar; main refuses to remove it, so the
+    // button is not offered rather than offered and refused.
+    if (!entry.resident) {
+      const remove = document.createElement("button");
+      remove.className = "chip danger";
+      remove.textContent = "Send away";
+      remove.addEventListener("click", async () => {
+        if (await call(window.aitherStage.remove(entry.slotId), "Send away")) {
+          if (selected === entry.slotId) selected = null;
+          void refresh();
+        }
+      });
+      row.appendChild(remove);
+    }
+    listEl.appendChild(row);
+  }
+}
+
+async function refresh() {
+  const result = await call(window.aitherStage.bodies(), "Bodies");
+  bodies = (result && result.bodies) || [];
+  if (selected && !bodies.some((b) => b.slotId === selected)) selected = null;
+  const safety = (result && result.safety) || null;
+  document.getElementById("safety").textContent = safety
+    ? `Mature content: ${safety.mature}`
+    : "";
+  stateEl.textContent = bodies.length
+    ? `${bodies.length} on stage`
+    : "nobody on stage";
+  renderBodies();
+  renderArrangements();
+}
+
+document.getElementById("refresh").addEventListener("click", () => void refresh());
+// A body arrives when a room agent speaks, so the list is polled rather than
+// pushed: the pane must not show a stage that emptied five minutes ago.
+setInterval(() => void refresh(), 4000);
+void refresh();
+</script>
+</body>
+</html>

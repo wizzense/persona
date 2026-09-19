@@ -6,6 +6,20 @@ const {
 } = require("@modelcontextprotocol/sdk/server/streamableHttp.js");
 const z = require("zod/v4");
 const { version } = require("../package.json");
+// Plan 40 slice F. A refusal must name its real cause: a character hidden by the
+// safety gate IS installed, and answering "not installed" sends the owner hunting
+// for a file that is sitting in the roster.
+const { refusalFor } = require("./content-rating.cjs");
+// U17: cast_describe is a READ of cast-config's own file, resolved with the same
+// tier logic every speaker goes through. Required directly (like content-rating
+// above) rather than plumbed through main.cjs, so this tool needs no per-caller
+// origin wiring — it is a diagnostic OVER the grants, not a grant itself.
+const cast = require("./cast-config.cjs");
+
+function refusalText(name, fallback) {
+  const refusal = refusalFor(name);
+  return refusal ? refusal.reason : fallback;
+}
 
 const MCP_PATH = "/mcp";
 const ANIMATION_EVENT_NAMES = {
@@ -20,7 +34,8 @@ const ANIMATION_NAMES = Object.keys(ANIMATION_EVENT_NAMES);
 const WINDOW_ACTIONS = ["show", "hide", "toggle"];
 // Fleet verbs an agent may drive (2026-09-07). `open_panel` raises the window
 // for the owner; the rest run the same FleetControl the window's buttons do.
-const FLEET_ACTIONS = ["down", "up", "gaming", "resume", "adopt", "open_panel"];
+const FLEET_ACTIONS = ["down", "up", "gaming", "resume", "adopt", "open_panel",
+  "arc-status", "arc-start", "arc-now", "arc-stop"];
 const SERVER_INSTRUCTIONS =
   "Desk controls the installed local desktop character. Use play_animation when the user asks for a visual reaction or it clearly supports their request. Use control_window to show, hide, or toggle Desk. Use speak to have the avatar say a short line aloud through AitherVoice with lip-sync. get_status is read-only.";
 
@@ -32,6 +47,103 @@ function textResult(text) {
 
 function getAnimationEventName(animation) {
   return ANIMATION_EVENT_NAMES[animation] ?? null;
+}
+
+/**
+ * describeCast — the read side of cast.json: the snapshot's own load
+ * error/problems, every EXPLICITLY configured actor/author/channel row run
+ * through resolveActor() (so its `*From` fields name which tier decided, and
+ * an unconfigured or rejected field shows up in that row's own `problems`
+ * rather than silently falling through), the installed roster (so a
+ * configured `character` can be judged against it — see cast-config's
+ * `inRoster`), and cast-seen.json: origins the room has watched speak that
+ * nobody granted. This is the whole point of the tool (U17): an agent that is
+ * mute can find out WHY instead of retrying into silence.
+ *
+ * Pure aside from the two reads (cast.json + cast-seen.json, both fail-soft
+ * inside cast-config). `castFile` is a test seam mirroring cast-config's own
+ * `{file}` param — pointing straight at a fixture beats juggling
+ * DESK_CAST_FILE across `node --test`'s parallel child processes.
+ *
+ * @returns {{ok: true, snapshot, error, problems, resolved, roster,
+ *   rosterActive, seen}}
+ */
+async function describeCast({ castFile, listCharacters } = {}) {
+  const loaded = cast.load(castFile ? { file: castFile } : {});
+  const snapshot = loaded.snapshot || {};
+
+  // Best-effort roster: describe must still answer when the caller has no
+  // lister wired (e.g. this tool tested standalone), it just cannot judge
+  // `character` against anything then (cast-config's inRoster: an empty
+  // roster is "nothing to judge against", not "nothing is valid").
+  let roster = [];
+  let rosterActive = null;
+  if (typeof listCharacters === "function") {
+    try {
+      const listed = await listCharacters();
+      if (Array.isArray(listed)) {
+        roster = listed;
+      } else if (listed && Array.isArray(listed.characters)) {
+        roster = listed.characters;
+        rosterActive = typeof listed.active === "string" ? listed.active : null;
+      }
+    } catch {
+      /* roster is a convenience for judging `character`, never a blocker */
+    }
+  }
+
+  const cfg = snapshot && typeof snapshot === "object" ? snapshot : {};
+  const ctxBase = { roster };
+  const resolved = [];
+  for (const key of Object.keys(cfg.actors || {})) {
+    resolved.push({
+      scope: "actors",
+      label: `actors[${JSON.stringify(key)}]`,
+      ...cast.resolveActor(snapshot, { ...ctxBase, key }),
+    });
+  }
+  for (const [author, record] of Object.entries(cfg.authors || {})) {
+    resolved.push({
+      scope: "authors",
+      label: `authors.${author}`,
+      ...cast.resolveActor(snapshot, { ...ctxBase, author }),
+    });
+    const seats = record && Array.isArray(record.seats) ? record.seats : [];
+    seats.forEach((_seat, seat) => {
+      resolved.push({
+        scope: "authors",
+        label: `authors.${author}.seats[${seat}]`,
+        ...cast.resolveActor(snapshot, { ...ctxBase, author, seat }),
+      });
+    });
+  }
+  for (const channel of Object.keys(cfg.channels || {})) {
+    resolved.push({
+      scope: "channels",
+      label: `channels[${JSON.stringify(channel)}]`,
+      ...cast.resolveActor(snapshot, { ...ctxBase, kind: "relay", channel }),
+    });
+  }
+
+  // readSeen() already fails soft (ENOENT/bad JSON -> {}); this catch is
+  // belt-and-suspenders against SEEN_FILE() itself throwing on a hostile path.
+  let seen;
+  try {
+    seen = cast.readSeen(castFile ? { file: cast.SEEN_FILE(castFile) } : {});
+  } catch {
+    seen = {};
+  }
+
+  return {
+    ok: true,
+    snapshot,
+    error: loaded.error,
+    problems: loaded.problems || [],
+    resolved,
+    roster,
+    rosterActive,
+    seen,
+  };
 }
 
 function createDeskMcpServer({
@@ -50,6 +162,10 @@ function createDeskMcpServer({
   onCommand = null,
   onDesktop = null,
   onSpeak = null,
+  // Test/override seam for cast_describe (see describeCast). Production never
+  // sets this — cast-config resolves CAST_FILE() itself (app.getPath("userData"),
+  // or DESK_CAST_FILE).
+  castFile = undefined,
 }) {
   const server = new McpServer(
     {
@@ -146,6 +262,50 @@ function createDeskMcpServer({
     async () => textResult(JSON.stringify(await getStatus())),
   );
 
+  // Read-only and unconditional (unlike list_characters/set_agent below, which
+  // only register when main.cjs wires their callbacks): cast.json is read
+  // directly, so there is nothing an embedder needs to supply for this tool to
+  // answer. `listCharacters`, if the embedder happens to also offer it, only
+  // sharpens the `character` provenance (see describeCast's roster judging) —
+  // its absence must never hide the tool.
+  //
+  // 🚩 NO WRITE COUNTERPART. Agent-driven avatar/voice writes are refused ON
+  // PURPOSE — set_agent already reassigns a character, and the measured
+  // complaint this whole cast surface exists to answer is exactly that:
+  // ambient telemetry "keeps defaulting and changing to an avatar I don't
+  // want" by re-installing a character and reloading the window every few
+  // seconds. An agent may read why it is muted; only the Cast pane may fix it.
+  // mcp-server.test.cjs asserts no writer for cast.json or cast-seen.json
+  // exists in the registered tool set — that assertion must FAIL if a later
+  // change adds one.
+  server.registerTool(
+    "cast_describe",
+    {
+      title: "Describe the room cast",
+      description:
+        "Read-only. Returns cast.json's snapshot (with its load error/problems), every " +
+        "explicitly configured actor/author/channel row resolved with its provenance " +
+        "(which config tier decided each field, or why a value was rejected), the " +
+        "installed character roster, and origins cast-seen.json has watched speak that " +
+        "nobody granted — so an agent that cannot get a voice can learn WHY instead of " +
+        "retrying into silence. There is no write tool here: reassigning an avatar or " +
+        "voice is done from the Cast pane, not by an agent calling itself into audibility.",
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async () => {
+      const described = await describeCast({ castFile, listCharacters });
+      return {
+        content: [{ type: "text", text: JSON.stringify(described, null, 2) }],
+        isError: described.ok === false,
+      };
+    },
+  );
+
   if (listCharacters != null && onCharacter != null) {
     server.registerTool(
       "list_characters",
@@ -188,7 +348,10 @@ function createDeskMcpServer({
         return textResult(
           ok
             ? `Desk switched to the ${name} character.`
-            : `No character named ${name} is installed. Use list_characters to see the roster.`,
+            : refusalText(
+              name,
+              `No character named ${name} is installed. Use list_characters to see the roster.`,
+            ),
         );
       },
     );
@@ -212,7 +375,7 @@ function createDeskMcpServer({
       // `listAnimations` was accepted as a constructor option and passed in by main.cjs,
       // but NO tool ever exposed it — so `FILE:<name>.vrma` playback worked while a caller
       // had no way to discover which packs existed short of listing the assets directory
-      // by hand. Registering it closes that.
+      // by hand. Registering it closes that (recorded in the AitherOS ledger).
       async () => textResult(JSON.stringify(await listAnimations())),
     );
   }
@@ -310,7 +473,11 @@ function createDeskMcpServer({
         return textResult(
           ok
             ? `Avatar spawned in slot ${slot_id} with character ${name}.`
-            : `Failed to spawn avatar: slot_id may be reserved (use a custom id like 'slot1'), or character ${name} is not installed.`,
+            : refusalText(
+              name,
+              `Failed to spawn avatar: slot_id may be reserved (use a custom id like 'slot1'), `
+              + `or character ${name} is not installed.`,
+            ),
         );
       },
     );
@@ -395,7 +562,7 @@ function createDeskMcpServer({
       {
         title: "Control the AitherOS fleet",
         description:
-          "down = stop AND runtime-mask every aither unit + container (holds against restarts); up = unmask and bring back exactly what was stopped (GPU models one at a time, minutes); gaming = GPU models + routine runners off, rest stays up; resume = undo gaming; adopt = record a hand-stopped (masked) fleet so `up` knows what to start; open_panel = show the Fleet window to the owner. Refused with busy when another action is running. Same implementation as the Fleet window and `game down|up`.",
+          "down = stop AND runtime-mask every aither unit + container (holds against restarts); up = unmask and bring back exactly what was stopped (GPU models one at a time, minutes); gaming = GPU models + routine runners off, rest stays up; resume = undo gaming; adopt = record a hand-stopped (masked) fleet so `up` knows what to start; open_panel = show the Fleet window to the owner. arc-status = is the ARC solver running and the world model learning (train_steps); arc-start = unmask + start it (quiet hours 23:00-07:00 PT still apply); arc-now = run it for 4 h overriding quiet hours and any GPU hold (attributed, self-expiring); arc-stop = stop the solver, world model stays up. Refused with busy when another action is running. Same implementation as the Fleet window and `game down|up`.",
         inputSchema: {
           action: z.enum(FLEET_ACTIONS).describe("The fleet action."),
         },
@@ -490,5 +657,6 @@ module.exports = {
   WINDOW_ACTIONS,
   createDeskMcpHandler,
   createDeskMcpServer,
+  describeCast,
   getAnimationEventName,
 };

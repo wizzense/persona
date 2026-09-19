@@ -35,6 +35,8 @@
  */
 
 const path = require("node:path");
+// WHERE each surface is, with one owner (slice 2 of docs/UX-REIMPLEMENTATION.md).
+const { createSurfaceState } = require("./surface-state.cjs");
 
 // Required lazily, not at module load: `paneSources`, `detachedIds` and
 // `callWindow` are the parts worth asserting, and they are pure. A top-level
@@ -83,6 +85,23 @@ const PANES = Object.freeze([
     id: "chat", label: "Chat", hint: "The company room",
     kind: "view", query: "chat=1",
   }),
+  // Plan 40 slice G, the surface half: who is standing on the stage and the
+  // arrangements, in a list. Every other way to manage a body is a GESTURE on
+  // that body (drag, right-drag, wheel, right-click) -- useless when the body is
+  // hidden, tiny or behind a window, which is how the owner lost control of the
+  // stage in the first place.
+  Object.freeze({
+    id: "stage", label: "Stage", hint: "Who is standing, and where",
+    kind: "file", file: "stage.html",
+  }),
+  // Plan 40 cast pane: who appears and how they sound, authored in cast.json
+  // (U01) instead of a nested tray submenu click. `kind: "file"` on purpose --
+  // it needs no vite build, and src/** is the peer's territory this unit does
+  // not touch.
+  Object.freeze({
+    id: "cast", label: "Cast", hint: "Who appears, and how they sound",
+    kind: "file", file: "cast.html",
+  }),
   // 🚩 HOSTED, not framed, and the difference is the login. The AitherDesktop
   // shell keeps its session in the persist:living-desktop partition -- that is
   // where the vault-injected aither_auth_token lives and why the standalone
@@ -101,6 +120,10 @@ let wired = false;
 /** { <paneId>: { open(), close(), isOpen() } } — injected by main.cjs. */
 let windowsImpl = {};
 let rendererUrlImpl = null;
+/** { list(ctx) -> rows, run(id) } — injected by main.cjs; stubbed by the smoke.
+ *  The palette lives HERE rather than in main so the console can be verified
+ *  without loading main.cjs (which would take the running Desk's instance lock). */
+let commandsImpl = null;
 
 /**
  * Resolve each pane's content URL.
@@ -139,19 +162,89 @@ function resolveRendererUrl() {
   return "";
 }
 
-/** Which panes are currently living in their own window. */
-function detachedIds() {
-  return PANES.filter((pane) => {
+/**
+ * WHERE each pane is, with one owner (surface-state.cjs, slice 2 of
+ * docs/UX-REIMPLEMENTATION.md). The windows stay the oracle: `observeWindows()`
+ * asks them, `reconcile` folds the answer in, and subscribers hear about it once.
+ */
+const surfaces = createSurfaceState(PANES.map((pane) => pane.id));
+
+/** What the window creators say right now -- reality, not intention. */
+function observeWindows() {
+  const observed = {};
+  for (const pane of PANES) {
     const impl = windowsImpl[pane.id];
     try {
-      return Boolean(impl && typeof impl.isOpen === "function" && impl.isOpen());
+      observed[pane.id] = Boolean(impl && typeof impl.isOpen === "function" && impl.isOpen());
     } catch {
-      return false;
+      observed[pane.id] = false;
     }
-  }).map((pane) => pane.id);
+  }
+  return observed;
 }
 
-function callWindow(paneId, verb) {
+/** Which panes are currently living in their own window, re-measured. */
+function detachedIds() {
+  surfaces.reconcile(observeWindows());
+  return surfaces.detached();
+}
+
+// 🚩 The owner can close a detached window from ITS OWN title bar, and nothing
+// tells the console. Until now the rail only re-derived itself when the console
+// regained focus, so a pane could sit there labelled "detached" with no window
+// behind it -- reachable again only by clicking a Reattach that closes nothing.
+// While the console is open, poll the creators and push the map when it moves.
+const SURFACE_POLL_MS = 1000;
+let surfacePollTimer = null;
+
+function startSurfaceWatch() {
+  if (surfacePollTimer) return;
+  surfacePollTimer = setInterval(() => {
+    if (!consoleWindow || consoleWindow.isDestroyed()) return stopSurfaceWatch();
+    surfaces.reconcile(observeWindows());
+  }, SURFACE_POLL_MS);
+  surfacePollTimer.unref?.();
+}
+
+function stopSurfaceWatch() {
+  if (!surfacePollTimer) return;
+  clearInterval(surfacePollTimer);
+  surfacePollTimer = null;
+}
+
+// One subscriber, one message: the shell never keeps a second copy of this map,
+// it renders the one it is handed.
+surfaces.subscribe((snapshot) => {
+  if (!consoleWindow || consoleWindow.isDestroyed()) return;
+  consoleWindow.webContents.send("desk:console-surfaces", snapshot);
+});
+
+/**
+ * Wait until a pane's window actually reaches the state we asked for.
+ *
+ * 🚩 `BrowserWindow.close()` is ASYNCHRONOUS. It emits `close`, then `closed` a
+ * turn later, and only then does main null the handle -- so `isOpen()` read on
+ * the next line still answers TRUE for the window we just closed. The reattach
+ * reply therefore carried the pane in `detached`, the shell re-rendered it as
+ * detached, and the owner saw a reattach that "did nothing". Settling here keeps
+ * one truth: the reply describes the fleet of windows AFTER the verb landed.
+ * Bounded, because a window that refuses to close must not hang the rail.
+ */
+async function settle(impl, want, deadlineMs = 1500) {
+  const until = Date.now() + deadlineMs;
+  for (;;) {
+    let state;
+    try {
+      state = Boolean(typeof impl.isOpen === "function" && impl.isOpen());
+    } catch {
+      return; // A creator that cannot answer is not worth waiting on.
+    }
+    if (state === want || Date.now() >= until) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
+async function callWindow(paneId, verb) {
   const impl = windowsImpl[String(paneId || "")];
   const fn = impl && impl[verb];
   if (typeof fn !== "function") {
@@ -164,6 +257,7 @@ function callWindow(paneId, verb) {
     // raised is worse than a pane that reports why it did not move.
     return { ok: false, error: String((error && error.message) || error), detached: detachedIds() };
   }
+  await settle(impl, verb === "open");
   return { ok: true, pane: paneId, detached: detachedIds() };
 }
 
@@ -240,6 +334,30 @@ function wireIpc() {
   ipcMain.handle("desk:console-detach", (_event, paneId) => callWindow(paneId, "open"));
   ipcMain.handle("desk:console-reattach", (_event, paneId) => callWindow(paneId, "close"));
   ipcMain.handle("desk:console-detached", () => detachedIds());
+  // The palette: one list of everything Desk can do, and one way to run it.
+  // Rows come from the command registry via main; the shell renders what it is
+  // handed and knows no capability of its own.
+  ipcMain.handle("desk:console-commands", () => {
+    try {
+      return (commandsImpl && commandsImpl.list && commandsImpl.list()) || [];
+    } catch (error) {
+      console.warn(`[console] command list failed: ${(error && error.message) || error}`);
+      return [];
+    }
+  });
+  ipcMain.handle("desk:console-command-run", (_event, id) => {
+    const command = String(id || "");
+    if (!commandsImpl || typeof commandsImpl.run !== "function") {
+      return { ok: false, error: "no command runner wired" };
+    }
+    try {
+      commandsImpl.run(command);
+      return { ok: true, id: command };
+    } catch (error) {
+      // A palette that dies on one bad command is worse than one that says so.
+      return { ok: false, id: command, error: String((error && error.message) || error) };
+    }
+  });
   ipcMain.on("desk:console-close", () => {
     if (consoleWindow && !consoleWindow.isDestroyed()) consoleWindow.close();
   });
@@ -254,10 +372,13 @@ function wireIpc() {
  *                     pane table stays testable without Electron.
  * @param rendererUrl  main.cjs's own resolver, for the same reason.
  */
-function showConsole({ windows = {}, rendererUrl = null, urls = {}, autoShow = true } = {}) {
+function showConsole({
+  windows = {}, rendererUrl = null, urls = {}, autoShow = true, commands = null,
+} = {}) {
   windowsImpl = windows || {};
   rendererUrlImpl = rendererUrl;
   hostedUrls = urls || {};
+  commandsImpl = commands;
   wireIpc();
 
   if (consoleWindow && !consoleWindow.isDestroyed()) {
@@ -315,8 +436,11 @@ function showConsole({ windows = {}, rendererUrl = null, urls = {}, autoShow = t
   });
   consoleWindow.on("closed", () => {
     dropHostedViews();
+    stopSurfaceWatch();
     consoleWindow = null;
   });
+  // The rail must follow the windows even when nobody touches the console.
+  startSurfaceWatch();
 
   void consoleWindow.loadFile(path.join(__dirname, "console.html"));
   return consoleWindow;

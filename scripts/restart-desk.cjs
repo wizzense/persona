@@ -72,6 +72,14 @@ function launch() {
   child.unref();
 }
 
+/** The pids in `now` that are NOT ones we just killed — the only evidence that
+ *  the relaunch took. Compared as strings: the process list gives numbers here
+ *  and strings under some PowerShell shapes. */
+function freshPids(killed, now) {
+  const before = new Set((killed ?? []).map(String));
+  return (now ?? []).filter((pid) => !before.has(String(pid)));
+}
+
 function main() {
   const mains = findMainElectron();
   console.log(`restart-desk: ${mains.length} main instance(s) running`);
@@ -84,10 +92,16 @@ function main() {
   // NOT our launch) must be up. This script's job is OUR build live, so the
   // verdict is: a main process exists for this app path. The npm wrapper
   // exit code is deliberately NOT consulted (it exits 1 on detach).
+  //
+  // 🚩 The pid must be one we did NOT kill (2026-09-18): a killed main lingers
+  // in the process list for a second or two, so the first poll re-read the
+  // DYING pid, printed "desk up (main 3068)" and exited 0 while the desk was
+  // in fact down — a green restart over a dead overlay, found only because the
+  // owner was looking at it.
   const deadline = Date.now() + 15000;
   let fresh = null;
   while (Date.now() < deadline) {
-    const now = findMainElectron();
+    const now = freshPids(mains, findMainElectron());
     if (now.length > 0) { fresh = now; break; }
     // Sync pause (Atomics.wait is not allowed on Node's main thread).
     try {
@@ -110,4 +124,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { findMainElectron, killTree, launch, main };
+module.exports = { findMainElectron, freshPids, killTree, launch, main };
