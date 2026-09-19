@@ -29,7 +29,8 @@ const ANIMATION_NAMES = Object.keys(ANIMATION_EVENT_NAMES);
 const WINDOW_ACTIONS = ["show", "hide", "toggle"];
 // Fleet verbs an agent may drive (2026-09-07). `open_panel` raises the window
 // for the owner; the rest run the same FleetControl the window's buttons do.
-const FLEET_ACTIONS = ["down", "up", "gaming", "resume", "adopt", "open_panel"];
+const FLEET_ACTIONS = ["down", "up", "gaming", "resume", "adopt", "open_panel",
+  "arc-status", "arc-start", "arc-now", "arc-stop"];
 const SERVER_INSTRUCTIONS =
   "Desk controls the installed local desktop character. Use play_animation when the user asks for a visual reaction or it clearly supports their request. Use control_window to show, hide, or toggle Desk. Use speak to have the avatar say a short line aloud through AitherVoice with lip-sync. get_status is read-only.";
 
@@ -411,7 +412,7 @@ function createDeskMcpServer({
       {
         title: "Control the AitherOS fleet",
         description:
-          "down = stop AND runtime-mask every aither unit + container (holds against restarts); up = unmask and bring back exactly what was stopped (GPU models one at a time, minutes); gaming = GPU models + routine runners off, rest stays up; resume = undo gaming; adopt = record a hand-stopped (masked) fleet so `up` knows what to start; open_panel = show the Fleet window to the owner. Refused with busy when another action is running. Same implementation as the Fleet window and `game down|up`.",
+          "down = stop AND runtime-mask every aither unit + container (holds against restarts); up = unmask and bring back exactly what was stopped (GPU models one at a time, minutes); gaming = GPU models + routine runners off, rest stays up; resume = undo gaming; adopt = record a hand-stopped (masked) fleet so `up` knows what to start; open_panel = show the Fleet window to the owner. arc-status = is the ARC solver running and the world model learning (train_steps); arc-start = unmask + start it (quiet hours 23:00-07:00 PT still apply); arc-now = run it for 4 h overriding quiet hours and any GPU hold (attributed, self-expiring); arc-stop = stop the solver, world model stays up. Refused with busy when another action is running. Same implementation as the Fleet window and `game down|up`.",
         inputSchema: {
           action: z.enum(FLEET_ACTIONS).describe("The fleet action."),
         },
