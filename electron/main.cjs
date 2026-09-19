@@ -190,12 +190,9 @@ const WINDOW_HEIGHT = 950;
 // shortcuts driving setBounds() directly, not relying on an edge nobody can
 // click. Size is persisted so it survives a restart instead of resetting to
 // the D-2170 default every time.
-const SIZE_PRESETS = [
-  { label: "Small", width: 430, height: 680 },
-  { label: "Medium", width: WINDOW_WIDTH, height: WINDOW_HEIGHT },
-  { label: "Large", width: 800, height: 1266 },
-  { label: "Extra Large", width: 1000, height: 1583 },
-];
+// The presets themselves live in command-registry.cjs, as commands: the palette
+// lists them one per row while the menus nest them, and a second copy of the
+// numbers here is how one surface ends up offering a size another does not.
 const SIZE_STATE_PATH = () => path.join(app.getPath("userData"), "window-size.json");
 
 function loadSavedSize() {
@@ -245,16 +242,13 @@ function shrinkWindow(factor = 1.15) {
   setWindowSize(width / factor, height / factor);
 }
 
-function buildSizeMenu() {
-  return [
-    ...SIZE_PRESETS.map((preset) => ({
-      label: preset.label,
-      click: () => setWindowSize(preset.width, preset.height),
-    })),
-    { type: "separator" },
-    { label: "Bigger  (Ctrl+Shift+=)", click: () => growWindow() },
-    { label: "Smaller  (Ctrl+Shift+-)", click: () => shrinkWindow() },
-  ];
+/** The size choices, from the registry — the SAME list the palette lists flat.
+ *  Two renderings of one inventory; neither can carry an entry the other lacks. */
+function buildSizeMenu(surface = "avatar-menu") {
+  return commandRegistry.groupFor("window-size", surface).map((command) => ({
+    label: commandRegistry.labelOf(command, {}),
+    click: () => runCommand(command.id),
+  }));
 }
 const startInBackground = process.argv.includes("--background");
 /** "Open the Desk panel at startup" — the owner's quick path into the panel, and a
@@ -1307,10 +1301,10 @@ function refreshTrayMenu() {
   // hand. Slice 1 of docs/UX-REIMPLEMENTATION.md.
   const trayTemplate = commandRegistry.buildMenu("tray", runCommand, {
     ctx: { avatarShown, decisionsWaiting: waiting, decisionsTotal: openDecisions.length },
-    submenus: {
-      "window.size": buildSizeMenu(),
-      "characters.pick": buildCharacterMenu(),
-    },
+    submenus: { "characters.pick": buildCharacterMenu() },
+    // The tray NESTS the size group under one label; the palette lists the same
+    // six commands one row each. Both read the registry.
+    nest: { "window-size": "Avatar window size" },
   });
   // A dead voice listener is otherwise INVISIBLE (see voice-tray-line.cjs). It is
   // a STATUS line rather than a command, so it is spliced in after the avatar
@@ -1335,12 +1329,21 @@ function runCommand(id) {
     case "console.open": return void openConsole();
     case "inbox.open": return void openInbox();
     case "avatar.toggle": return void toggleOverlay();
+    case "window.size.bigger": return void growWindow();
+    case "window.size.smaller": return void shrinkWindow();
     case "about": return void showAboutDesk();
     case "quit":
       isQuitting = true;
       return void app.quit();
-    default:
+    default: {
+      // The size presets are DATA on their registry records, so a new preset is
+      // one line there and needs no case here.
+      const command = commandRegistry.byId(id);
+      if (command && command.size) {
+        return void setWindowSize(command.size.width, command.size.height);
+      }
       console.warn(`[desk] command ${id} has no handler`);
+    }
   }
 }
 
@@ -1645,6 +1648,17 @@ function openConsole() {
   setCommandCloseFallback(closeConsole);
   return showConsole({
     rendererUrl,
+    // The palette reads the SAME registry the tray and the avatar menu render
+    // from, with labels resolved against live counts, so it can never offer a
+    // stale set -- and no capability is gesture-only again.
+    commands: {
+      list: () => commandRegistry.paletteRows({
+        avatarShown: Boolean(avatarWindow && !avatarWindow.isDestroyed() && avatarWindow.isVisible()),
+        decisionsWaiting: decisionCards.actionableCount(openDecisions),
+        decisionsTotal: openDecisions.length,
+      }),
+      run: (id) => runCommand(id),
+    },
     windows: {
       command: {
         open: () => createCommandWindow(getFleetControl(), { createFleetWindow }),
