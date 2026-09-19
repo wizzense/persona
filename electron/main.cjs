@@ -162,6 +162,12 @@ const {
   isAppOpen,
 } = require("./living-desktop-window.cjs");
 const { openDetachedAvatar } = require("./detached-avatar-window.cjs");
+const {
+  ensureStageIpc,
+  createStageWindow,
+  closeStageWindow,
+  isStageWindowOpen,
+} = require("./stage-window.cjs");
 
 /** "Detach to own window" — pull one extra avatar out of the shared canvas into its own
  *  real, separately-draggable/resizable OS window. See detached-avatar-window.cjs. */
@@ -958,6 +964,39 @@ function removeAvatarSlot(slotId) {
   return true;
 }
 
+/**
+ * What the Stage pane needs, and nothing more (Plan 40 slice G).
+ *
+ * `bodies` is the SAME list the deck and the avatar menus read (`avatarSlots`
+ * plus the resident), so the pane cannot show a stage that disagrees with the
+ * one the owner is looking at. Everything else is a name forwarded to the
+ * renderer, which owns the geometry.
+ */
+function stagePaneImpl() {
+  return {
+    bodies: () => [
+      { slotId: "slot0", name: getActiveCharacter() || "Aither", agent: "aither", resident: true },
+      ...[...avatarSlots.entries()].map(([slotId, info]) => ({
+        slotId,
+        name: info.name,
+        agent: info.agent || "",
+        resident: false,
+      })),
+    ],
+    arrange: (arrangement, options = {}) => {
+      sendToAvatar("stage-arrange", {
+        arrangement,
+        slotId: options.slotId || null,
+        pair: Array.isArray(options.pair) ? options.pair : [],
+      });
+    },
+    focus: (slotId) => sendToAvatar("focus-avatar", { slotId: slotId || null }),
+    remove: (slotId) => {
+      if (!removeAvatarSlot(slotId)) throw new Error(`${slotId} is not a removable body`);
+    },
+  };
+}
+
 /** Per-avatar context menu (2026-08-25). The renderer raycasts the right-click itself
  *  (the deck trigger cannot — it is window-level, and OrbitControls owns right-drag pan)
  *  and names the slot; this builds the native menu for THAT avatar. Actions are scoped
@@ -1665,6 +1704,7 @@ function openConsole() {
   ensureFleetIpc();
   ensureCommandIpc(getFleetControl(), { createFleetWindow });
   ensureSessionsIpc();
+  ensureStageIpc(stagePaneImpl());
   // And "close" inside a pane now closes the console, rather than looking for a
   // standalone window that does not exist and silently doing nothing.
   setFleetCloseFallback(closeConsole);
@@ -1704,6 +1744,11 @@ function openConsole() {
           if (deckWindow && !deckWindow.isDestroyed()) deckWindow.close();
         },
         isOpen: () => Boolean(deckWindow && !deckWindow.isDestroyed()),
+      },
+      stage: {
+        open: () => createStageWindow(),
+        close: closeStageWindow,
+        isOpen: isStageWindowOpen,
       },
       chat: {
         open: () => createChatWindow(),
