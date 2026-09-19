@@ -43,6 +43,9 @@
  * caller and never makes the caller wait for the daemon.
  */
 
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 const { RoomPublisher, defaultRequest } = require("./room-publisher.cjs");
 
 //: 🚩 THE ROOM CAN BE SLOW, AND SLOW IS NOT DOWN. Measured 2026-09-18: room
@@ -76,9 +79,19 @@ const MAX_PER_TICK = 3;
 //: it here so the BODY says a sentence and the panel keeps the whole text.
 const MAX_TEXT = 320;
 
-//: Nicks whose rows are ours (rule 2). RELAY_NICK from relay-feed is included
-//: at construction; these are the fixed ones every surface of this desk uses.
+//: Nicks whose rows are ours (rule 2): the desk's own service voices, never a
+//: person. 🚩 The desk POSTS to relay under the owner's own nick ("david"), so
+//: a nick-based self-check silenced the owner entirely -- measured 2026-09-19,
+//: the bridge saw every proof message, advanced its watermark and mirrored
+//: nothing. Loop protection is by MESSAGE ID (noteOurs) because that is the
+//: only thing that actually identifies what WE wrote; a shared nick does not.
 const SELF_NICKS = new Set(["awdesk", "desk", "aither-room"]);
+
+//: Nicks that are the owner, whatever the relay's `agent` flag says about the
+//: client that posted for them. They get a body (presence) and no voice: the
+//: relay CLI marks everything agent=true, so the flag alone would read the
+//: owner's own words back to him -- the one thing the room must never do.
+const HUMAN_NICKS = new Set(["david"]);
 
 //: Stamped on anything the room publishes OUT to relay, so a round trip is
 //: recognisable even when it comes back under a different nick.
@@ -100,7 +113,7 @@ function normaliseChannels(raw) {
  * `state` is {watermark, seen} and is MUTATED by the caller, not here — the
  * decision must be testable without a clock or a daemon.
  */
-function selectRows(rows, state, { maxPerTick = MAX_PER_TICK, selfNicks = SELF_NICKS } = {}) {
+function selectRows(rows, state, { maxPerTick = MAX_PER_TICK, selfNicks = SELF_NICKS, ourIds = null } = {}) {
   if (!Array.isArray(rows) || !rows.length) return [];
   const fresh = [];
   for (const row of rows) {
@@ -113,6 +126,8 @@ function selectRows(rows, state, { maxPerTick = MAX_PER_TICK, selfNicks = SELF_N
     const author = typeof row.author === "string" ? row.author : "";
     if (!author || selfNicks.has(author.toLowerCase())) continue;
     if (text.includes(ROOM_MARKER)) continue;
+    // Rule 2, the reliable half: a row THIS desk posted, by its id.
+    if (ourIds && row.id && ourIds.has(row.id)) continue;
     const at = Number(row.at) || 0;
     if (at <= state.watermark) continue;
     if (row.id && state.seen.has(row.id)) continue;
@@ -129,7 +144,9 @@ function toEvent(row, { room = "main" } = {}) {
   const author = String(row.author || "someone");
   // Rule 3: a human is presence, never a voice. The room stage keys voicing
   // off actor.kind, so this single field is the whole policy.
-  const kind = row.agent === true ? "adk_agent" : "human";
+  const kind = row.agent === true && !HUMAN_NICKS.has(author.toLowerCase())
+    ? "adk_agent"
+    : "human";
   return {
     room,
     type: "agent_message",
@@ -158,8 +175,12 @@ function toEvent(row, { room = "main" } = {}) {
  * HTTP client with no state worth sharing.
  */
 class RelayRoomBridge {
-  constructor({ publisher = patientPublisher(), log = () => {}, channels, selfNicks } = {}) {
+  constructor({ publisher = patientPublisher(), log = () => {}, channels, selfNicks, statusFile } = {}) {
     this.publisher = publisher;
+    //: Where the operator trace lands. A test MUST pass its own path: a suite
+    //: that writes the live status file makes the desk look like it mirrored
+    //: something it never saw (measured on this file's first run).
+    this.statusFile = statusFile || statusPath();
     this.log = log;
     this.channels = new Set(normaliseChannels(channels ?? process.env.DESK_RELAY_ROOM_CHANNELS));
     this.selfNicks = new Set([...SELF_NICKS, ...(selfNicks || [])].map((n) => String(n).toLowerCase()));
@@ -168,6 +189,17 @@ class RelayRoomBridge {
     this.state = new Map();
     this.mirrored = 0;
     this.lastError = null;
+    //: Message ids THIS desk posted into relay. relay-feed calls noteOurs with
+    //: the id the relay returns, so the next poll recognises the row as ours
+    //: even though it carries the owner's nick.
+    this.ours = new Set();
+  }
+
+  /** Remember a message this desk just posted, so the mirror never speaks it back. */
+  noteOurs(messageId) {
+    if (typeof messageId !== "string" || !messageId) return;
+    this.ours.add(messageId);
+    if (this.ours.size > 200) this.ours = new Set([...this.ours].slice(-100));
   }
 
   enabled(channel) {
@@ -200,9 +232,10 @@ class RelayRoomBridge {
       state.primed = true;
       state.watermark = newest;
       for (const row of rows || []) if (row?.id) state.seen.add(row.id);
+      this.writeStatus();
       return { mirrored: 0, skipped: (rows || []).length, reason: "primed" };
     }
-    const picked = selectRows(rows, state, { selfNicks: this.selfNicks });
+    const picked = selectRows(rows, state, { selfNicks: this.selfNicks, ourIds: this.ours });
     let mirrored = 0;
     for (const row of picked) {
       const result = await this.publisher.publish(toEvent(row));
@@ -216,6 +249,7 @@ class RelayRoomBridge {
         // watermark past the row: the next tick retries it.
         this.lastError = (result && result.error) || "publish failed";
         this.log("relay-room: publish failed", this.lastError);
+        this.writeStatus();
         return { mirrored, skipped: picked.length - mirrored, error: this.lastError };
       }
       if (row.id) state.seen.add(row.id);
@@ -225,6 +259,7 @@ class RelayRoomBridge {
     // still move the watermark: they are handled, not pending.
     state.watermark = Math.max(state.watermark, newest);
     if (state.seen.size > 500) state.seen = new Set([...state.seen].slice(-200));
+    this.writeStatus();
     return { mirrored, skipped: (rows || []).length - mirrored };
   }
 
@@ -236,6 +271,31 @@ class RelayRoomBridge {
       primed: [...this.state.entries()].map(([channel, s]) => ({ channel, watermark: s.watermark })),
     };
   }
+
+  /** Write the status where an operator can read it.
+   *
+   *  A mirror that fails silently is indistinguishable from a quiet channel —
+   *  the failure mode this whole evening was spent on. The desk's relay poll
+   *  runs in the main process with no console anyone reads, so the bridge
+   *  leaves its own trace: who it primed, how many rows it has spoken, and the
+   *  last error verbatim. Best-effort: a status file that cannot be written
+   *  must never stop the room from hearing the channel. */
+  writeStatus(file = this.statusFile) {
+    try {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(
+        file,
+        JSON.stringify({ ...this.status(), at: new Date().toISOString() }, null, 2),
+        "utf8",
+      );
+    } catch {
+      /* observability is not worth a thrown poll */
+    }
+  }
+}
+
+function statusPath() {
+  return path.join(os.homedir(), ".aither", "relay-room-bridge.json");
 }
 
 //: One bridge per process: the relay panel polls from several places and they
@@ -251,6 +311,7 @@ function _resetSharedForTests() {
 
 module.exports = {
   RelayRoomBridge,
+  statusPath,
   sharedBridge,
   selectRows,
   toEvent,
@@ -261,4 +322,5 @@ module.exports = {
   MAX_TEXT,
   ROOM_MARKER,
   SELF_NICKS,
+  HUMAN_NICKS,
 };

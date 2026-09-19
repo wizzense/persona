@@ -2,6 +2,14 @@
 
 const test = require("node:test");
 const assert = require("node:assert");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+
+//: Every bridge in this suite writes its status HERE, never to the operator's
+//: ~/.aither/relay-room-bridge.json: a test run that overwrites the live trace
+//: makes the desk look like it mirrored rows it never saw.
+const statusFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "relay-room-")), "status.json");
 
 const {
   RelayRoomBridge,
@@ -47,7 +55,26 @@ test("only rows newer than the watermark are spoken", () => {
   assert.deepStrictEqual(picked.map((r) => r.id), ["new"]);
 });
 
-test("our own voice never comes back around", () => {
+test("the OWNER's nick is a person in the room, not the desk's own voice", () => {
+  // 2026-09-19: the desk posts to relay AS the owner ("david"), so treating that
+  // nick as "ours" dropped every message the owner wrote — the bridge saw them,
+  // advanced its watermark and mirrored nothing. He gets a body; he is not voiced.
+  const picked = selectRows([row({ author: "david", id: "owner", agent: true })], freshState());
+  assert.deepStrictEqual(picked.map((r) => r.id), ["owner"]);
+  assert.strictEqual(toEvent(picked[0]).actor.kind, "human");
+});
+
+test("a row THIS desk posted is skipped by its id, not by its nick", () => {
+  const ourIds = new Set(["posted-by-us"]);
+  const picked = selectRows(
+    [row({ author: "david", id: "posted-by-us" }), row({ author: "david", id: "someone-else", at: 1200 })],
+    freshState(),
+    { ourIds },
+  );
+  assert.deepStrictEqual(picked.map((r) => r.id), ["someone-else"]);
+});
+
+test("our own service voice never comes back around", () => {
   // The desk posts into #agents under its own nick; the next poll reads it
   // back. Mirroring that would loop the channel and the room into each other.
   const picked = selectRows(
@@ -93,7 +120,7 @@ test("the FIRST sight of a channel speaks nothing — it only sets the watermark
   // Otherwise every desk start reads the last fifty messages aloud, which is
   // how a feature like this gets switched off on its first day.
   const publisher = fakePublisher();
-  const bridge = new RelayRoomBridge({ publisher });
+  const bridge = new RelayRoomBridge({ publisher, statusFile });
   const first = await bridge.mirror("#agents", [row({ at: 5000 })]);
   assert.strictEqual(first.mirrored, 0);
   assert.strictEqual(first.reason, "primed");
@@ -106,7 +133,7 @@ test("the FIRST sight of a channel speaks nothing — it only sets the watermark
 
 test("a channel nobody voices is left to the panel", async () => {
   const publisher = fakePublisher();
-  const bridge = new RelayRoomBridge({ publisher, channels: "#agents" });
+  const bridge = new RelayRoomBridge({ publisher, channels: "#agents", statusFile });
   await bridge.mirror("#ops-alerts", [row({ channel: "#ops-alerts" })]);
   const out = await bridge.mirror("#ops-alerts", [row({ channel: "#ops-alerts", at: 9000, id: "x" })]);
   assert.strictEqual(out.reason, "disabled");
@@ -115,7 +142,7 @@ test("a channel nobody voices is left to the panel", async () => {
 
 test("a refused publish does NOT advance the watermark — the next tick retries", async () => {
   const publisher = fakePublisher();
-  const bridge = new RelayRoomBridge({ publisher });
+  const bridge = new RelayRoomBridge({ publisher, statusFile });
   await bridge.mirror("#agents", []); // prime cold
   publisher.ok = false;
   const failed = await bridge.mirror("#agents", [row({ at: 7000, id: "pending" })]);
@@ -131,4 +158,15 @@ test("channels come from config, with or without the hash", () => {
   assert.deepStrictEqual(normaliseChannels("agents, #dev"), ["#agents", "#dev"]);
   assert.deepStrictEqual(normaliseChannels(""), ["#agents"]);
   assert.deepStrictEqual(normaliseChannels(undefined), ["#agents"]);
+});
+
+test("the status file is an operator trace, and a test never writes the live one", async () => {
+  const publisher = fakePublisher();
+  const bridge = new RelayRoomBridge({ publisher, statusFile });
+  await bridge.mirror("#agents", []);
+  const written = JSON.parse(fs.readFileSync(statusFile, "utf8"));
+  assert.deepStrictEqual(written.channels, ["#agents"]);
+  assert.strictEqual(written.mirrored, 0);
+  assert.ok(written.at, "status carries a timestamp");
+  assert.notStrictEqual(bridge.statusFile, require("./relay-room-bridge.cjs").statusPath());
 });

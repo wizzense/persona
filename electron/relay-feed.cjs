@@ -508,8 +508,11 @@ async function fetchHistory(channel = RELAY_CHANNEL, limit = HISTORY_LIMIT, exec
 function mirrorToRoom(channel, rows) {
   try {
     const { sharedBridge } = require("./relay-room-bridge.cjs");
-    // RELAY_NICK is this desk's own voice in the channel: its rows are ours.
-    const bridge = sharedBridge({ selfNicks: [RELAY_NICK] });
+    // NOT selfNicks: [RELAY_NICK]. This desk posts under the OWNER's nick, so
+    // treating that nick as "ours" silenced the owner completely — measured
+    // 2026-09-19, the bridge read every message, advanced its watermark and
+    // mirrored nothing. What we wrote is identified by message id (noteOurs).
+    const bridge = sharedBridge();
     void Promise.resolve(bridge.mirror(channel, rows)).catch(() => {});
   } catch {
     /* the bridge is optional: a desk with no room daemon just shows the panel */
@@ -556,7 +559,25 @@ async function post(channel = RELAY_CHANNEL, text, requestFn = relayRequest) {
     nick: RELAY_NICK,
     content: text.trim().slice(0, 1500),
   };
-  return doorGatedWrite(channel, `/v1/channels/${q}/messages`, payload, requestFn);
+  const result = await doorGatedWrite(channel, `/v1/channels/${q}/messages`, payload, requestFn);
+  // Tell the room bridge this row is OURS, by id: the desk posts under the
+  // owner's own nick, so nothing else distinguishes what we wrote from what
+  // the owner wrote, and mirroring our own post would loop the room and the
+  // channel into each other.
+  noteOursToRoom(result);
+  return result;
+}
+
+/** Hand the id of a message WE just posted to the room bridge. Never throws. */
+function noteOursToRoom(result) {
+  try {
+    const id = result && (result.id || result.message_id || (result.body && result.body.id));
+    if (!id) return;
+    const { sharedBridge } = require("./relay-room-bridge.cjs");
+    sharedBridge().noteOurs(String(id));
+  } catch {
+    /* the bridge is optional */
+  }
 }
 
 /** Reply into a message's thread — the per-agent direct chat send path. */
