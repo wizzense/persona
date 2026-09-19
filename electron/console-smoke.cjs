@@ -51,6 +51,8 @@ const EXPECTED_BRIDGE = {
   cards: "deskBridge",
   chat: "deskBridge",
   stage: "aitherStage",
+  // The Cast pane (cast.html / cast-preload.cjs): who appears and how they sound.
+  cast: "aitherCast",
 };
 
 async function run() {
