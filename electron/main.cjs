@@ -86,6 +86,9 @@ const { routeDrop, synthesizeVerdict, stagePath, cleanupStage } = require("./dro
 const { desktopSnapshot } = require("./browser-client.cjs");
 const { connectSnapshot } = require("./connect-client.cjs");
 const { createBridgeServer, DEFAULT_PORT } = require("./bridge-server.cjs");
+// ONE inventory of what Desk can do and which menus carry it. Menus are rendered
+// from it; nothing lists a capability by hand (docs/UX-REIMPLEMENTATION.md).
+const commandRegistry = require("./command-registry.cjs");
 const {
   createDeskMcpHandler,
   getAnimationEventName,
@@ -1296,62 +1299,76 @@ function refreshTrayMenu() {
   // console pane is listed here a second time.
   const waiting = decisionCards.actionableCount(openDecisions);
   const avatarShown = Boolean(avatarWindow && !avatarWindow.isDestroyed() && avatarWindow.isVisible());
-  tray?.setContextMenu(
-    Menu.buildFromTemplate([
-      { label: "Aither Console…", click: () => openConsole() },
-      {
-        label: waiting > 0
-          ? `Inbox — ${waiting} decision${waiting === 1 ? "" : "s"} waiting`
-          : openDecisions.length > 0
-            ? `Inbox — ${openDecisions.length} card${openDecisions.length === 1 ? "" : "s"}`
-            : "Inbox",
-        click: () => openInbox(),
-      },
-      { type: "separator" },
-      { label: avatarShown ? "Hide avatar" : "Show avatar", click: () => toggleOverlay() },
-      { label: "Characters", submenu: buildCharacterMenu() },
-      // A dead voice listener is otherwise INVISIBLE (see voice-tray-line.cjs).
-      ...voiceTrayItems(latestListenerStatus, app.isPackaged),
-      { type: "separator" },
-      {
-        label: "About Desk",
-        click: () => {
-          // No bundled character since 2026-09-10 (owner decision): the About
-          // surface says where a model comes from instead of crediting one,
-          // and points at a real window rather than restating a license.
-          void dialog
-            .showMessageBox({
-              type: "info",
-              title: "About Desk",
-              message: `Desk ${app.getVersion()}`,
-              detail: [
-                "The AitherOS desktop hub — avatar presence, decision cards, model & agent browsing, relay.",
-                "",
-                "Desk ships no character models. Add your own — VRoid Hub is the guided path;",
-                "any VRM 1.0 file you have the rights to works. Your models stay on this machine.",
-                "Full asset policy: ASSET_LICENSES.md.",
-              ].join("\n"),
-              buttons: ["Browse VRoid Hub…", "Close"],
-              defaultId: 1,
-              cancelId: 1,
-            })
-            .then(({ response }) => {
-              if (response === 0) {
-                void shell.openExternal("https://hub.vroid.com/en/");
-              }
-            });
-        },
-      },
-      { type: "separator" },
-      {
-        label: "Quit",
-        click: () => {
-          isQuitting = true;
-          app.quit();
-        },
-      },
-    ]),
-  );
+  // 🚩 RENDERED from command-registry.cjs, never hand-written. Three menus used
+  // to list capabilities by hand and drifted apart between consolidations; the
+  // avatar window's size ended up reachable through exactly one gesture. The
+  // registry owns the inventory and which surfaces carry each entry, so adding a
+  // capability to one menu and forgetting the others is no longer possible by
+  // hand. Slice 1 of docs/UX-REIMPLEMENTATION.md.
+  const trayTemplate = commandRegistry.buildMenu("tray", runCommand, {
+    ctx: { avatarShown, decisionsWaiting: waiting, decisionsTotal: openDecisions.length },
+    submenus: {
+      "window.size": buildSizeMenu(),
+      "characters.pick": buildCharacterMenu(),
+    },
+  });
+  // A dead voice listener is otherwise INVISIBLE (see voice-tray-line.cjs). It is
+  // a STATUS line rather than a command, so it is spliced in after the avatar
+  // group rather than declared in the registry.
+  const voiceRows = voiceTrayItems(latestListenerStatus, app.isPackaged);
+  const appGroupAt = trayTemplate.findIndex((row) => row.label === "About Desk");
+  if (voiceRows.length && appGroupAt > 0) trayTemplate.splice(appGroupAt - 1, 0, ...voiceRows);
+  else trayTemplate.push(...voiceRows);
+  tray?.setContextMenu(Menu.buildFromTemplate(trayTemplate));
+}
+
+/**
+ * Perform a registry command.
+ *
+ * The registry holds WHAT and WHERE; this holds HOW, in one switch, so every
+ * surface that renders a command runs the identical action. An id with no case
+ * here is a menu row that does nothing -- the conformance test in
+ * command-registry.test.cjs and the arm below refuse to let that ship.
+ */
+function runCommand(id) {
+  switch (id) {
+    case "console.open": return void openConsole();
+    case "inbox.open": return void openInbox();
+    case "avatar.toggle": return void toggleOverlay();
+    case "about": return void showAboutDesk();
+    case "quit":
+      isQuitting = true;
+      return void app.quit();
+    default:
+      console.warn(`[desk] command ${id} has no handler`);
+  }
+}
+
+function showAboutDesk() {
+  // No bundled character since 2026-09-10 (owner decision): the About surface
+  // says where a model comes from instead of crediting one, and points at a real
+  // window rather than restating a license.
+  void dialog
+    .showMessageBox({
+      type: "info",
+      title: "About Desk",
+      message: `Desk ${app.getVersion()}`,
+      detail: [
+        "The AitherOS desktop hub — avatar presence, decision cards, model & agent browsing, relay.",
+        "",
+        "Desk ships no character models. Add your own — VRoid Hub is the guided path;",
+        "any VRM 1.0 file you have the rights to works. Your models stay on this machine.",
+        "Full asset policy: ASSET_LICENSES.md.",
+      ].join("\n"),
+      buttons: ["Browse VRoid Hub…", "Close"],
+      defaultId: 1,
+      cancelId: 1,
+    })
+    .then(({ response }) => {
+      if (response === 0) {
+        void shell.openExternal("https://hub.vroid.com/en/");
+      }
+    });
 }
 
 /** Everything the deck panel renders, in one object — the panel is a VIEW over
@@ -2318,9 +2335,20 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
       },
     });
 
-    globalShortcut.register("CommandOrControl+Shift+A", toggleOverlay);
-    globalShortcut.register("CommandOrControl+Shift+=", () => growWindow());
-    globalShortcut.register("CommandOrControl+Shift+-", () => shrinkWindow());
+    // 🚩 register() RETURNS whether it got the accelerator, and the answer was
+    // thrown away. Another app holding Ctrl+Shift+= takes the only keyboard path
+    // to window size with no error anywhere -- the keys simply stop working,
+    // which is exactly what "i cant control the size anymore" looks like. Say it
+    // out loud; the tray menu is the path that does not depend on this.
+    for (const [accel, action] of [
+      ["CommandOrControl+Shift+A", toggleOverlay],
+      ["CommandOrControl+Shift+=", () => growWindow()],
+      ["CommandOrControl+Shift+-", () => shrinkWindow()],
+    ]) {
+      if (!globalShortcut.register(accel, action)) {
+        console.warn(`[desk] shortcut ${accel} is held by another app -- use the tray menu`);
+      }
+    }
     handleProtocolArgv(process.argv);
 
     audioListener = createAudioListener({
