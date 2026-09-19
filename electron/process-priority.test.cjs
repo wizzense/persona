@@ -27,11 +27,19 @@ test("each pid is raised once, a vanished pid is a count not a crash, and gone p
 
 test("the sweep covers every app process and re-runs on a timer", () => {
   let scheduled = null;
-  const app = { getAppMetrics: () => [{ pid: process.pid }] };
-  const before = os.getPriority(process.pid);
-  const out = keepDeskResponsive(app, { env: {}, setIntervalFn: (fn) => { scheduled = fn; return { unref() {} }; } });
+  // Never the REAL setPriority: raising a priority is EACCES for a non-root
+  // process on macOS/Linux (the public mirror's macOS CI failed on exactly that).
+  const app = { getAppMetrics: () => [{ pid: 4242 }, { pid: 4243 }] };
+  const raised = [];
+  const out = keepDeskResponsive(app, {
+    env: {},
+    setPriority: (pid, p) => raised.push([pid, p]),
+    setIntervalFn: (fn) => { scheduled = fn; return { unref() {} }; },
+  });
   assert.equal(out.enabled, true);
   assert.equal(typeof scheduled, "function");
-  os.setPriority(process.pid, before);
+  assert.deepEqual(raised, [[4242, os.constants.priority.PRIORITY_ABOVE_NORMAL], [4243, os.constants.priority.PRIORITY_ABOVE_NORMAL]]);
+  scheduled();
+  assert.equal(raised.length, 2, "an unchanged pid set is not raised twice");
   assert.equal(keepDeskResponsive(app, { env: { DESK_PRIORITY: "normal" } }).enabled, false);
 });
