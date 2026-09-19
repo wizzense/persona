@@ -68,6 +68,7 @@ if (/^\d{2,5}$/.test(String(process.env.DESK_CDP_PORT || ""))) {
 }
 const decisionCards = require("./decision-cards.cjs");
 const {
+  fetchChannels: fetchRelayChannels,
   fetchHistory: fetchRelayHistory,
   fetchThread: fetchRelayThread,
   post: postToRelay,
@@ -2288,15 +2289,49 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
           return true;
         case "relay-post": {
           if (typeof arg !== "string" || arg.length === 0) return false;
+          // Two payload shapes: the legacy bare string posts to the company
+          // room; a JSON {channel, text} posts to ONE live session channel
+          // (`#session-*` only -- the multiplayer attach lane, 2026-09-19).
+          // Anything else as a channel is refused here, not forwarded: the
+          // renderer must never be able to aim the owner's identity at an
+          // arbitrary channel through this verb.
+          let channel = RELAY_CHANNEL;
+          let text = arg;
+          if (arg.startsWith("{")) {
+            let parsed;
+            try { parsed = JSON.parse(arg); } catch { return "malformed relay-post payload"; }
+            if (!parsed || typeof parsed.text !== "string" || !parsed.text.trim()) return false;
+            if (typeof parsed.channel === "string" && parsed.channel) {
+              if (!/^#session-[a-f0-9]{8}$/.test(parsed.channel)) return "refused: not a live session channel";
+              channel = parsed.channel;
+            }
+            text = parsed.text;
+          }
           // AWAIT and report the real result: the fire-and-forget version
           // returned true while the relay 403'd the post (agent-only channel,
           // unjoined identity) -- the chat window then believed the message
           // sent. False must reach the renderer. A failure returns the
           // relay's OWN refusal reason (a string) so the chat window shows
           // WHY, not just "refused".
-          const sent = await postToRelay(RELAY_CHANNEL, arg);
-          if (sent && sent.ok) void refreshRelayFeed();
+          const sent = await postToRelay(channel, text);
+          if (sent && sent.ok && channel === RELAY_CHANNEL) void refreshRelayFeed();
           return sent && sent.ok ? true : (sent && sent.detail) || "the relay refused";
+        }
+        // Multiplayer attach (PRD REQ-1/9, 2026-09-19): the live session
+        // channels the relay lists, and one channel's history. Both are
+        // READS of the relay through the same CLI + bearer as the feed.
+        case "relay-channels": {
+          const names = await fetchRelayChannels();
+          return names.filter((n) => /^#session-[a-f0-9]{8}$/.test(n));
+        }
+        case "relay-history": {
+          if (typeof arg !== "string" || !arg.startsWith("{")) return [];
+          let parsed;
+          try { parsed = JSON.parse(arg); } catch { return []; }
+          if (!parsed || typeof parsed.channel !== "string") return [];
+          if (!/^#session-[a-f0-9]{8}$/.test(parsed.channel)) return [];
+          const limit = Math.max(1, Math.min(200, Number(parsed.limit) || 80));
+          return fetchRelayHistory(parsed.channel, limit);
         }
         // The per-avatar DIRECT chat send path: the conversation with a
         // spawned agent is the THREAD under its message (the relay's

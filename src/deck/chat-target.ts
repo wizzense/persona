@@ -12,13 +12,20 @@
  * and the empty state says where the message will go.
  */
 
-export type ChatSource = 'relay' | 'room';
+export type ChatSource = 'relay' | 'room' | 'channel';
 
 export interface ChatTarget {
   /** relay = #agents (needs the fleet); room = the local awdk-daemon room. */
   source: ChatSource;
   /** null = the whole channel; a name = a direct thread with that agent. */
   agent: string | null;
+  /** A LIVE SESSION CHANNEL on the relay (`#session-<8 hex>`); present ONLY
+   *  when source === 'channel'. This is multiplayer attach (PRD REQ-1/9): a
+   *  running Claude Code session mirrors its turns into that channel and
+   *  reads steering back out of it, so joining the channel IS watching the
+   *  session, and writing into it IS redirecting the agent. Any relay reader
+   *  on any machine can do both. */
+  channel?: string;
 }
 
 export const CHAT_TARGET_KEY = 'desk.chat-target.v1';
@@ -28,6 +35,23 @@ export const CHAT_TARGET_KEY = 'desk.chat-target.v1';
 export const ROOM_VALUE = ' room';
 
 export const DEFAULT_CHAT_TARGET: ChatTarget = { source: 'relay', agent: null };
+
+/** The `<select>` value prefix for a live session channel. */
+export const CHANNEL_PREFIX = 'chan:';
+
+/** Only the mirror's own naming is accepted: `#session-` + 8 lowercase hex.
+ *  Anything else is refused rather than posted to, so a stored or hostile
+ *  value can never retarget the composer at an arbitrary channel. */
+const SESSION_CHANNEL_RE = /^#session-[a-f0-9]{8}$/;
+
+export function decodeSessionChannel(value: unknown): string | null {
+  return typeof value === 'string' && SESSION_CHANNEL_RE.test(value) ? value : null;
+}
+
+function channelTarget(value: unknown): ChatTarget | null {
+  const channel = decodeSessionChannel(value);
+  return channel ? { source: 'channel', agent: null, channel } : null;
+}
 
 export interface PickerOption {
   value: string;
@@ -48,6 +72,9 @@ export interface PickerInput {
   /** The agent currently picked (a remembered one may have left the roster);
    *  it must still be an option or the select shows the wrong row. */
   current?: string | null;
+  /** Live session channels the relay currently lists (`#session-*`) --
+   *  every one is a running Claude Code session ANYONE can attach to. */
+  sessionChannels?: readonly string[];
 }
 
 /** Validate a stored target: anything malformed becomes null, never a crash
@@ -63,14 +90,20 @@ export function decodeChatTarget(raw: string | null | undefined): ChatTarget | n
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
   const source = (parsed as { source?: unknown }).source;
   const agent = (parsed as { agent?: unknown }).agent;
-  if (source !== 'relay' && source !== 'room') return null;
+  if (source !== 'relay' && source !== 'room' && source !== 'channel') return null;
   if (source === 'room') return { source: 'room', agent: null };
+  if (source === 'channel') return channelTarget((parsed as { channel?: unknown }).channel);
   if (agent === null || agent === undefined || agent === '') return { source: 'relay', agent: null };
   if (typeof agent !== 'string' || !/^[a-z0-9][a-z0-9_.-]{0,63}$/i.test(agent)) return null;
   return { source: 'relay', agent };
 }
 
 export function encodeChatTarget(target: ChatTarget): string {
+  if (target.source === 'channel') {
+    const channel = decodeSessionChannel(target.channel);
+    // Never persist what decode would refuse: a bad value stores the default.
+    return JSON.stringify(channel ? { source: 'channel', agent: null, channel } : DEFAULT_CHAT_TARGET);
+  }
   return JSON.stringify(
     target.source === 'room'
       ? { source: 'room', agent: null }
@@ -106,12 +139,20 @@ export function saveChatTarget(storage: TargetStorage | null | undefined, target
 /** Target -> the `<select>` value. */
 export function chatTargetValue(target: ChatTarget): string {
   if (target.source === 'room') return ROOM_VALUE;
+  if (target.source === 'channel') {
+    const channel = decodeSessionChannel(target.channel);
+    return channel ? `${CHANNEL_PREFIX}${channel}` : '';
+  }
   return target.agent ?? '';
 }
 
-/** `<select>` value -> target. */
+/** `<select>` value -> target. A malformed channel value falls back to the
+ *  company room: picking it sends nothing and the header names #agents. */
 export function chatTargetFromValue(value: string): ChatTarget {
   if (value === ROOM_VALUE) return { source: 'room', agent: null };
+  if (value.startsWith(CHANNEL_PREFIX)) {
+    return channelTarget(value.slice(CHANNEL_PREFIX.length)) ?? DEFAULT_CHAT_TARGET;
+  }
   return { source: 'relay', agent: value || null };
 }
 
@@ -139,6 +180,22 @@ export function chatPickerGroups(input: PickerInput): PickerGroup[] {
       ],
     },
   ];
+  // Live sessions come first after the rooms: this is the multiplayer
+  // attach point, and it is the one group whose rows exist on the FLEET,
+  // not on this desk -- a second human on another machine sees the same
+  // list. Only the mirror's own channel shape is offered.
+  const live = (input.sessionChannels ?? [])
+    .map((name) => decodeSessionChannel(name))
+    .filter((name): name is string => Boolean(name));
+  if (live.length) {
+    groups.push({
+      label: 'Live sessions',
+      options: live.map((name) => ({
+        value: `${CHANNEL_PREFIX}${name}`,
+        label: `${name.slice('#session-'.length)} — live session (watch & steer)`,
+      })),
+    });
+  }
   if (spawned.length) {
     groups.push({
       label: 'On the desk',
@@ -159,4 +216,10 @@ export function chatPickerGroups(input: PickerInput): PickerGroup[] {
 export function directEmptyText(agent: string, relayChannel: string, hasAnchor: boolean): string {
   if (hasAnchor) return `No replies in this thread with ${agent} yet — say something.`;
   return `Nothing between you and ${agent} yet. Your message goes to ${relayChannel} as @${agent}; the reply opens the thread.`;
+}
+
+/** The empty text for a live session channel: says what watching means and
+ *  what typing does, because both are new to whoever just attached. */
+export function channelEmptyText(channel: string): string {
+  return `Attached to ${channel}. Its turns appear here as they happen; anything you type steers the agent's next turn.`;
 }

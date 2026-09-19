@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { EMPTY_DECK_STATE, formatAge, type DeckState, type RelayRow, type RoomRow } from '../deck/deck-types';
 import {
+  channelEmptyText,
   chatPickerGroups,
   chatTargetFromValue,
   chatTargetValue,
@@ -96,6 +97,14 @@ export function ChatView() {
   // relay = #agents (needs the fleet); room = the local awdk-daemon room,
   // where typing RUNS the sentence through the desk's CommandAgent.
   const [source, setSource] = useState<ChatSource>(remembered.source);
+  // Multiplayer attach (2026-09-19): a live Claude Code session mirrors its
+  // turns into `#session-<id>` on the relay and reads steering back out of
+  // it. `channel` is the one this pane is attached to; its rows are fetched
+  // from the relay directly (not the #agents feed), and polled while attached
+  // because a session's turns arrive on the agent's clock, not the owner's.
+  const [channel, setChannel] = useState<string | null>(remembered.channel ?? null);
+  const [channelRows, setChannelRows] = useState<RelayRow[]>([]);
+  const [sessionChannels, setSessionChannels] = useState<string[]>([]);
   const [running, setRunning] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
@@ -126,14 +135,45 @@ export function ChatView() {
     };
   }, [pull]);
 
+  // The live-session list: what the relay currently publishes. Refreshed on
+  // a slow clock -- sessions open and close on the order of minutes.
+  useEffect(() => {
+    let alive = true;
+    const load = () => {
+      void bridgeDeck()
+        ?.action('relay-channels', '')
+        .then((names) => { if (alive && Array.isArray(names)) setSessionChannels(names as string[]); })
+        .catch(() => {});
+    };
+    load();
+    const t = window.setInterval(load, 20_000);
+    return () => { alive = false; window.clearInterval(t); };
+  }, []);
+
+  // The attached session's turns: polled every 4 s while attached. A turn
+  // is a relay message, so this is the same read the awrelay CLI does.
+  useEffect(() => {
+    if (source !== 'channel' || !channel) return;
+    let alive = true;
+    const load = () => {
+      void bridgeDeck()
+        ?.action('relay-history', JSON.stringify({ channel, limit: 120 }))
+        .then((rows) => { if (alive && Array.isArray(rows)) setChannelRows(rows as RelayRow[]); })
+        .catch(() => {});
+    };
+    load();
+    const t = window.setInterval(load, 4_000);
+    return () => { alive = false; window.clearInterval(t); };
+  }, [source, channel]);
+
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
-  }, [state.relay, state.room, thread, source]);
+  }, [state.relay, state.room, thread, source, channelRows]);
 
   // Remember the target on every change, so the next open is one motion.
   useEffect(() => {
-    saveChatTarget(targetStorage(), { source, agent: chatTarget });
-  }, [source, chatTarget]);
+    saveChatTarget(targetStorage(), { source, agent: chatTarget, channel: channel ?? undefined });
+  }, [source, chatTarget, channel]);
 
   const openThread = useCallback((row: RelayRow) => {
     void bridgeDeck()
@@ -231,6 +271,20 @@ export function ChatView() {
           }, 800);
         })
         .catch(() => fail('Not sent — the relay is unreachable.'));
+    } else if (source === 'channel' && channel) {
+      // Steering a live session: the message lands in its channel, and the
+      // session's mirror hook drops it into that session's steer mailbox at
+      // the end of the agent's current turn -- so it is honoured on the next.
+      void deck
+        .action('relay-post', JSON.stringify({ channel, text }))
+        .then((ok) => {
+          if (ok !== true) {
+            fail(typeof ok === 'string' && ok ? `Not sent — ${ok}` : 'Not sent — the relay refused.');
+            return;
+          }
+          setNotice(`Sent to ${channel} — the agent picks it up on its next turn.`);
+        })
+        .catch(() => fail('Not sent — the relay is unreachable.'));
     } else {
       const payload = chatTarget ? `@${chatTarget} ${text}` : text;
       void deck
@@ -258,10 +312,14 @@ export function ChatView() {
   };
 
   const roomRows = state.room.map(roomAsRow);
-  const rows = thread ? thread.rows : source === 'room' ? roomRows : state.relay;
+  const rows = thread ? thread.rows
+    : source === 'channel' ? channelRows
+      : source === 'room' ? roomRows : state.relay;
   const title = thread && thread.anchorId
     ? `Direct chat — ${chatTarget ?? 'thread'}`
-    : source === 'room'
+    : source === 'channel' && channel
+      ? `${channel} — live session (watch & steer)`
+      : source === 'room'
       ? `room — local (${state.roomStatus === 'ok' ? 'awdk daemon' : state.roomStatus})`
       : chatTarget
         ? `${chatTarget} — direct`
@@ -271,6 +329,7 @@ export function ChatView() {
     agents: state.agents,
     slots: state.slots,
     current: source === 'relay' ? chatTarget : null,
+    sessionChannels,
   });
 
   return (
@@ -279,9 +338,17 @@ export function ChatView() {
         <span className="chat-head-title" title={title}>{title}</span>
         <select
           className="chat-target"
-          value={chatTargetValue({ source, agent: chatTarget })}
+          value={chatTargetValue({ source, agent: chatTarget, channel: channel ?? undefined })}
           onChange={(event) => {
             const next = chatTargetFromValue(event.target.value);
+            if (next.source === 'channel' && next.channel) {
+              setSource('channel');
+              setChannel(next.channel);
+              setChannelRows([]);
+              setThread(null);
+              setChatTarget(null);
+              return;
+            }
             if (next.source === 'room') {
               setSource('room');
               setThread(null);
@@ -319,9 +386,11 @@ export function ChatView() {
               ? (chatTarget
                 ? directEmptyText(chatTarget, state.relayChannel, Boolean(thread.anchorId))
                 : 'No replies in this thread yet.')
-              : source === 'room'
-                ? (state.roomStatus === 'ok' ? 'Nothing said in the room yet — tell the desk what to do.' : `Room unavailable: ${state.roomStatus} (start the awdk daemon: aither harness serve).`)
-                : 'The room is quiet — say something.'}
+              : source === 'channel' && channel
+                ? channelEmptyText(channel)
+                : source === 'room'
+                  ? (state.roomStatus === 'ok' ? 'Nothing said in the room yet — tell the desk what to do.' : `Room unavailable: ${state.roomStatus} (start the awdk daemon: aither harness serve).`)
+                  : 'The room is quiet — say something.'}
           </p>
         ) : (
           rows.map((row, index) => {
@@ -358,9 +427,11 @@ export function ChatView() {
               ? `Reply to ${chatTarget ?? 'the thread'}…`
               : chatTarget
                 ? `Message ${chatTarget} (posts to ${state.relayChannel} as @${chatTarget})…`
-                : source === 'room'
-                  ? 'Tell the desk what to do — it runs here…'
-                  : `Post to ${state.relayChannel}…`
+                : source === 'channel' && channel
+                  ? `Steer ${channel} — the agent reads this on its next turn…`
+                  : source === 'room'
+                    ? 'Tell the desk what to do — it runs here…'
+                    : `Post to ${state.relayChannel}…`
           }
           value={draft}
           onChange={(event) => {

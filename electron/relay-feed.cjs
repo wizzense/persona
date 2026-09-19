@@ -520,6 +520,27 @@ function mirrorToRoom(channel, rows) {
 }
 
 /**
+ * The channel names the relay lists for this identity. [] on any failure.
+ * The Console filters this to `#session-*` -- the live Claude Code sessions
+ * the mirror hook publishes -- so attaching to a running session is one pick
+ * in the chat target menu, from any machine that reads the relay.
+ */
+async function fetchChannels(execFn = spawn) {
+  const { code, stdout } = await runAwrelay(["--json", "channels"], execFn);
+  if (code !== 0) return [];
+  try {
+    const parsed = JSON.parse(stdout);
+    const rows = Array.isArray(parsed) ? parsed : parsed?.channels;
+    if (!Array.isArray(rows)) return [];
+    return rows
+      .map((row) => (typeof row === "string" ? row : row && typeof row.name === "string" ? row.name : ""))
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Every reply under one message — the per-avatar DIRECT chat view: a spawned
  * avatar slot is an agent, and the conversation with that agent is the thread
  * under its message (the relay has no per-agent channels; threads are the
@@ -626,6 +647,7 @@ function _setBearerSourceForTests(fn) {
 }
 
 module.exports = {
+  fetchChannels,
   fetchHistory,
   fetchThread,
   post,

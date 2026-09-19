@@ -135,3 +135,64 @@ describe('directEmptyText', () => {
     expect(directEmptyText('aither', '#agents', true)).not.toContain('@aither');
   });
 });
+
+// ── live session channels (multiplayer attach, 2026-09-19) ─────────────────
+
+import {
+  CHANNEL_PREFIX,
+  channelEmptyText,
+  decodeSessionChannel,
+} from './chat-target';
+
+describe('live session channels', () => {
+  it('accepts only the mirror\'s own channel shape', () => {
+    expect(decodeSessionChannel('#session-77db6255')).toBe('#session-77db6255');
+    expect(decodeSessionChannel('#session-DEADBEEF')).toBeNull();
+    expect(decodeSessionChannel('#session-77db625')).toBeNull();
+    expect(decodeSessionChannel('#agents')).toBeNull();
+    expect(decodeSessionChannel('#session-77db6255/../x')).toBeNull();
+    expect(decodeSessionChannel(42)).toBeNull();
+  });
+
+  it('round-trips through storage and the <select> value', () => {
+    const target = { source: 'channel' as const, agent: null, channel: '#session-77db6255' };
+    expect(decodeChatTarget(encodeChatTarget(target))).toEqual(target);
+    const value = chatTargetValue(target);
+    expect(value).toBe(`${CHANNEL_PREFIX}#session-77db6255`);
+    expect(chatTargetFromValue(value)).toEqual(target);
+  });
+
+  it('refuses a malformed stored channel instead of retargeting the composer', () => {
+    expect(decodeChatTarget(JSON.stringify({ source: 'channel', agent: null, channel: '#general' }))).toBeNull();
+    expect(encodeChatTarget({ source: 'channel', agent: null, channel: '#general' }))
+      .toBe(JSON.stringify(DEFAULT_CHAT_TARGET));
+    expect(chatTargetFromValue(`${CHANNEL_PREFIX}#general`)).toEqual(DEFAULT_CHAT_TARGET);
+  });
+
+  it('lists live sessions as their own picker group, right after the rooms', () => {
+    const groups = chatPickerGroups({
+      relayChannel: '#agents',
+      agents: ['hydra'],
+      slots: [],
+      sessionChannels: ['#session-77db6255', '#session-deadbeef', '#agents', 'junk'],
+    });
+    expect(groups[0].label).toBe('Rooms');
+    expect(groups[1].label).toBe('Live sessions');
+    expect(groups[1].options.map((o) => o.value)).toEqual([
+      `${CHANNEL_PREFIX}#session-77db6255`,
+      `${CHANNEL_PREFIX}#session-deadbeef`,
+    ]);
+    expect(groups[1].options[0].label).toContain('watch & steer');
+  });
+
+  it('omits the group entirely when the relay lists no sessions', () => {
+    const groups = chatPickerGroups({ relayChannel: '#agents', agents: [], slots: [], sessionChannels: [] });
+    expect(groups.map((g) => g.label)).not.toContain('Live sessions');
+  });
+
+  it('empty text says what attaching and typing do', () => {
+    const text = channelEmptyText('#session-77db6255');
+    expect(text).toContain('#session-77db6255');
+    expect(text).toContain('steers');
+  });
+});
