@@ -199,17 +199,40 @@ async function run() {
       JSON.stringify(seen));
   }
 
-  // 4. Detach/reattach really drives main's window creators.
-  const detach = await win.webContents.executeJavaScript(
-    "window.aitherConsole.detach('fleet')",
-  );
-  check("detach reaches main", detach && detach.ok === true, JSON.stringify(detach));
+  // 4. Detach/reattach really drives main's window creators -- driven through the
+  //    BUTTONS the owner clicks, not the preload bridge. The bridge reaches main
+  //    and repaints NOTHING, so a smoke run that calls it proves only half the
+  //    trip: "ok:true, and the screen never changed" is the whole complaint.
+  const stageState = "({ placeholders: document.querySelectorAll('.placeholder.active').length,"
+    + " placeholderNode: Boolean(document.getElementById('ph-fleet')),"
+    + " frame: Boolean(document.querySelector('#pane-fleet.active')),"
+    + " state: document.getElementById('bar-state').textContent,"
+    + " badge: document.querySelector('#tab-fleet .badge').textContent })";
+
+  await win.webContents.executeJavaScript("document.getElementById('btn-detach').click()");
+  await new Promise((resolve) => setTimeout(resolve, 900));
   check("detach is reported back", opened.includes("fleet"), opened.join(","));
-  const reattach = await win.webContents.executeJavaScript(
-    "window.aitherConsole.reattach('fleet')",
-  );
-  check("reattach closes the window", reattach && reattach.ok === true
-    && !opened.includes("fleet"), opened.join(","));
+  const whileOut = await win.webContents.executeJavaScript(stageState);
+  check("a detached pane paints its placeholder, and only that",
+    whileOut.placeholders === 1 && whileOut.frame === false
+    && whileOut.state === "detached" && whileOut.badge === "detached",
+    JSON.stringify(whileOut));
+
+  // 🚩 And on the way back, the SCREEN changes. Owner, 2026-09-18: "i did reattach
+  //    the inbox but it didnt update the ui". Two defects made that one symptom:
+  //    main read its detached list before the asynchronous close had landed, and
+  //    the shell left the placeholder -- absolutely positioned over the whole
+  //    stage -- painted on top of the pane that had come back. Neither is visible
+  //    in an ok:true reply, which is why this arm reads the DOM.
+  await win.webContents.executeJavaScript("document.getElementById('btn-reattach').click()");
+  await new Promise((resolve) => setTimeout(resolve, 900));
+  check("reattach closes the window", !opened.includes("fleet"), opened.join(","));
+  const afterBack = await win.webContents.executeJavaScript(stageState);
+  check("reattach puts the pane back ON SCREEN",
+    afterBack.placeholders === 0 && afterBack.placeholderNode === false
+    && afterBack.frame === true && afterBack.state !== "detached"
+    && afterBack.badge !== "detached",
+    JSON.stringify(afterBack));
 }
 
 app.whenReady().then(run).catch((error) => {

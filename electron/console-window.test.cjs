@@ -63,7 +63,7 @@ test("an EMPTY renderer base is refused, never concatenated", () => {
   assert.equal(byId.command.src, "./command.html");
 });
 
-test("detach opens the pane's own window; reattach closes it", () => {
+test("detach opens the pane's own window; reattach closes it", async () => {
   const calls = [];
   let fleetOpen = false;
   __setWindowsForTest({
@@ -75,28 +75,73 @@ test("detach opens the pane's own window; reattach closes it", () => {
   });
 
   assert.deepEqual(detachedIds(), []);
-  const detached = callWindow("fleet", "open");
+  const detached = await callWindow("fleet", "open");
   assert.equal(detached.ok, true);
   assert.deepEqual(detached.detached, ["fleet"]);
 
-  const back = callWindow("fleet", "close");
+  const back = await callWindow("fleet", "close");
   assert.equal(back.ok, true);
   assert.deepEqual(back.detached, []);
   assert.deepEqual(calls, ["open", "close"]);
 });
 
-test("a missing target reports, and a throwing creator never escapes", () => {
+test("a reattach reply describes the windows AFTER the close lands", async () => {
+  // Electron's BrowserWindow.close() is asynchronous: isOpen() answers true for
+  // at least one turn afterwards. Read on the next line, the reply named the pane
+  // as still detached, and the shell painted the placeholder back over a pane that
+  // had in fact come home -- the owner's "I reattached the Inbox and the UI did
+  // not update".
+  let open = false;
+  __setWindowsForTest({
+    cards: {
+      open: () => { open = true; },
+      close: () => { setTimeout(() => { open = false; }, 60); },
+      isOpen: () => open,
+    },
+  });
+
+  await callWindow("cards", "open");
+  assert.deepEqual(detachedIds(), ["cards"]);
+
+  const back = await callWindow("cards", "close");
+  assert.equal(back.ok, true);
+  assert.deepEqual(back.detached, [], "the pane is back; the reply must say so");
+  __setWindowsForTest({});
+});
+
+test("a window that refuses to close still answers, bounded", async () => {
+  // The wait is bounded on purpose: a stuck window must not hang the rail, and
+  // the reply must report what is TRUE rather than what was asked for.
+  __setWindowsForTest({
+    fleet: { open: () => {}, close: () => {}, isOpen: () => true },
+  });
+  const started = Date.now();
+  const back = await callWindow("fleet", "close");
+  assert.equal(back.ok, true);
+  assert.deepEqual(back.detached, ["fleet"], "it never closed -- say so");
+  assert.ok(Date.now() - started < 5000, "the settle wait must be bounded");
+  __setWindowsForTest({});
+});
+
+test("a missing target reports, and a throwing creator never escapes", async () => {
   __setWindowsForTest({
     fleet: { open: () => { throw new Error("boom"); }, close: () => {}, isOpen: () => false },
   });
-  const missing = callWindow("cards", "open");
+  const missing = await callWindow("cards", "open");
   assert.equal(missing.ok, false);
   assert.match(missing.error, /no open target for pane cards/);
 
-  const threw = callWindow("fleet", "open");
+  const threw = await callWindow("fleet", "open");
   assert.equal(threw.ok, false);
   assert.equal(threw.error, "boom");
   __setWindowsForTest({});
+});
+
+test("the shell DESTROYS a reattached pane's placeholder, not just its class", () => {
+  // The placeholder is position:absolute over the whole stage. Leaving it in the
+  // DOM with .active hides the pane that just came back.
+  const html = read("console.html");
+  assert.match(html, /if \(!isDetached && stale\) stale\.remove\(\);/);
 });
 
 test("EVERY pane is reachable from main, both directions", () => {

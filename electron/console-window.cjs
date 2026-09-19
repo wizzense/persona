@@ -151,7 +151,32 @@ function detachedIds() {
   }).map((pane) => pane.id);
 }
 
-function callWindow(paneId, verb) {
+/**
+ * Wait until a pane's window actually reaches the state we asked for.
+ *
+ * 🚩 `BrowserWindow.close()` is ASYNCHRONOUS. It emits `close`, then `closed` a
+ * turn later, and only then does main null the handle -- so `isOpen()` read on
+ * the next line still answers TRUE for the window we just closed. The reattach
+ * reply therefore carried the pane in `detached`, the shell re-rendered it as
+ * detached, and the owner saw a reattach that "did nothing". Settling here keeps
+ * one truth: the reply describes the fleet of windows AFTER the verb landed.
+ * Bounded, because a window that refuses to close must not hang the rail.
+ */
+async function settle(impl, want, deadlineMs = 1500) {
+  const until = Date.now() + deadlineMs;
+  for (;;) {
+    let state;
+    try {
+      state = Boolean(typeof impl.isOpen === "function" && impl.isOpen());
+    } catch {
+      return; // A creator that cannot answer is not worth waiting on.
+    }
+    if (state === want || Date.now() >= until) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
+async function callWindow(paneId, verb) {
   const impl = windowsImpl[String(paneId || "")];
   const fn = impl && impl[verb];
   if (typeof fn !== "function") {
@@ -164,6 +189,7 @@ function callWindow(paneId, verb) {
     // raised is worse than a pane that reports why it did not move.
     return { ok: false, error: String((error && error.message) || error), detached: detachedIds() };
   }
+  await settle(impl, verb === "open");
   return { ok: true, pane: paneId, detached: detachedIds() };
 }
 

@@ -191,6 +191,13 @@ function render() {
     const existing = document.getElementById("pane-" + pane.id);
     if (isDetached && existing) existing.remove();
 
+    // ...and symmetrically, a REATTACHED pane's placeholder is destroyed. The
+    // placeholder is absolutely positioned over the whole stage, so leaving it
+    // .active paints "Inbox is in its own window" ON TOP of the pane that just
+    // came back -- a reattach that changed everything except what is on screen.
+    const stale = document.getElementById("ph-" + pane.id);
+    if (!isDetached && stale) stale.remove();
+
     if (isSelected) {
       const node = isDetached ? placeholderFor(pane) : frameFor(pane);
       node.classList.add("active");
