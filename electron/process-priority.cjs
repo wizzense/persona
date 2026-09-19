@@ -41,11 +41,11 @@ function raisePriorities(pids, priority, setPriority = os.setPriority, done = ne
 }
 
 /** Wire it to an Electron app: now, and on a slow timer for windows opened later. */
-function keepDeskResponsive(app, { env = process.env, intervalMs = 30000, setIntervalFn = setInterval } = {}) {
+function keepDeskResponsive(app, { env = process.env, intervalMs = 30000, setIntervalFn = setInterval, setPriority = os.setPriority } = {}) {
   const priority = wantedPriority(env);
   if (priority == null) return { enabled: false };
   const done = new Set();
-  const sweep = () => raisePriorities(app.getAppMetrics().map((m) => m.pid), priority, os.setPriority, done);
+  const sweep = () => raisePriorities(app.getAppMetrics().map((m) => m.pid), priority, setPriority, done);
   sweep();
   const timer = setIntervalFn(sweep, intervalMs);
   if (timer && typeof timer.unref === "function") timer.unref();
