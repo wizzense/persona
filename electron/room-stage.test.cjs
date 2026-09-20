@@ -571,3 +571,30 @@ test("RoomStage: speed is threaded from the resolution through to io.speak", asy
 test("DEFAULT_MAX_BODIES stays at 3 (the measured 2.36GB heap ceiling) unless a test overrides maxBodies explicitly", () => {
   assert.equal(DEFAULT_MAX_BODIES, 3);
 });
+
+// Owner, 2026-09-19: the bubble said "AitherOS-Fresh says:" -- a CHECKOUT, with
+// nothing about which session or what it was doing. The unbodied wrapper is the
+// only place an unbodied speaker is seen, so it carries the topic when the
+// producer supplies one, and stays exactly as it was when it does not.
+// Owner, 2026-09-19: the bubble said "AitherOS-Fresh says:" -- a CHECKOUT, with
+// nothing about which session or what it was doing. The unbodied wrapper is the
+// only place an unbodied speaker is seen, so it carries the topic when the
+// producer supplies one, and stays exactly as it was when it does not.
+test("the ventriloquised wrapper names the speaker's work when known", () => {
+  const stage = new RoomStage({
+    io: {
+      spawn: () => false, // no body available: every line is ventriloquised
+      speak: () => true,
+      resolve: () => ({ character: "x", voiced: true, body: true, cooldownSeconds: 0 }),
+    },
+    now: () => 1000,
+  });
+  stage.enqueue({ seq: 1, author: "AitherOS-Fresh#6313fc71", title: "rebuild the gateway",
+                  text: "done", kind: "agent_message", actorId: "6313fc71", actorKind: "claude_code" });
+  stage.enqueue({ seq: 2, author: "AitherOS-Fresh#77db6255", title: "",
+                  text: "also done", kind: "agent_message", actorId: "77db6255", actorKind: "claude_code" });
+  const texts = stage.queue.map((q) => q.text);
+  assert.equal(texts[0], "AitherOS-Fresh#6313fc71 (rebuild the gateway) says: done");
+  assert.equal(texts[1], "AitherOS-Fresh#77db6255 says: also done",
+    "an absent topic must not render as \"()\" or \"undefined\"");
+});

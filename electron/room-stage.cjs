@@ -189,6 +189,11 @@ function selectUtterances(rows, sinceSeq, { max = MAX_QUEUE } = {}) {
     const utterance = {
       seq: Number(row.seq),
       author: String(row.author || "agent"),
+      // What that speaker is working on (room-publisher carries it from
+      // actor.title). Only the ventriloquised wrapper uses it, and only when
+      // present: the owner could not tell which of ten identical-looking
+      // sessions was talking, or about what (2026-09-19).
+      title: String(row.title || "").slice(0, 80),
       actorId,
       actorKind,
       channel,
@@ -439,7 +444,11 @@ class RoomStage {
       // resident says it on their behalf, so the words are never lost — and
       // the origin travels WITH the ventriloquised line (see u below).
       slotId = "slot0";
-      text = `${u.author} says: ${u.text}`;
+      // "<who> (<what they are working on>) says: ..." -- the wrapper is the
+      // ONLY place the owner sees an unbodied speaker, so it is the one place
+      // the context has to be.
+      const who = u.title ? `${u.author} (${u.title})` : u.author;
+      text = `${who} says: ${u.text}`;
     }
     u = { ...u, text };
     const now = this.now();
