@@ -41,6 +41,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const http = require("node:http");
+const https = require("node:https");
 
 const { callTool, parseMaybeJson } = require("./gateway-mcp.cjs");
 
@@ -485,8 +486,42 @@ function pickDurationMs(serviceSeconds, audioBase64, sniffedFormat) {
   return derivedMs;
 }
 
+/** Which scheme answered last, per host:port. Process-lifetime only: this is a
+ *  cache, never configuration -- the truth is whatever the socket does today. */
+const SCHEME_MEMO = new Map();
+const endpointKey = (e) => `${e.host}:${e.port}`;
+
+/** HTTPS first by default: every fleet service runs with
+ *  AITHER_INTERSERVICE_TLS=true, so plain HTTP is the exception now. */
+function schemeFor(endpoint) {
+  const remembered = SCHEME_MEMO.get(endpointKey(endpoint));
+  const scheme = remembered
+    || (endpoint.scheme === "http" || endpoint.scheme === "https" ? endpoint.scheme : "https");
+  return scheme === "http"
+    ? { scheme: "http", mod: http, other: "https" }
+    : { scheme: "https", mod: https, other: "http" };
+}
+
+function rememberScheme(endpoint, scheme) {
+  SCHEME_MEMO.set(endpointKey(endpoint), scheme);
+}
+
+/** Connection-level failures a scheme flip explains. A 4xx/5xx is NOT one of
+ *  these -- the service answered, and retrying on the other scheme would only
+ *  hide a real refusal behind a second failure. */
+function isSchemeMismatch(error) {
+  const code = String(error?.code || "");
+  const msg = String(error?.message || "");
+  return code === "ECONNRESET"
+    || code === "EPROTO"
+    || code === "ERR_SSL_WRONG_VERSION_NUMBER"
+    || code === "ECONNREFUSED"
+    || /wrong version number|packet length too long|socket hang up/i.test(msg);
+}
+
 async function synthesizeVerdict(text, voice = "nova", opts = {}) {
   const { speed, endpoint: explicitEndpoint } = opts;
+  const retried = Boolean(opts._schemeRetry);
   const voiceConfig = loadVoiceConfig();
   const maxChars = Number.isFinite(Number(opts.maxChars)) && Number(opts.maxChars) > 0
     ? Number(opts.maxChars)
@@ -499,9 +534,10 @@ async function synthesizeVerdict(text, voice = "nova", opts = {}) {
     path: (explicitEndpoint && explicitEndpoint.path) || (voiceConfig && voiceConfig.endpoint.path) || DEFAULT_ENDPOINT.path,
   };
   const resolvedSpeed = voiceSpeed(speed, { config: voiceConfig });
+  const agent = schemeFor(endpoint);
   return await new Promise((resolve) => {
     const body = JSON.stringify({ text: short, voice, speed: resolvedSpeed, return_base64: true });
-    const req = http.request(
+    const req = agent.mod.request(
       {
         host: endpoint.host,
         port: endpoint.port,
@@ -509,6 +545,12 @@ async function synthesizeVerdict(text, voice = "nova", opts = {}) {
         method: "POST",
         headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) },
         timeout: 90000,
+        // The fleet issues its own CA and Electron does not carry it. This is a
+        // LOOPBACK call to a service on this machine, so the transport is not
+        // the trust boundary -- cast.json's gate is (see cast-config's
+        // "not as authentication" note). Verifying here would only mean the
+        // desk goes permanently silent the next time a rebuild turns TLS on.
+        rejectUnauthorized: false,
       },
       (res) => {
         let text = "";
@@ -534,7 +576,20 @@ async function synthesizeVerdict(text, voice = "nova", opts = {}) {
       },
     );
     req.on("timeout", () => { req.destroy(new Error("synthesis timeout")); });
-    req.on("error", (error) => resolve({ ok: false, reason: String(error?.message || error).slice(0, 200) }));
+    req.on("error", (error) => {
+      // A scheme mismatch does not announce itself: plain HTTP into a TLS
+      // socket is just closed, and TLS into a plain one fails the handshake --
+      // both arrive here as a connection error, which `speakAloud` renders as
+      // "a dead voice service" and a MUTED caption. Flip and retry ONCE, then
+      // remember, so the next rebuild that moves the service costs one request
+      // rather than every utterance until somebody reads the code.
+      if (!retried && isSchemeMismatch(error)) {
+        rememberScheme(endpoint, agent.other);
+        resolve(synthesizeVerdict(text, voice, { ...opts, _schemeRetry: true }));
+        return;
+      }
+      resolve({ ok: false, reason: String(error?.message || error).slice(0, 200) });
+    });
     req.write(body);
     req.end();
   });

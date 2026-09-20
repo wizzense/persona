@@ -19,8 +19,10 @@
  * .claude/rules/aitheros-dispatch.md — so its row IS the gateway's health.
  */
 
+const fs = require("node:fs");
 const http = require("node:http");
 const https = require("node:https");
+const path = require("node:path");
 
 const SURFACES = [
   { id: "tunnel", label: "Tunnel", open: "https://tunnel.aitherium.com/", probe: "https://tunnel.aitherium.com/", scope: "public" },
@@ -34,7 +36,24 @@ const SURFACES = [
 
 const OPENABLE = new Set(SURFACES.map((s) => s.open));
 
-const { internalCaBuffer: internalCa } = require("./internal-ca.cjs");
+function internalCa() {
+  const candidates = [];
+  if (process.env.AITHEROS_ROOT) {
+    candidates.push(path.join(process.env.AITHEROS_ROOT, "Library", "Data", "tls", "ca-chain.pem"));
+  }
+  candidates.push(
+    "C:\\AitherOS-Data\\Library\\Data\\tls\\ca-chain.pem",
+    "C:\\AitherOS-Fresh\\AitherOS\\Library\\Data\\tls\\ca-chain.pem",
+  );
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p)) return fs.readFileSync(p);
+    } catch {
+      /* next candidate */
+    }
+  }
+  return undefined;
+}
 
 /** GET a URL; resolve { status, body, ms } — status 0 on any transport failure. */
 function defaultRequest(url, { timeoutMs = 3000, ca } = {}) {
