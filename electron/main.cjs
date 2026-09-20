@@ -703,10 +703,45 @@ function handleBridgeEvent(event) {
  *  `speak` tool) and a room-only gate would leave two of them open. Fails
  *  open (today's ungated behaviour) when voice-resolve.cjs has not landed
  *  yet on this box -- see the guarded require above. */
+/** The words, over the speaker's head. Sent on EVERY outcome of speakAloud that
+ *  the cast allows a caption for -- spoken, muted, or a voice service that is
+ *  down -- because the case the owner asked for is exactly the one where there
+ *  is no audio: "if I have them muted I can see it, read it". `muted` tells the
+ *  renderer there is no audio to time against, so it paces by reading speed.
+ *  Returns how many windows got it; never throws (a caption must not be able to
+ *  fail a speak). */
+function sendBubble(slotId, text, { muted = false, durationMs = 0 } = {}) {
+  const body = String(text == null ? "" : text).trim();
+  if (!body) return 0;
+  let delivered = 0;
+  try {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (win.isDestroyed()) continue;
+      win.webContents.send("desk:event", {
+        type: "bubble",
+        slotId: slotId || "slot0",
+        text: body,
+        muted: Boolean(muted),
+        durationMs: Number.isFinite(durationMs) && durationMs > 0 ? durationMs : 0,
+      });
+      delivered += 1;
+    }
+  } catch (error) {
+    debugLog("bubble send failed", error?.message || error);
+  }
+  return delivered;
+}
+
 async function speakAloud(text, voice = "nova", speed = undefined, slotId = "slot0", origin = "service:awdesk") {
   let effectiveVoice = voice || "nova";
   let effectiveSpeed = speed;
   let effectiveMaxChars = 2000;
+  // cast.json's master x actor fader. It is NEVER a caller argument: a request
+  // body that could set its own loudness is the same hole as one that could
+  // set its own origin, so it comes from the gate or it is full volume.
+  let effectiveVolume = 1;
+  // Fails OPEN like the gate itself: with no verdict, the words are shown.
+  let captioned = true;
   if (typeof resolveSpeech === "function") {
     let gate;
     try {
@@ -715,23 +750,39 @@ async function speakAloud(text, voice = "nova", speed = undefined, slotId = "slo
       debugLog("voice-resolve gate threw; failing open", origin, error?.message || error);
       gate = null;
     }
+    if (gate && gate.caption === false) captioned = false;
     if (gate && gate.allowed === false) {
-      return { ok: false, reason: gate.reason || `${origin} is not audible` };
+      // Refused for SOUND, not for sight: a muted speaker still gets its caption.
+      const shown = captioned ? sendBubble(slotId, text, { muted: true }) : 0;
+      return { ok: false, reason: gate.reason || `${origin} is not audible`, captioned: shown > 0 };
     }
     if (gate) {
       if (gate.voice) effectiveVoice = gate.voice;
       if (gate.speed != null) effectiveSpeed = gate.speed;
       if (gate.maxChars != null) effectiveMaxChars = gate.maxChars;
+      if (typeof gate.volume === "number" && Number.isFinite(gate.volume)) effectiveVolume = gate.volume;
     }
   }
   const tts = await synthesizeVerdict(text, effectiveVoice, { speed: effectiveSpeed, maxChars: effectiveMaxChars });
-  if (!tts.ok) return { ok: false, reason: tts.reason || "voice service unavailable" };
+  if (!tts.ok) {
+    // A dead voice service takes the audio, not the words.
+    const shown = captioned ? sendBubble(slotId, text, { muted: true }) : 0;
+    return { ok: false, reason: tts.reason || "voice service unavailable", captioned: shown > 0 };
+  }
+  // Sent WITH the audio, after synthesis, so the caption appears as the mouth
+  // starts moving rather than seconds ahead of it.
+  if (captioned) sendBubble(slotId, text, { durationMs: tts.durationMs || 0 });
   let delivered = 0;
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {
       // `slotId` picks WHOSE mouth moves: slot0 is the resident avatar; a
       // room-stage slot is one of the agents on stage.
-      win.webContents.send("desk:event", { type: "speak", audioBase64: tts.audioBase64, slotId: slotId || "slot0" });
+      win.webContents.send("desk:event", {
+        type: "speak",
+        audioBase64: tts.audioBase64,
+        slotId: slotId || "slot0",
+        volume: effectiveVolume,
+      });
       delivered += 1;
     }
   }

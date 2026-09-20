@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { useThree } from '@react-three/fiber';
-import { Environment, OrbitControls } from '@react-three/drei';
+import { Environment, Html, OrbitControls } from '@react-three/drei';
 import dawnEnvironment from '@pmndrs/assets/hdri/dawn.exr';
 import * as THREE from 'three';
 import { Avatar, type AvatarProps } from './Avatar';
@@ -14,6 +14,7 @@ import { authoredFields, freeSpot } from '../hooks/stagePlacement';
 import { anyoneAudible } from '../hooks/voiceLevels';
 import type { VRM } from '@pixiv/three-vrm';
 import { applySpringScale } from '../hooks/useVrmLoader';
+import type { SpeechBubble } from '../speech-bubble';
 
 /** How long an authored placement waits for its slot to go live (see applyPlace).
  *  One render is all it needs; a second is generous and keeps a placement for a
@@ -22,6 +23,9 @@ const PLACE_PENDING_MS = 1000;
 const MIN_SCALE = 0.3;
 const MAX_SCALE = 3;
 const clampScale = (value: number) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, value));
+/** Just above a VRM's head, in the avatar group's OWN units (a VRM stands about
+ *  1.6 tall), so it scales with the body instead of floating off a small one. */
+const BUBBLE_HEIGHT = 1.78;
 
 interface SceneProps {
   animation: AnimationType | string;
@@ -33,6 +37,9 @@ interface SceneProps {
   extraSlots?: Array<{ slotId: string; modelUrl: string }>;
   /** Mouth state per spawned slot (the room stage speaks through these). */
   slotVoices?: Record<string, { level: number; speaking: boolean }>;
+  /** What each body is saying, as text -- shown over its head, and the ONLY
+   *  trace of a line when that speaker (or the whole room) is muted. */
+  bubbles?: Record<string, SpeechBubble>;
   /** Detached-window mode: render THIS character in slot0's spot instead of the default
    *  `./assets/model.vrm`. Set by App.tsx from the `?solo=` query param a detached
    *  avatar window is opened with (see detached-avatar-window.cjs). */
@@ -194,6 +201,7 @@ interface PlacedAvatarProps {
    *  front and center" action — also the recovery move when an avatar got lost. */
   avatarProps: Omit<AvatarProps, 'onReady'>;
   onReady: (scene: THREE.Object3D) => void;
+  bubble?: SpeechBubble;
 }
 
 /** ALL avatars share ONE OrbitControls, so "disable on my drag start / enable on my drag
@@ -222,7 +230,7 @@ function resumeOrbit(orbit: { enabled?: boolean } | null) {
  *  position is committed to persisted layout state ONCE, on pointerup. All live values
  *  (y, scale) are read through refs so a re-render mid-drag can never strand the drag on
  *  a stale closure. */
-function PlacedAvatar({ slotId, transform, onDrag, onScale, onRotate, avatarProps, onReady }: PlacedAvatarProps) {
+function PlacedAvatar({ slotId, transform, onDrag, onScale, onRotate, avatarProps, onReady, bubble }: PlacedAvatarProps) {
   const getThreeState = useThree((state) => state.get);
   const groupRef = useRef<THREE.Group>(null);
   const transformRef = useRef(transform);
@@ -410,6 +418,33 @@ function PlacedAvatar({ slotId, transform, onDrag, onScale, onRotate, avatarProp
         </mesh>
       ) : null}
       <Avatar {...avatarProps} onReady={handleReady} />
+      {bubble ? (
+        // A child of THIS avatar's group, so it follows a drag, a scale and an
+        // arrangement for free. pointer-events are off end to end: the bubble
+        // sits right where the owner grabs an avatar, and a caption that eats
+        // the drag would make a talking agent impossible to move.
+        <Html
+          key={bubble.seq}
+          position={[0, BUBBLE_HEIGHT, 0]}
+          center
+          zIndexRange={[30, 0]}
+          style={{ pointerEvents: 'none' }}
+        >
+          <div
+            className={bubble.muted ? 'speech-bubble speech-bubble--muted' : 'speech-bubble'}
+            role="status"
+            aria-live="polite"
+          >
+            {bubble.muted ? (
+              <svg className="speech-bubble__mute" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" role="img" aria-label="muted">
+                <path d="M11 5 6 9H2v6h4l5 4V5z" />
+                <path d="m22 9-6 6M16 9l6 6" />
+              </svg>
+            ) : null}
+            {bubble.text}
+          </div>
+        </Html>
+      ) : null}
     </group>
   );
 }
@@ -620,6 +655,7 @@ export function Scene(props: SceneProps) {
         onRotate={(yaw) => setYaw('slot0', yaw)}
         avatarProps={props}
         onReady={handleAvatarReady}
+        bubble={props.bubbles?.slot0}
       />
       {/* Extra slots: spawned avatars, each independently draggable/scalable — no longer
           pinned to a fixed side-by-side offset once the owner has moved one. */}
@@ -645,6 +681,7 @@ export function Scene(props: SceneProps) {
             onRotate={(yaw) => setYaw(slot.slotId, yaw)}
             avatarProps={avatarProps}
             onReady={(scene) => handleExtraReady(slot.slotId, scene)}
+            bubble={props.bubbles?.[slot.slotId]}
           />
         );
       })}

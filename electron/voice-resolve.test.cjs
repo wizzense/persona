@@ -195,3 +195,71 @@ test("resolveSpeech: never throws -- a garbage ctx still returns an allowed verd
     assert.equal(typeof gate.allowed, "boolean");
   });
 });
+
+// ─── loudness travels through the gate as ONE number ────────────────────────
+
+test("resolveSpeech: an allowed verdict carries master x actor as `volume`, with provenance", () => {
+  const dir = tmpDir();
+  const file = castFileIn(dir);
+  writeCast(file, {
+    version: 1,
+    voice: { volume: 0.5 },
+    actors: { "mcp:speak": { volume: 0.6 } },
+  });
+  const gate = resolveSpeech({ origin: "mcp:speak", text: "hi", file });
+  assert.equal(gate.allowed, true);
+  assert.equal(gate.volume, 0.3);
+  assert.equal(gate.provenance.masterVolumeFrom, "voice.volume");
+  assert.equal(gate.provenance.volumeFrom, 'actors["mcp:speak"].volume');
+});
+
+test("resolveSpeech: voice.muted refuses every door, so silence never reaches the TTS call", () => {
+  const dir = tmpDir();
+  const file = castFileIn(dir);
+  writeCast(file, { version: 1, voice: { muted: true } });
+  for (const origin of ["mcp:speak", "bridge:/speak", "desk:drop", "service:awdesk"]) {
+    const gate = resolveSpeech({ origin, text: "hi", file });
+    assert.equal(gate.allowed, false, `${origin} must be refused while muted`);
+    assert.match(gate.reason, /voice\.muted/);
+  }
+});
+
+test("resolveSpeech: an origin configured with ONLY a volume is configured, not 'seen but silent'", () => {
+  const dir = tmpDir();
+  const file = castFileIn(dir);
+  writeCast(file, { version: 1, actors: { "mcp:speak": { volume: 0.4 } } });
+  resolveSpeech({ origin: "mcp:speak", text: "hi", file });
+  const seen = readSeen(file);
+  const keys = Array.isArray(seen) ? seen.map((row) => row.key) : Object.keys(seen.origins || seen || {});
+  assert.ok(!keys.includes("mcp:speak"), `a volume-only record must not be noted as unseen: ${JSON.stringify(seen)}`);
+});
+
+test("resolveSpeech: the fail-open verdict is FULL volume, never silence", () => {
+  const gate = resolveSpeech(undefined);
+  assert.equal(gate.allowed, true);
+  assert.equal(gate.volume, 1);
+});
+
+// ─── the caption verdict rides the same gate ────────────────────────────────
+
+test("resolveSpeech: a REFUSED speaker still carries caption:true, so muting never hides the words", () => {
+  const dir = tmpDir();
+  const file = castFileIn(dir);
+  writeCast(file, { version: 1, voice: { muted: true } });
+  const gate = resolveSpeech({ origin: "mcp:speak", text: "the build is green", file });
+  assert.equal(gate.allowed, false);
+  assert.equal(gate.caption, true);
+});
+
+test("resolveSpeech: presence=off refuses the sound AND the caption", () => {
+  const dir = tmpDir();
+  const file = castFileIn(dir);
+  writeCast(file, { version: 1, actors: { "mcp:speak": { presence: "off" } } });
+  const gate = resolveSpeech({ origin: "mcp:speak", text: "hi", file });
+  assert.equal(gate.allowed, false);
+  assert.equal(gate.caption, false);
+});
+
+test("resolveSpeech: the fail-open verdict shows the words", () => {
+  assert.equal(resolveSpeech(undefined).caption, true);
+});

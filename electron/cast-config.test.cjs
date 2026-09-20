@@ -452,3 +452,127 @@ test("CAST_FILE: DESK_CAST_FILE overrides the resolved path, and is read lazily 
     else process.env.DESK_CAST_FILE = had;
   }
 });
+
+// ─── loudness: a mixer (master x actor), a global mute, and provenance ───────
+
+test("resolveActor: unset volume is FULL volume, from the built-in, and the actor is still voiced", () => {
+  const r = cast.resolveActor({ version: 1 }, { kind: "claude_code", id: "v0", roster: null });
+  assert.equal(r.volume, 1);
+  assert.equal(r.masterVolume, 1);
+  assert.equal(r.muted, false);
+  assert.equal(r.effectiveVolume, 1);
+  assert.equal(r.volumeFrom, "builtin");
+  assert.equal(r.masterVolumeFrom, "builtin");
+  assert.equal(r.voiced, true);
+});
+
+test("resolveActor: effective volume is master x actor, and each factor says where it came from", () => {
+  const snapshot = {
+    version: 1,
+    voice: { volume: 0.5 },
+    defaults: { volume: 0.8 },
+    actors: { "claude_code:loud": { volume: 1.6 } },
+  };
+  const loud = cast.resolveActor(snapshot, { kind: "claude_code", id: "loud", roster: null });
+  assert.equal(loud.volume, 1.6);
+  assert.equal(loud.volumeFrom, 'actors["claude_code:loud"].volume');
+  assert.equal(loud.masterVolumeFrom, "voice.volume");
+  assert.equal(loud.effectiveVolume, 0.8);
+
+  // An actor with no record of its own inherits the defaults tier, like every
+  // other actor field -- pulling the master down moves BOTH of them.
+  const other = cast.resolveActor(snapshot, { kind: "claude_code", id: "other", roster: null });
+  assert.equal(other.volumeFrom, "defaults.volume");
+  assert.equal(other.effectiveVolume, 0.4);
+});
+
+test("resolveActor: voice.muted silences everyone and is named BEFORE a per-actor reason", () => {
+  const snapshot = { version: 1, voice: { muted: true }, defaults: { speak: false } };
+  const r = cast.resolveActor(snapshot, { kind: "claude_code", id: "m", roster: null });
+  assert.equal(r.effectiveVolume, 0);
+  assert.equal(r.voiced, false);
+  assert.match(r.voicedReason, /^voice\.muted \(voice\.muted\)/);
+  // Muting is not un-bodying: the avatar stays on stage.
+  assert.equal(r.bodied, true);
+});
+
+test("resolveActor: a fader at zero refuses BEFORE synthesis and says which fader", () => {
+  const master = cast.resolveActor({ version: 1, voice: { volume: 0 } }, { kind: "claude_code", id: "z", roster: null });
+  assert.equal(master.voiced, false);
+  assert.match(master.voicedReason, /^voice\.volume=0 \(voice\.volume\)/);
+
+  const actor = cast.resolveActor({ version: 1, defaults: { volume: 0 } }, { kind: "claude_code", id: "z", roster: null });
+  assert.equal(actor.voiced, false);
+  assert.match(actor.voicedReason, /^volume=0 \(defaults\.volume\)/);
+});
+
+test("resolveActor: an out-of-range volume is DROPPED with a problem, never clamped", () => {
+  const snapshot = { version: 1, voice: { volume: 3 }, defaults: { volume: -1 } };
+  const r = cast.resolveActor(snapshot, { kind: "claude_code", id: "bad", roster: null });
+  // Both fall through to the built-in: a clamp would pin the owner to a
+  // loudness they never chose (the module's own DROP, DO NOT CLAMP rule).
+  assert.equal(r.masterVolume, 1);
+  assert.equal(r.volume, 1);
+  assert.ok(r.problems.find((p) => p.path === "voice.volume"), "expected a problem naming voice.volume");
+  assert.ok(r.problems.find((p) => p.path === "defaults.volume"), "expected a problem naming defaults.volume");
+});
+
+test("validateCast + resolveVoice: volume and muted are known voice keys, not unknown-key problems", () => {
+  const { problems } = cast.validateCast({ version: 1, voice: { volume: 0.3, muted: true } });
+  assert.deepEqual(problems, []);
+  const v = cast.resolveVoice({ version: 1, voice: { volume: 0.3, muted: true } }, { env: {} });
+  assert.equal(v.volume, 0.3);
+  assert.equal(v.volumeFrom, "voice.volume");
+  assert.equal(v.muted, true);
+});
+
+// ─── captions: shown when PRESENT, not when AUDIBLE ─────────────────────────
+
+test("resolveActor: every kind of mute keeps its caption -- that is what the caption is for", () => {
+  const ctx = { kind: "claude_code", id: "c", roster: null };
+  const cases = [
+    { version: 1, voice: { muted: true } },
+    { version: 1, voice: { volume: 0 } },
+    { version: 1, defaults: { speak: false } },
+    { version: 1, defaults: { presence: "quiet" } },
+    { version: 1, defaults: { volume: 0 } },
+  ];
+  for (const snapshot of cases) {
+    const r = cast.resolveActor(snapshot, ctx);
+    assert.equal(r.voiced, false, `expected silence for ${JSON.stringify(snapshot)}`);
+    assert.equal(r.captioned, true, `a muted speaker lost its caption: ${JSON.stringify(snapshot)}`);
+  }
+});
+
+test("resolveActor: presence=off and an unnamed relay channel get NO caption (or slot0's bubble floods)", () => {
+  const off = cast.resolveActor({ version: 1, defaults: { presence: "off" } }, { kind: "claude_code", id: "c", roster: null });
+  assert.equal(off.captioned, false);
+  assert.match(off.captionedReason, /^presence=off/);
+
+  const relay = cast.resolveActor({ version: 1 }, { kind: "relay", channel: "#random", nick: "someone", roster: null });
+  assert.equal(relay.captioned, false);
+  assert.match(relay.captionedReason, /is not voiced/);
+
+  // Naming the channel is what turns BOTH on.
+  const named = cast.resolveActor(
+    { version: 1, channels: { "#random": { voiced: true } } },
+    { kind: "relay", channel: "#random", nick: "someone", roster: null },
+  );
+  assert.equal(named.captioned, true);
+});
+
+test("resolveActor: captions switch off for the whole stage, or for one speaker, with provenance", () => {
+  const stage = cast.resolveActor({ version: 1, stage: { bubbles: false } }, { kind: "claude_code", id: "c", roster: null });
+  assert.equal(stage.captioned, false);
+  assert.match(stage.captionedReason, /^stage\.bubbles=false \(stage\.bubbles\)/);
+
+  const snapshot = { version: 1, actors: { "claude_code:noisy": { bubble: false } } };
+  const one = cast.resolveActor(snapshot, { kind: "claude_code", id: "noisy", roster: null });
+  assert.equal(one.captioned, false);
+  assert.match(one.captionedReason, /^bubble=false \(actors\["claude_code:noisy"\]\.bubble\)/);
+  const other = cast.resolveActor(snapshot, { kind: "claude_code", id: "fine", roster: null });
+  assert.equal(other.captioned, true);
+
+  const { problems } = cast.validateCast({ version: 1, stage: { bubbles: false }, defaults: { bubble: true } });
+  assert.deepEqual(problems, []);
+});

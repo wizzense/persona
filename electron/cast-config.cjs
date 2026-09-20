@@ -127,6 +127,15 @@ const SCALE_MAX = 10;
 
 const PRESENCE_LEVELS = ["off", "quiet", "normal", "chatty"];
 
+/** Loudness is a MIXER, not an override: the effective gain is the master
+ *  fader times the speaker's own fader. An override would make "turn everyone
+ *  down" a walk through every record, and would let one authored actor ignore
+ *  the master the owner just pulled. The master stops at 1 (it is the ceiling
+ *  the owner set for the room); an actor may go to 2 because voices are not
+ *  equally loud at the source and a quiet one needs a boost to MATCH. */
+const MASTER_VOLUME_MAX = 1;
+const ACTOR_VOLUME_MAX = 2;
+
 /** AitherVoice's voice names. A voice that is not in this list is still legal
  *  in the file (the service may know more than the desk does); this is only
  *  the pool the stable hash draws from. */
@@ -139,6 +148,7 @@ const BUILTIN_STAGE = Object.freeze({
   gapMs: 350,
   pollMs: 2000,
   resident: null,
+  bubbles: true,
 });
 
 const BUILTIN_VOICE = Object.freeze({
@@ -148,12 +158,16 @@ const BUILTIN_VOICE = Object.freeze({
   endpoint: Object.freeze({ host: "127.0.0.1", port: 8084, path: "/voice/synthesize" }),
   speechFilter: Object.freeze({ maxChars: 220, allowCode: false }),
   affectIntensity: 1,
+  volume: 1,
+  muted: false,
 });
 
 const BUILTIN_ACTOR = Object.freeze({
   presence: "normal",
   speak: true,
   body: true,
+  volume: 1,
+  bubble: true,
 });
 
 /** The origin keys that are hardcoded at their injection sites. Exported so a
@@ -340,6 +354,8 @@ const ACTOR_FIELDS = Object.freeze({
   character: (v) => vString(v, { max: 120 }),
   voice: (v) => vString(v, { max: 40 }),
   speed: (v) => vNumber(v, { min: SPEED_MIN, max: SPEED_MAX }),
+  volume: (v) => vNumber(v, { min: 0, max: ACTOR_VOLUME_MAX }),
+  bubble: vBool,
   presence: (v) => vEnum(v, PRESENCE_LEVELS),
   speak: vBool,
   body: vBool,
@@ -356,6 +372,7 @@ const STAGE_FIELDS = Object.freeze({
   gapMs: (v) => vInt(v, { min: 0 }),
   pollMs: (v) => vInt(v, { min: 250 }),
   resident: (v) => vString(v, { max: 120 }),
+  bubbles: vBool,
 });
 
 const VOICE_FIELDS = Object.freeze({
@@ -363,6 +380,8 @@ const VOICE_FIELDS = Object.freeze({
   defaultSpeed: (v) => vNumber(v, { min: SPEED_MIN, max: SPEED_MAX }),
   maxChars: (v) => vInt(v, { min: 40, max: 2000 }),
   affectIntensity: (v) => vNumber(v, { min: 0, max: 1 }),
+  volume: (v) => vNumber(v, { min: 0, max: MASTER_VOLUME_MAX }),
+  muted: vBool,
 });
 
 const ENDPOINT_FIELDS = Object.freeze({
@@ -1034,6 +1053,7 @@ function resolveStage(snapshot, { env = process.env } = {}) {
   pick("gapMs", null);
   pick("pollMs", null);
   pick("resident", null);
+  pick("bubbles", null);
   out.problems = problems;
   return out;
 }
@@ -1058,6 +1078,8 @@ function resolveVoice(snapshot, { env = process.env } = {}) {
   pick("defaultSpeed", "DESK_VOICE_SPEED");
   pick("maxChars", null);
   pick("affectIntensity", null);
+  pick("volume", null);
+  pick("muted", null);
 
   const endpoint = {};
   for (const field of Object.keys(ENDPOINT_FIELDS)) {
@@ -1206,6 +1228,17 @@ function resolveActor(snapshot, ctx = {}) {
     pick("cooldownSeconds") ||
     readField(cfg.stage, "cooldownSeconds", "stage", problems, STAGE_FIELDS.cooldownSeconds);
 
+  // ── loudness: master fader x this speaker's fader (see MASTER_VOLUME_MAX) ──
+  // `volume` is read per TIER like every other actor field, so "everyone in
+  // this author's sessions at 0.5" and "this one seat at 1.4" both work.
+  const volumeHit = pick("volume");
+  const volume = volumeHit ? volumeHit.value : BUILTIN_ACTOR.volume;
+  const masterVolumeHit = readField(cfg.voice, "volume", "voice", problems, VOICE_FIELDS.volume);
+  const masterVolume = masterVolumeHit ? masterVolumeHit.value : BUILTIN_VOICE.volume;
+  const mutedHit = readField(cfg.voice, "muted", "voice", problems, VOICE_FIELDS.muted);
+  const muted = mutedHit ? mutedHit.value : BUILTIN_VOICE.muted;
+  const effectiveVolume = muted ? 0 : masterVolume * volume;
+
   // ── presence / speak / body / place ──
   const presenceHit = pick("presence");
   const presence = presenceHit ? presenceHit.value : BUILTIN_ACTOR.presence;
@@ -1236,7 +1269,12 @@ function resolveActor(snapshot, ctx = {}) {
 
   let voiced = true;
   let voicedReason = null;
-  if (speak === false) {
+  if (muted) {
+    // The global switch is named FIRST: when the whole room is muted, "this
+    // agent has speak=false" is true and beside the point.
+    voiced = false;
+    voicedReason = `voice.muted (${mutedHit ? mutedHit.from : "builtin"})`;
+  } else if (speak === false) {
     // A hard mute BEATS presence and keeps the body: "be here, say nothing".
     voiced = false;
     voicedReason = `speak=false (${speakHit ? speakHit.from : "builtin"})`;
@@ -1249,6 +1287,42 @@ function resolveActor(snapshot, ctx = {}) {
   } else if (!channelVoiced) {
     voiced = false;
     voicedReason = `${chKey} is not voiced (${channelVoicedFrom})`;
+  } else if (effectiveVolume === 0) {
+    // Refused HERE, before synthesis: a fader at zero that still spends a TTS
+    // call is a mute that costs GPU time to say nothing.
+    voiced = false;
+    voicedReason =
+      masterVolume === 0
+        ? `voice.volume=0 (${masterVolumeHit ? masterVolumeHit.from : "builtin"})`
+        : `volume=0 (${volumeHit ? volumeHit.from : "builtin"})`;
+  }
+
+  // ── the caption: what the speaker SAID, shown over its body ──
+  // Decided separately from `voiced`, because the whole point is the case where
+  // they differ: a muted room is one the owner still wants to READ. It follows
+  // the speaker being PRESENT, not the speaker being audible -- so every mute
+  // (voice.muted, speak=false, presence=quiet, a fader at zero) keeps its
+  // caption, while `presence=off` and a relay channel nobody named do not.
+  // Without those two exclusions every unconfigured relay line would land in
+  // the resident avatar's bubble, which is the flood `voiced` exists to stop.
+  const bubbleHit = pick("bubble");
+  const bubble = bubbleHit ? bubbleHit.value : BUILTIN_ACTOR.bubble;
+  const stageBubblesHit = readField(cfg.stage, "bubbles", "stage", problems, STAGE_FIELDS.bubbles);
+  const stageBubbles = stageBubblesHit ? stageBubblesHit.value : BUILTIN_STAGE.bubbles;
+  let captioned = true;
+  let captionedReason = null;
+  if (!stageBubbles) {
+    captioned = false;
+    captionedReason = `stage.bubbles=false (${stageBubblesHit ? stageBubblesHit.from : "builtin"})`;
+  } else if (bubble === false) {
+    captioned = false;
+    captionedReason = `bubble=false (${bubbleHit ? bubbleHit.from : "builtin"})`;
+  } else if (presence === "off") {
+    captioned = false;
+    captionedReason = `presence=off (${presenceHit ? presenceHit.from : "builtin"})`;
+  } else if (!channelVoiced) {
+    captioned = false;
+    captionedReason = `${chKey} is not voiced (${channelVoicedFrom})`;
   }
 
   return {
@@ -1267,6 +1341,17 @@ function resolveActor(snapshot, ctx = {}) {
     voiceFrom,
     speed: speedHit ? speedHit.value : BUILTIN_VOICE.defaultSpeed,
     speedFrom: speedHit ? speedHit.from : "builtin",
+    volume,
+    volumeFrom: volumeHit ? volumeHit.from : "builtin",
+    masterVolume,
+    masterVolumeFrom: masterVolumeHit ? masterVolumeHit.from : "builtin",
+    muted,
+    mutedFrom: mutedHit ? mutedHit.from : "builtin",
+    effectiveVolume,
+    bubble,
+    bubbleFrom: bubbleHit ? bubbleHit.from : "builtin",
+    captioned,
+    captionedReason,
     maxChars: maxCharsHit ? maxCharsHit.value : BUILTIN_VOICE.maxChars,
     maxCharsFrom: maxCharsHit ? maxCharsHit.from : "builtin",
     idleSeconds: idleHit ? idleHit.value : BUILTIN_STAGE.idleSeconds,

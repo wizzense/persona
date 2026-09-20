@@ -11,6 +11,8 @@ import {
 import { createPushToTalk } from './voice/pushToTalk';
 import { Scene } from './components/Scene';
 import { clearLevel, setLevel } from './hooks/voiceLevels';
+import { speechGain } from './speech-gain';
+import { bubbleDurationMs, bubbleText, type SpeechBubble } from './speech-bubble';
 import { Deck } from './components/Deck';
 import { ChatView } from './components/ChatView';
 import { Beads } from './components/Beads';
@@ -40,6 +42,7 @@ async function playSpoken(
   setVoice: Dispatch<SetStateAction<VoiceState>>,
   setAudioLevel: (level: number) => void,
   ctxRef: MutableRefObject<AudioContext | null>,
+  volume?: number,
 ): Promise<void> {
   try {
     ctxRef.current?.close().catch(() => {});
@@ -53,8 +56,14 @@ async function playSpoken(
     source.buffer = buffer;
     const analyser = ctx.createAnalyser();
     analyser.fftSize = 512;
+    // The fader sits AFTER the analyser on purpose: lip sync reads the signal
+    // at full scale, so an agent turned down to 0.2 still moves its mouth like
+    // it is talking instead of mumbling in proportion to the owner's volume.
+    const gain = ctx.createGain();
+    gain.gain.value = speechGain(volume);
     source.connect(analyser);
-    analyser.connect(ctx.destination);
+    analyser.connect(gain);
+    gain.connect(ctx.destination);
     setVoice((current) => ({ ...current, phase: 'active', activity: 'speaking' }));
     source.start();
     const samples = new Uint8Array(analyser.fftSize);
@@ -132,6 +141,19 @@ function AvatarSceneApp() {
   // One playback context per stage body: a new utterance for a slot closes that
   // slot's previous one instead of stacking contexts and rAF loops.
   const slotAudioRefs = useRef(new Map<string, { current: AudioContext | null }>());
+  // What each body is saying, as text. One bubble per slot: a new line from the
+  // same speaker REPLACES its bubble (and restarts its timer) rather than
+  // stacking, which is what keeps a chatty agent from papering over the stage.
+  const [bubbles, setBubbles] = useState<Record<string, SpeechBubble>>({});
+  const bubbleTimers = useRef(new Map<string, number>());
+  const bubbleSeq = useRef(0);
+  useEffect(() => {
+    const timers = bubbleTimers.current;
+    return () => {
+      for (const id of timers.values()) window.clearTimeout(id);
+      timers.clear();
+    };
+  }, []);
 
   // Push-to-talk, driven by main (tray item, palette, global hotkey). Built once
   // and kept in a ref: a recorder rebuilt on every render would lose the stream
@@ -199,6 +221,18 @@ function AvatarSceneApp() {
         clearLevel(event.slotId);
         slotAudioRefs.current.get(event.slotId)?.current?.close().catch(() => {});
         slotAudioRefs.current.delete(event.slotId);
+        // A body that left takes its caption with it: slot ids are REUSED, so a
+        // lingering bubble would appear over whoever spawns into the id next.
+        const gone = event.slotId;
+        const pending = bubbleTimers.current.get(gone);
+        if (pending !== undefined) window.clearTimeout(pending);
+        bubbleTimers.current.delete(gone);
+        setBubbles((current) => {
+          if (!(gone in current)) return current;
+          const next = { ...current };
+          delete next[gone];
+          return next;
+        });
       } else if (event.type === 'listen') {
         // Slice C. The recorder lives outside React (src/voice/pushToTalk.ts) so
         // the mic is released on every exit path, including a throw from the
@@ -206,6 +240,30 @@ function AvatarSceneApp() {
         // as "it is still listening to me".
         if (event.listening) void talkRef.current?.start();
         else talkRef.current?.stop();
+      } else if (event.type === 'bubble') {
+        const text = bubbleText(event.text);
+        if (!text) return;
+        const slotId = event.slotId || 'slot0';
+        bubbleSeq.current += 1;
+        const seq = bubbleSeq.current;
+        setBubbles((current) => ({ ...current, [slotId]: { text, muted: Boolean(event.muted), seq } }));
+        const timers = bubbleTimers.current;
+        const previous = timers.get(slotId);
+        if (previous !== undefined) window.clearTimeout(previous);
+        timers.set(
+          slotId,
+          window.setTimeout(() => {
+            timers.delete(slotId);
+            // Only clear the bubble this timer was armed for: a newer line for
+            // the same slot owns the slot now and has its own timer.
+            setBubbles((current) => {
+              if (current[slotId]?.seq !== seq) return current;
+              const next = { ...current };
+              delete next[slotId];
+              return next;
+            });
+          }, bubbleDurationMs(text, event.durationMs)),
+        );
       } else if (event.type === 'speak') {
         // Drop-to-avatar (2026-08-29): main TTS'd a verdict and handed the
         // audio over. Play it through Web Audio and drive the SAME audioLevel
@@ -234,9 +292,16 @@ function AvatarSceneApp() {
             },
             (level) => setLevel(slotId, level),
             ref,
+            event.volume,
           );
         } else {
-          void playSpoken(event.audioBase64, setVoice, (level) => setLevel('slot0', level), audioCtxRef);
+          void playSpoken(
+            event.audioBase64,
+            setVoice,
+            (level) => setLevel('slot0', level),
+            audioCtxRef,
+            event.volume,
+          );
         }
       }
     });
@@ -311,6 +376,7 @@ function AvatarSceneApp() {
         speaking={speaking}
         extraSlots={extraSlots}
         slotVoices={slotVoices}
+        bubbles={bubbles}
         modelUrl={soloModelUrl ?? undefined}
       />
       {/* Floating beads — the notification badge + quick actions that live ON
