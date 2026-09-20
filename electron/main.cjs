@@ -2301,7 +2301,7 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
           // The aitherium agent-pack + avatar marketplace. Portal is the
           // platform surface; the deep marketplace route gets pinned when the
           // Living-Desktop app phase lands.
-          // portal.aitherium.com is RETIRED: it 301s to the apex (measured
+          // The old `portal.` host is RETIRED: it 301s to the apex (measured
           // 2026-09-19). Open the apex directly so the app does not depend on a
           // redirect that exists only for old links.
           void shell.openExternal("https://aitherium.com");
