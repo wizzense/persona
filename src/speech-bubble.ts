@@ -47,3 +47,34 @@ export function bubbleDurationMs(text: string, audioMs: unknown): number {
   // share one floor and one ceiling, so a runaway clip cannot pin a caption.
   return Math.min(MAX_MS, Math.max(MIN_MS, audio || reading));
 }
+
+export interface Box { left: number; top: number; right: number; bottom: number }
+
+/** The nudge that brings a bubble fully inside the window.
+ *
+ *  The avatar window is framed TIGHT to the body: the top of the head sits a few
+ *  dozen pixels under the window edge, so "above the head" is mostly outside the
+ *  window. Measured on first contact with the real app: a correctly-anchored bubble
+ *  drew entirely off-screen and every test still passed. A caption nobody can see
+ *  is worse than none, so visibility wins over placement -- when there is no room
+ *  above, the bubble overlaps the top of the head rather than leaving the window.
+ *
+ *  `rect` is the bubble's NATURAL box (before any nudge). When the bubble is larger
+ *  than the window on an axis it pins to the leading edge, so the START of the
+ *  text is what stays readable. */
+export function clampIntoViewport(
+  rect: Box,
+  viewport: { width: number; height: number },
+  margin = 8,
+): { dx: number; dy: number } {
+  const axis = (lo: number, hi: number, size: number) => {
+    if (!Number.isFinite(lo) || !Number.isFinite(hi) || !Number.isFinite(size)) return 0;
+    if (hi - lo > size - margin * 2 || lo < margin) return margin - lo;
+    if (hi > size - margin) return size - margin - hi;
+    return 0;
+  };
+  return {
+    dx: axis(rect.left, rect.right, viewport.width),
+    dy: axis(rect.top, rect.bottom, viewport.height),
+  };
+}

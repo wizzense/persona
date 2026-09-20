@@ -1135,6 +1135,13 @@ body {
   transform: translateX(-50%) rotate(45deg);
 }
 
+/* The per-frame nudge that keeps the bubble inside the window lives on this
+   wrapper, so it never fights the bubble's own translate/animation. */
+.speech-bubble-nudge {
+  pointer-events: none;
+  will-change: transform;
+}
+
 /* Muted: same words, visibly NOT being said aloud -- a dashed edge and a
    speaker-off mark, so a silent room never looks like a broken voice service. */
 .speech-bubble--muted {

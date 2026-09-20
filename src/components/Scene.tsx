@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Canvas } from '@react-three/fiber';
+import { Canvas, createPortal } from '@react-three/fiber';
 import { useThree } from '@react-three/fiber';
 import { Environment, Html, OrbitControls } from '@react-three/drei';
 import dawnEnvironment from '@pmndrs/assets/hdri/dawn.exr';
@@ -15,6 +15,7 @@ import { anyoneAudible } from '../hooks/voiceLevels';
 import type { VRM } from '@pixiv/three-vrm';
 import { applySpringScale } from '../hooks/useVrmLoader';
 import type { SpeechBubble } from '../speech-bubble';
+import { SpeechBubbleView } from './SpeechBubbleView';
 
 /** How long an authored placement waits for its slot to go live (see applyPlace).
  *  One render is all it needs; a second is generous and keeps a placement for a
@@ -23,9 +24,15 @@ const PLACE_PENDING_MS = 1000;
 const MIN_SCALE = 0.3;
 const MAX_SCALE = 3;
 const clampScale = (value: number) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, value));
-/** Just above a VRM's head, in the avatar group's OWN units (a VRM stands about
- *  1.6 tall), so it scales with the body instead of floating off a small one. */
-const BUBBLE_HEIGHT = 1.78;
+/** The caption's anchor, in the HEAD BONE's own space: just over the crown.
+ *  It used to be a guessed height in the avatar group's units (1.78, "a VRM is
+ *  about 1.6 tall"), and on the real desk that landed ~290 px above the head and
+ *  outside the window entirely -- the group's units are not the model's metres.
+ *  A bone is: normalized humanoid bones are in metres whatever the group scale,
+ *  and parenting to it makes the caption follow a head tilt for free. */
+const BUBBLE_OVER_HEAD = 0.2;
+/** Only until the model has loaded and there is a head to anchor to. */
+const BUBBLE_FALLBACK_HEIGHT = 1.2;
 
 interface SceneProps {
   animation: AnimationType | string;
@@ -246,6 +253,9 @@ function PlacedAvatar({ slotId, transform, onDrag, onScale, onRotate, avatarProp
   // The VRM behind this slot, once loaded: the spring compensation below needs
   // it, and only the loader hangs it on the scene (scene.userData.vrm).
   const vrmRef = useRef<VRM | null>(null);
+  // The head bone the caption is parented to. STATE, not a ref: the bubble has to
+  // re-render into the bone the moment the model lands.
+  const [headBone, setHeadBone] = useState<THREE.Object3D | null>(null);
 
   // Committed transform -> group, EXCEPT while a drag owns the group imperatively.
   useLayoutEffect(() => {
@@ -298,6 +308,7 @@ function PlacedAvatar({ slotId, transform, onDrag, onScale, onRotate, avatarProp
       // the compensation must also run here, with the scale the group already has.
       vrmRef.current = vrm ?? null;
       if (vrm) applySpringScale(vrm, transformRef.current.scale);
+      setHeadBone(vrm?.humanoid?.getNormalizedBoneNode('head') ?? null);
       setReady(true);
       onReadyRef.current(scene);
     },
@@ -418,33 +429,23 @@ function PlacedAvatar({ slotId, transform, onDrag, onScale, onRotate, avatarProp
         </mesh>
       ) : null}
       <Avatar {...avatarProps} onReady={handleReady} />
-      {bubble ? (
-        // A child of THIS avatar's group, so it follows a drag, a scale and an
-        // arrangement for free. pointer-events are off end to end: the bubble
-        // sits right where the owner grabs an avatar, and a caption that eats
-        // the drag would make a talking agent impossible to move.
-        <Html
-          key={bubble.seq}
-          position={[0, BUBBLE_HEIGHT, 0]}
-          center
-          zIndexRange={[30, 0]}
-          style={{ pointerEvents: 'none' }}
-        >
-          <div
-            className={bubble.muted ? 'speech-bubble speech-bubble--muted' : 'speech-bubble'}
-            role="status"
-            aria-live="polite"
+      {bubble ? (() => {
+        // pointer-events are off end to end: the caption sits right where the
+        // owner grabs an avatar, and one that eats the drag would make a talking
+        // agent impossible to move.
+        const html = (
+          <Html
+            key={bubble.seq}
+            position={[0, headBone ? BUBBLE_OVER_HEAD : BUBBLE_FALLBACK_HEIGHT, 0]}
+            center
+            zIndexRange={[30, 0]}
+            style={{ pointerEvents: 'none' }}
           >
-            {bubble.muted ? (
-              <svg className="speech-bubble__mute" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" role="img" aria-label="muted">
-                <path d="M11 5 6 9H2v6h4l5 4V5z" />
-                <path d="m22 9-6 6M16 9l6 6" />
-              </svg>
-            ) : null}
-            {bubble.text}
-          </div>
-        </Html>
-      ) : null}
+            <SpeechBubbleView bubble={bubble} />
+          </Html>
+        );
+        return headBone ? createPortal(html, headBone) : html;
+      })() : null}
     </group>
   );
 }
