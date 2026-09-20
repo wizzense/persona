@@ -19,9 +19,11 @@
  * .claude/rules/aitheros-dispatch.md — so its row IS the gateway's health.
  */
 
+const fs = require("node:fs");
 const http = require("node:http");
 const os = require("node:os");
 const https = require("node:https");
+const path = require("node:path");
 
 // Doors every install has: its own loopback front doors.
 const LOCAL_SURFACES = [
