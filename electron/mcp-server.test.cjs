@@ -78,7 +78,7 @@ test("Desk MCP exposes and executes the local character tools", async (context) 
 
   assert.deepEqual(
     tools.tools.map((tool) => tool.name),
-    ["play_animation", "control_window", "get_status", "cast_describe"],
+    ["play_animation", "control_window", "get_status", "cast_describe", "party_export"],
   );
   assert.equal(client.getInstructions(), SERVER_INSTRUCTIONS);
 
