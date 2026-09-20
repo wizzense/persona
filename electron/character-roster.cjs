@@ -218,7 +218,57 @@ async function enrollNewestDownloadChecked(preferredName = null, options = {}) {
   const perform = options.perform || performEnrollment;
   const name = perform(plan);
   if (!name) return { ok: false, name: null, reason: "the copy into the roster failed", verdict };
-  return { ok: true, name, reason: null, verdict };
+  // A hand-enrolled model arrives with NO character.json, and since 2026-09-20 an
+  // unjudged character is hidden with the adult ones -- so without this the owner
+  // drops a .vrm in and it silently never appears. Judge it now. Fire-and-forget:
+  // the enroll already succeeded and a rater that cannot run must not undo it.
+  const rating = rateOnEnroll(name, options);
+  return { ok: true, name, reason: null, verdict, rating };
+}
+
+/**
+ * rateOnEnroll — judge ONE freshly enrolled character, in the background.
+ *
+ * Runs `rate-characters.py --only <name> --apply --vision --capture`: the desk
+ * renders a full-body frame of the model (bridge POST /roster/capture) and a
+ * vision model rates it. Returns what the caller should TELL the owner, never a
+ * promise -- the menu click that triggered the enroll has already returned.
+ *
+ * 🚩 It writes a PENDING marker first. Until the rater answers, the character is
+ * `unrated` and therefore hidden, and "hidden" with no explanation is exactly
+ * the failure this function exists to avoid: the marker makes the state legible
+ * to `rate-characters.py --report` and to the Cast pane's hidden list. If python
+ * or the rater is missing the marker stays, and the owner gets the one command
+ * that fixes it rather than a model that vanished.
+ */
+function rateOnEnroll(name, options = {}) {
+  const spawn = options.spawn || require("node:child_process").spawn;
+  const dir = path.join(ROSTER_DIR, name);
+  try {
+    const file = path.join(dir, "character.json");
+    if (!fs.existsSync(file)) {
+      fs.writeFileSync(file, JSON.stringify({ rating: "unrated", source: "pending" }, null, 2));
+    }
+  } catch {
+    /* the rater below is what decides; a marker we could not write is not fatal */
+  }
+  const python = options.python || process.env.DESK_PYTHON || "python";
+  try {
+    const child = spawn(
+      python,
+      [path.join(ROOT, "rate-characters.py"), "--only", name, "--apply", "--vision", "--capture"],
+      { cwd: ROOT, detached: true, stdio: "ignore", windowsHide: true },
+    );
+    if (child && typeof child.unref === "function") child.unref();
+    return { started: true, hint: `rating ${name} now (full-body look); it appears once judged` };
+  } catch (error) {
+    return {
+      started: false,
+      hint: `${name} is enrolled but UNJUDGED, so it stays hidden. Rate it: `
+        + `python rate-characters.py --only ${name} --apply --vision --capture`,
+      error: String((error && error.message) || error),
+    };
+  }
 }
 
 /** Guarded require, the same shape main.cjs uses for voice-resolve: a missing or broken
@@ -301,6 +351,7 @@ function queueInstall(copies, fsp = fs.promises) {
 }
 
 module.exports = {
+  rateOnEnroll,
   ROSTER_DIR,
   getRecentCharacters,
   enrollNewestDownload,

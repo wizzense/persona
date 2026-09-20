@@ -32,6 +32,8 @@ Usage:
     python rate-characters.py --apply --vision --capture   # ask the running desk for
                                                   # full-body frames first (best)
     python rate-characters.py --set <name> r18    # rate one by hand
+    python rate-characters.py --only <name> --apply --vision --capture   # judge ONE
+                                                  # (what the desk runs after an enroll)
     python rate-characters.py --apply --force     # re-resolve even rated ones
 
 Exit codes: 0 ok, 1 nothing could be resolved, 2 the roster could not be read.
@@ -333,8 +335,16 @@ def report() -> int:
     return 0
 
 
-def apply(force: bool, use_hub: bool, use_vision: bool = False, capture: bool = False) -> int:
+def apply(force: bool, use_hub: bool, use_vision: bool = False, capture: bool = False,
+          only: list[str] | None = None) -> int:
     names = installed_characters()
+    if only:
+        wanted = {n for n in only}
+        missing = wanted - set(names)
+        if missing:
+            print(f"ERROR: no character named {', '.join(sorted(missing))}", file=sys.stderr)
+            return 2
+        names = [n for n in names if n in wanted]
     if capture:
         captured, why = capture_fullbody(names, force=force)
         print(f"  full-body capture: {captured} ({why})")
@@ -393,6 +403,8 @@ def main() -> int:
     parser.add_argument("--vision", action="store_true", help="look at each unjudged model (awvision)")
     parser.add_argument("--capture", action="store_true",
                         help="ask the running desk for full-body frames before looking")
+    parser.add_argument("--only", metavar="NAME", action="append",
+                        help="judge only this character (repeatable); the enroll path uses it")
     parser.add_argument("--set", nargs=2, metavar=("NAME", "RATING"), help="rate one by hand")
     args = parser.parse_args()
 
@@ -403,7 +415,8 @@ def main() -> int:
             return 1
         return 0 if write_rating(name, rating.lower(), "manual") else 1
     if args.apply:
-        return apply(force=args.force, use_hub=not args.no_hub, use_vision=args.vision, capture=args.capture)
+        return apply(force=args.force, use_hub=not args.no_hub, use_vision=args.vision,
+                     capture=args.capture, only=args.only)
     return report()
 
 

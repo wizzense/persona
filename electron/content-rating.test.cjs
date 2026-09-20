@@ -292,3 +292,53 @@ test("the live safety plane can only TIGHTEN: false closes an open gate, null an
     }
   });
 });
+
+// ─── enrolling a model must not make it vanish (owner, 2026-09-20) ──────────
+
+test("a hand-enrolled character is marked pending and handed to the rater, never left silently hidden", () => {
+  const roster = require("./character-roster.cjs");
+  const name = "zz-enroll-fixture";
+  const dir = path.join(ROSTER, name);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "model.vrm"), "not-a-real-vrm");
+  const spawned = [];
+  try {
+    const result = roster.rateOnEnroll(name, {
+      spawn: (bin, args) => {
+        spawned.push({ bin, args });
+        return { unref() {} };
+      },
+    });
+    // The marker exists, and it reads as UNRATED (source "pending" is not a verdict),
+    // so the character is hidden until the rater answers -- but legibly so.
+    const written = JSON.parse(fs.readFileSync(path.join(dir, "character.json"), "utf8"));
+    assert.equal(written.source, "pending");
+    assert.equal(rating.getRating(name), "unrated");
+    withGate(false, () => assert.equal(rating.hiddenReason(name), "unjudged"));
+    // And the rater was actually asked about THIS character.
+    assert.equal(spawned.length, 1);
+    assert.ok(spawned[0].args.includes("--only"), "the rater is scoped to one character");
+    assert.ok(spawned[0].args.includes(name));
+    assert.ok(spawned[0].args.includes("--vision") && spawned[0].args.includes("--capture"));
+    assert.equal(result.started, true);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("rateOnEnroll never throws when the rater cannot be started -- the enroll still stands", () => {
+  const roster = require("./character-roster.cjs");
+  const name = "zz-enroll-norater";
+  const dir = path.join(ROSTER, name);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "model.vrm"), "not-a-real-vrm");
+  try {
+    const result = roster.rateOnEnroll(name, {
+      spawn: () => { throw new Error("python is not installed"); },
+    });
+    assert.equal(result.started, false);
+    assert.match(result.hint, /--only zz-enroll-norater/, "the hint is the command that fixes it");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
