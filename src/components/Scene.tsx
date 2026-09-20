@@ -236,7 +236,7 @@ function resumeOrbit(orbit: { enabled?: boolean } | null) {
  *
  *  De-jank: during a drag the group is moved IMPERATIVELY via a ref every pointermove --
  *  the previous version setState'd per move, forcing a full React re-render between the
- *  pointer moving and the avatar following it (the "janky as fuck" stutter). The
+ *  pointer moving and the avatar following it (the "janky" stutter). The
  *  position is committed to persisted layout state ONCE, on pointerup. All live values
  *  (y, scale) are read through refs so a re-render mid-drag can never strand the drag on
  *  a stale closure. */
@@ -354,8 +354,8 @@ function PlacedAvatar({ slotId, transform, onDrag, onScale, onRotate, avatarProp
               };
             }
             if (event.button !== 0 && event.button !== 2) return;
-            // Gestures, v5 (2026-09-18, owner: "the right-click move is
-            // fucked, can we make this more intuitive, I'm confused"). No
+            // Gestures, v5 (2026-09-18, owner: the right-click move was
+            // broken and confusing; make it intuitive). No
             // mode, no modifier: each button means ONE thing on a body.
             //   left-drag  = MOVE this body      right-drag = TURN this body
             //   wheel      = size this body      right-CLICK = its menu

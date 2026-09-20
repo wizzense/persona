@@ -96,8 +96,11 @@ function resolveCastFile(deps) {
 /** The SAFE roster (content-rating already applied) `resolveActor` hashes a
  *  character out of. Fail-soft: an empty roster means "nothing to judge
  *  against" to stableCharacter/resolveActor, not a thrown error mid-poll. */
-function safeRoster(deps) {
+function safeRoster(deps, { all = false } = {}) {
   try {
+    // `all` is the UNFILTERED roster -- only the Cast pane's "what is hidden
+    // and why" list asks for it, never anything that shows a character.
+    if (all) return deps.listAllCharacters ? deps.listAllCharacters() : deps.listCharacters();
     return deps.filterCharacters(deps.listCharacters());
   } catch {
     return [];
@@ -555,6 +558,22 @@ function castPaneImpl(deps = {}) {
     } catch {
       deskResolved = null;
     }
+    // The three limits, so the pane can say which one is hiding a character
+    // rather than leaving a short roster unexplained.
+    let content;
+    try {
+      const rating = require("./content-rating.cjs");
+      content = {
+        ...cast.resolveContent(loaded.snapshot || { version: 1 }),
+        gateOpen: rating.isAdultContentVisible(),
+        safetyExplicitAllowed: rating.getSafetyExplicitAllowed(),
+        hidden: safeRoster(deps, { all: true })
+          .map((name) => ({ name, why: rating.hiddenReason(name) }))
+          .filter((row) => row.why),
+      };
+    } catch {
+      content = null;
+    }
     let syncStatus;
     try {
       syncStatus = typeof deps.syncStatus === "function" ? deps.syncStatus() : null;
@@ -569,6 +588,7 @@ function castPaneImpl(deps = {}) {
       onStage,
       seen,
       desk: deskResolved,
+      content,
       sync: syncStatus,
     };
   }
@@ -619,7 +639,10 @@ function castPaneImpl(deps = {}) {
   /** The desk's own behaviour sections. ONE door with a closed list, rather than
    *  a door per section: the list is what stops a renderer from using this to
    *  write `actors` or `channels` around the handlers that exist for them. */
-  const DESK_SECTIONS = ["models", "prompts", "vision", "sync"];
+  // `content` is on this list because it can only ever HIDE more (a ceiling,
+  //  not a grant) -- the adult gate itself is the platform's, and no door here
+  //  can open it. See content-rating.cjs's three-limits note.
+  const DESK_SECTIONS = ["models", "prompts", "vision", "sync", "content"];
   function setSection({ section, patch } = {}) {
     if (!DESK_SECTIONS.includes(section)) {
       return { ok: false, snapshot: null, problems: [], error: `setSection: unknown section ${JSON.stringify(section)}` };

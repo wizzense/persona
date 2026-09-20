@@ -121,6 +121,43 @@ async function safetyLevel({ requestFn = safetyRequest, now = () => Date.now(), 
   return level;
 }
 
+/**
+ * explicitAllowed — does the LIVE safety plane permit explicit content?
+ *
+ * The third opinion in content-rating.cjs's three limits, and the weakest on
+ * purpose: it may only TIGHTEN. `true` changes nothing (the platform gate
+ * still decides), `false` closes what the gate opened, and `null` -- the plane
+ * did not answer -- changes nothing either, because failing closed on an
+ * unreachable fleet service would empty the owner's roster every time a
+ * container restarts. The gate that fails CLOSED is the platform mirror, which
+ * is on local disk and always answers.
+ *
+ * Measured 2026-09-19 (and again 09-20): `GET /safety/status` answers
+ * `{current_level, patterns_loaded, ...}` off the service's `router`; the
+ * advertised `/v1/unified` is unmounted in compound mode. `restricted` and
+ * `casual` are the levels that forbid explicit content; `unrestricted` and
+ * `explicit` permit it. An unknown level is not a verdict -> null.
+ */
+const EXPLICIT_LEVELS = new Set(["unrestricted", "explicit", "unfiltered"]);
+const NON_EXPLICIT_LEVELS = new Set(["restricted", "safe", "casual", "standard", "creative"]);
+const STATUS_PATH = "/safety/status";
+
+async function explicitAllowed({ requestFn = safetyRequest, timeoutMs } = {}) {
+  let res;
+  try {
+    res = await requestFn("GET", STATUS_PATH, null, { timeoutMs });
+  } catch {
+    return null;
+  }
+  const json = res && res.status === 200 ? res.json : null;
+  if (!json || typeof json !== "object") return null;
+  if (typeof json.allow_explicit === "boolean") return json.allow_explicit;
+  const level = String(json.current_level || json.level || "").toLowerCase();
+  if (EXPLICIT_LEVELS.has(level)) return true;
+  if (NON_EXPLICIT_LEVELS.has(level)) return false;
+  return null;
+}
+
 /** Test seam: forget the cached level. */
 function resetLevelCache() {
   levelCache = { level: null, at: 0 };
@@ -233,6 +270,7 @@ async function consultInstall(name, options = {}) {
 
 module.exports = {
   consult,
+  explicitAllowed,
   consultSpeech,
   consultInstall,
   safetyLevel,

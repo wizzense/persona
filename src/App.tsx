@@ -16,6 +16,7 @@ import { bubbleDurationMs, bubbleText, type SpeechBubble } from './speech-bubble
 import { Deck } from './components/Deck';
 import { ChatView } from './components/ChatView';
 import { Beads } from './components/Beads';
+import { renderVrmFullBody } from './thumbnails';
 import type { AnimationType } from './animation-catalog';
 import {
   bridgeAnimationOverride,
@@ -233,6 +234,22 @@ function AvatarSceneApp() {
           delete next[gone];
           return next;
         });
+      } else if (event.type === 'capture-roster') {
+        // The content rater asked main for a full-body frame of each model
+        // (POST /roster/capture). Rendered offscreen on thumbnails.ts's one
+        // serialized rig and handed back file by file; a model that will not
+        // load costs its own frame, never the batch. Fire-and-forget: main
+        // counts the saves (GET /roster/capture) and the rater polls it.
+        const api = (window.deskBridge as unknown as {
+          deck?: { saveCharacterFullBody?: (name: string, dataUrl: string) => Promise<boolean> };
+        }).deck;
+        const list = Array.isArray(event.characters) ? event.characters : [];
+        for (const item of list) {
+          if (!item || typeof item.name !== 'string' || typeof item.modelUrl !== 'string') continue;
+          void renderVrmFullBody(item.name, item.modelUrl).then((dataUrl) => {
+            if (dataUrl) void api?.saveCharacterFullBody?.(item.name, dataUrl);
+          });
+        }
       } else if (event.type === 'listen') {
         // Slice C. The recorder lives outside React (src/voice/pushToTalk.ts) so
         // the mic is released on every exit path, including a throw from the

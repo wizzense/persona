@@ -126,11 +126,35 @@ test("an r18 character is absent from the roster while locked, present when open
   });
 });
 
-test("an unrated character stays visible — the gate hides adult, not everything", () => {
+test("an unrated character is HIDDEN while the gate is closed, listed once it opens (owner, 2026-09-20)", () => {
+  // Browsing an unjudged roster is how a lewd model gets found: no file, or the
+  // rater's "default" stamp (nothing matched the name, nobody looked), both
+  // read as unrated and sit in the hidden set beside r15/r18.
   withCharacter("zz-gate-fixture-plain", null, () => {
     withGate(false, () => {
       assert.equal(rating.getRating("zz-gate-fixture-plain"), "unrated");
+      assert.equal(roster.listCharacters().includes("zz-gate-fixture-plain"), false);
+      const why = rating.refusalFor("zz-gate-fixture-plain");
+      assert.equal(why && why.code, "rating-hidden");
+      assert.match(why.reason, /not been rated/);
+    });
+    withGate(true, () => {
       assert.equal(roster.listCharacters().includes("zz-gate-fixture-plain"), true);
+      assert.equal(rating.refusalFor("zz-gate-fixture-plain"), null);
+    });
+  });
+  // The rater's step-5 stamp is not a verdict.
+  withCharacter("zz-gate-fixture-default", "general", () => {
+    rating.setRating("zz-gate-fixture-default", "general", "default");
+    withGate(false, () => {
+      assert.equal(rating.getRating("zz-gate-fixture-default"), "unrated");
+      assert.equal(roster.listCharacters().includes("zz-gate-fixture-default"), false);
+    });
+    // A real verdict -- any source that is not "default" -- is.
+    rating.setRating("zz-gate-fixture-default", "general", "vision-thumb");
+    withGate(false, () => {
+      assert.equal(rating.getRating("zz-gate-fixture-default"), "general");
+      assert.equal(roster.listCharacters().includes("zz-gate-fixture-default"), true);
     });
   });
 });
@@ -213,4 +237,58 @@ test("the MCP refusal text is the rating one, not the missing-file one", () => {
   const source = fs.readFileSync(path.join(__dirname, "mcp-server.cjs"), "utf8");
   assert.match(source, /refusalText\(/, "set_character/spawn_avatar must consult the gate");
   assert.match(source, /require\("\.\/content-rating\.cjs"\)/);
+});
+
+// ─── the three limits (owner, 2026-09-20) ──────────────────────────────────
+
+test("the desk's ceiling hides above itself even with the gate OPEN, and can only tighten", () => {
+  withCharacter("zz-ceiling-r15", "r15", () => {
+    withCharacter("zz-ceiling-general", "general", () => {
+      const castFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "cast-ceiling-")), "cast.json");
+      const priorCast = process.env.DESK_CAST_FILE;
+      process.env.DESK_CAST_FILE = castFile;
+      try {
+        // Gate open, ceiling general: the r15 body is hidden by the CEILING,
+        // which is the limit the platform gate cannot express.
+        fs.writeFileSync(castFile, JSON.stringify({ version: 1, content: { maxRating: "general" } }));
+        withGate(true, () => {
+          assert.equal(rating.hiddenReason("zz-ceiling-r15"), "ceiling");
+          assert.equal(rating.hiddenReason("zz-ceiling-general"), null);
+          assert.match(rating.refusalFor("zz-ceiling-r15").reason, /ceiling/);
+        });
+        // Raising the ceiling never OPENS the gate: closed is closed.
+        fs.writeFileSync(castFile, JSON.stringify({ version: 1, content: { maxRating: "r18" } }));
+        withGate(false, () => {
+          assert.equal(rating.hiddenReason("zz-ceiling-r15"), "gate");
+          assert.equal(rating.hiddenReason("zz-ceiling-general"), null);
+        });
+        withGate(true, () => assert.equal(rating.hiddenReason("zz-ceiling-r15"), null));
+      } finally {
+        if (priorCast === undefined) delete process.env.DESK_CAST_FILE;
+        else process.env.DESK_CAST_FILE = priorCast;
+      }
+    });
+  });
+});
+
+test("the live safety plane can only TIGHTEN: false closes an open gate, null and true change nothing", () => {
+  withCharacter("zz-safety-r18", "r18", () => {
+    try {
+      withGate(true, () => {
+        rating.setSafetyExplicitAllowed(null);
+        assert.equal(rating.hiddenReason("zz-safety-r18"), null, "no answer must not hide the roster");
+        rating.setSafetyExplicitAllowed(true);
+        assert.equal(rating.hiddenReason("zz-safety-r18"), null);
+        rating.setSafetyExplicitAllowed(false);
+        assert.equal(rating.hiddenReason("zz-safety-r18"), "gate", "a plane forbidding explicit closes the gate");
+      });
+      // And it can never OPEN one: true against a closed gate is still closed.
+      withGate(false, () => {
+        rating.setSafetyExplicitAllowed(true);
+        assert.equal(rating.hiddenReason("zz-safety-r18"), "gate");
+      });
+    } finally {
+      rating.setSafetyExplicitAllowed(null);
+    }
+  });
 });

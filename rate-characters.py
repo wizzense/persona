@@ -12,12 +12,25 @@ Resolution order per character, most authoritative first:
     3. the name-marker heuristic       (crude, but the NAME is what leaks first:
                                         a quick-switch menu shows the slug long
                                         before any model renders)
-    4. "general"
+    4. a LOOK at the model (--vision)  (awvision over characters/<slug>/fullbody.jpg,
+                                        else thumbnail.jpg; the rubric is below)
+    5. "general", source "default"     (NEVER judged -- the desk hides these
+                                        while the adult gate is closed, exactly
+                                        like r15/r18, so an unrated body cannot
+                                        be found by browsing)
+
+Owner, 2026-09-20: "make the lewd avatars hard to find unless you've checked a
+box". Measured that day: 62 of 66 installed characters carried the step-5
+stamp -- never judged, listed as general to everyone. Step 4 is the fix: a
+name says nothing about a body, and only a look does.
 
 Usage:
     python rate-characters.py --report            # what is rated, what is not
     python rate-characters.py --apply             # write ratings (heuristic + hub)
     python rate-characters.py --apply --no-hub    # offline; heuristic only
+    python rate-characters.py --apply --vision    # + look at each unjudged model
+    python rate-characters.py --apply --vision --capture   # ask the running desk for
+                                                  # full-body frames first (best)
     python rate-characters.py --set <name> r18    # rate one by hand
     python rate-characters.py --apply --force     # re-resolve even rated ones
 
@@ -28,7 +41,13 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import os
+import shutil
+import subprocess
 import sys
+import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 # Roster names include Japanese and accented slugs; a Windows cp1252 console
@@ -113,6 +132,151 @@ def heuristic_rating(name: str) -> str | None:
     return None
 
 
+# The look. One word back, on a rubric that names the two lines the desk draws:
+# r15 is hidden from the public roster but shown on age-gated surfaces; r18 is
+# adult. "If you cannot see the body, judge what is visible" is deliberate --
+# a head-only thumbnail must still answer, and the fullbody.jpg the desk can
+# capture (Cast pane / desk:capture-roster) makes the answer honest.
+#
+# 🚩 THE LINE BETWEEN R15 AND R18 HAS TO BE SPELLED OUT. Measured 2026-09-20 on
+# the first full-body pass: with "R18: exposed breasts" the model rated `helen`
+# -- a character in a sweater and trousers with a deep neckline -- R18, and the
+# cast gate then refused an agent's own authored body (CAST002). Cleavage is not
+# nudity. The rubric now says which side each case falls on, and says it in the
+# words the model actually keys on.
+_VISION_RUBRIC = (
+    "Rate this 3D character model for an all-ages desktop app. Reply with exactly "
+    "one word. "
+    "GENERAL: everyday, costume, armour or fantasy clothing; a normal outfit, even "
+    "a tight or form-fitting one. "
+    "R15: swimwear, lingerie, underwear, a bikini, a leotard, an outfit that leaves "
+    "most of the torso or hips bare, or a clearly sexualized pose. Cleavage or a "
+    "low neckline on an otherwise clothed character is R15 at most, never R18. "
+    "R18: actual nudity -- bare nipples, bare genitals, a fully unclothed body -- or "
+    "explicit sexual content. An untextured grey mannequin with no clothing counts "
+    "as R18. "
+    "If you cannot see the body, judge what is visible. One word only."
+)
+_SEVERITY = {"general": 0, "r15": 1, "r18": 2}
+_VISION_WORDS = {
+    "general": "general", "safe": "general", "sfw": "general", "pg": "general",
+    "r15": "r15", "r-15": "r15", "suggestive": "r15", "revealing": "r15",
+    "r18": "r18", "r-18": "r18", "explicit": "r18", "nude": "r18", "nudity": "r18",
+    "nsfw": "r18", "adult": "r18",
+}
+
+
+def vision_image(name: str) -> tuple[Path | None, str]:
+    """The best picture of this character: a full-body capture beats the head crop."""
+    for filename, source in (("fullbody.jpg", "vision"), ("thumbnail.jpg", "vision-thumb")):
+        candidate = ROSTER / name / filename
+        if candidate.is_file() and candidate.stat().st_size > 0:
+            return candidate, source
+    return None, ""
+
+
+def vision_rating(name: str, timeout: float = 90.0) -> tuple[str | None, str]:
+    """(rating, source) from a look at the model, or (None, why) when there is none.
+
+    Shells out to `awvision ask` (the sight plane -- the endpoint and model are
+    its own settings, AWVISION_URL / AWVISION_MODEL). A reply that is not one of
+    the rubric's words is a refusal to judge, never a "general": an unparsed
+    answer that read as safe would be exactly the leak this step exists to close.
+    """
+    image, source = vision_image(name)
+    if image is None:
+        return None, "no image to look at"
+    tool = shutil.which("awvision")
+    if not tool:
+        return None, "awvision is not installed"
+    try:
+        proc = subprocess.run(
+            [tool, "ask", str(image), _VISION_RUBRIC],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return None, f"awvision failed: {error}"
+    if proc.returncode != 0:
+        return None, f"awvision rc={proc.returncode}: {(proc.stderr or proc.stdout).strip()[:120]}"
+    for token in re.findall(r"[A-Za-z0-9-]+", proc.stdout or ""):
+        word = _VISION_WORDS.get(token.lower())
+        if word:
+            return word, source
+    return None, f"unparsed answer: {(proc.stdout or '').strip()[:80]!r}"
+
+
+# The running desk renders a full-body frame per character on request
+# (electron/bridge-server.cjs POST /roster/capture, bearer = the harness token
+# every desk client already holds). A head crop is what let a revealing body
+# read as general; this is the fix, and it needs the desk up.
+DESK_BRIDGE = os.environ.get("DESK_BRIDGE_URL", "http://127.0.0.1:47931")
+
+
+def _bridge_token() -> str | None:
+    token = os.environ.get("AITHER_HARNESS_TOKEN", "").strip()
+    if token:
+        return token
+    try:
+        return (Path.home() / ".aither" / "harness_token").read_text(encoding="utf-8").strip() or None
+    except OSError:
+        return None
+
+
+def capture_fullbody(names: list[str], force: bool = False, timeout_s: float = 900.0) -> tuple[int, str]:
+    """Ask the desk for fullbody.jpg of every character that lacks one; wait.
+
+    Returns (captured, why). 0 with a reason when the desk is not running, the
+    bridge refuses, or nothing was pending -- the caller carries on with the
+    thumbnails it has, and SAYS so, rather than pretending the look was full.
+    """
+    token = _bridge_token()
+    if not token:
+        return 0, "no bridge token (~/.aither/harness_token) -- the desk's capture door needs it"
+    body = json.dumps({"names": names, "force": force}).encode("utf-8")
+    req = urllib.request.Request(
+        f"{DESK_BRIDGE}/roster/capture", data=body, method="POST",
+        headers={"content-type": "application/json", "authorization": f"Bearer {token}"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            started = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        return 0, f"desk refused the capture: HTTP {error.code} {error.read().decode('utf-8', 'replace')[:120]}"
+    except (urllib.error.URLError, OSError, ValueError) as error:
+        return 0, f"desk not reachable at {DESK_BRIDGE}: {error}"
+    requested = int(started.get("requested") or 0)
+    if not started.get("ok"):
+        return 0, f"desk could not start the capture: {started.get('error')}"
+    if requested == 0:
+        return 0, f"nothing to capture ({started.get('skipped', 0)} already have a full-body frame)"
+    print(f"  desk is rendering {requested} full-body frame(s)...")
+    deadline = time.monotonic() + timeout_s
+    last_done = -1
+    while time.monotonic() < deadline:
+        time.sleep(3)
+        try:
+            with urllib.request.urlopen(f"{DESK_BRIDGE}/roster/capture", timeout=10) as resp:
+                status = json.loads(resp.read().decode("utf-8"))
+        except (urllib.error.URLError, OSError, ValueError):
+            continue
+        done = int(status.get("done") or 0)
+        if done != last_done:
+            print(f"    {done}/{requested}")
+            last_done = done
+        if not status.get("pending"):
+            return done, "captured"
+    return max(last_done, 0), f"timed out after {int(timeout_s)}s with {requested - max(last_done, 0)} frame(s) still pending"
+
+
+def stronger(a: str | None, b: str | None) -> str | None:
+    """The more restrictive of two ratings (None = undecided)."""
+    if a is None:
+        return b
+    if b is None:
+        return a
+    return a if _SEVERITY[a] >= _SEVERITY[b] else b
+
+
 def hub_ratings() -> dict[str, str]:
     """slug -> rating, from every VRoid Hub model this account can enumerate.
 
@@ -157,25 +321,35 @@ def hub_ratings() -> dict[str, str]:
 def report() -> int:
     names = installed_characters()
     rated = [(n, *read_rating(n)) for n in names]
-    unrated = [n for n, r, _ in rated if r == "unrated"]
+    unjudged = [n for n, r, src in rated if r == "unrated" or src in ("", "default")]
     print(f"\n  {len(names)} installed character(s)\n")
     for name, rating, source in rated:
         flag = "  " if rating in ("unrated", "general") else "* "
         print(f"  {flag}{name:<44} {rating:<8} {source}")
-    print(f"\n  {len(unrated)} unrated (treated as general — visible to everyone)")
-    if unrated:
-        print("  Rate one by hand:  python rate-characters.py --set <name> r18\n")
+    print(f"\n  {len(unjudged)} never judged (hidden while the adult gate is closed, like r15/r18)")
+    if unjudged:
+        print("  Judge them:  python rate-characters.py --apply --vision")
+        print("  Or by hand:  python rate-characters.py --set <name> r18\n")
     return 0
 
 
-def apply(force: bool, use_hub: bool) -> int:
+def apply(force: bool, use_hub: bool, use_vision: bool = False, capture: bool = False) -> int:
     names = installed_characters()
+    if capture:
+        captured, why = capture_fullbody(names, force=force)
+        print(f"  full-body capture: {captured} ({why})")
     hub_map = hub_ratings() if use_hub else {}
     written = 0
     skipped = 0
+    unjudged_left = 0
     for name in names:
-        current, _ = read_rating(name)
-        if current != "unrated" and not force:
+        current, current_source = read_rating(name)
+        # A "default" stamp is step 5 -- nothing ever judged this body -- so it
+        # is re-resolved without --force; only a real verdict is sticky. A
+        # head-crop verdict ("vision-thumb") is re-judged the moment a
+        # full-body frame exists: the whole point of the frame.
+        upgradable = current_source == "vision-thumb" and (ROSTER / name / "fullbody.jpg").is_file()
+        if current != "unrated" and current_source not in ("", "default") and not force and not upgradable:
             skipped += 1
             continue
         rating = hub_map.get(name)
@@ -183,13 +357,27 @@ def apply(force: bool, use_hub: bool) -> int:
         if rating is None:
             rating = heuristic_rating(name)
             source = "heuristic"
+        if use_vision and (rating is None or rating != "r18"):
+            seen, seen_source = vision_rating(name)
+            if seen is None:
+                print(f"  {name}: could not look ({seen_source})")
+            else:
+                merged = stronger(rating, seen)
+                if merged == seen and merged != rating:
+                    source = seen_source
+                elif rating is not None and merged == rating and seen != rating:
+                    source = f"{source}+{seen_source}"
+                elif rating is None:
+                    source = seen_source
+                rating = merged
         if rating is None:
             rating, source = "general", "default"
+            unjudged_left += 1
         if write_rating(name, rating, source):
             written += 1
-            if rating != "general":
+            if rating != "general" or source != "default":
                 print(f"  {name} -> {rating} ({source})")
-    print(f"\n  wrote {written}, left {skipped} already-rated untouched")
+    print(f"\n  wrote {written}, left {skipped} already-judged untouched, {unjudged_left} still unjudged")
     if written == 0 and skipped == 0:
         print("  ERROR: nothing was rated", file=sys.stderr)
         return 1
@@ -202,6 +390,9 @@ def main() -> int:
     parser.add_argument("--apply", action="store_true", help="write ratings")
     parser.add_argument("--force", action="store_true", help="re-resolve rated ones too")
     parser.add_argument("--no-hub", action="store_true", help="skip VRoid Hub lookups")
+    parser.add_argument("--vision", action="store_true", help="look at each unjudged model (awvision)")
+    parser.add_argument("--capture", action="store_true",
+                        help="ask the running desk for full-body frames before looking")
     parser.add_argument("--set", nargs=2, metavar=("NAME", "RATING"), help="rate one by hand")
     args = parser.parse_args()
 
@@ -212,7 +403,7 @@ def main() -> int:
             return 1
         return 0 if write_rating(name, rating.lower(), "manual") else 1
     if args.apply:
-        return apply(force=args.force, use_hub=not args.no_hub)
+        return apply(force=args.force, use_hub=not args.no_hub, use_vision=args.vision, capture=args.capture)
     return report()
 
 

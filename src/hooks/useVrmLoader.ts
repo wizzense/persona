@@ -28,8 +28,8 @@ const DEFAULT_SPRING_GRAVITY = 1.0;
 const AUTHORED_GRAVITY_FLOOR = 0.1;
 
 /** 🚩 THE DEFAULT IS FOR CHAINS THAT HANG — NOT FOR BODY JIGGLE CHAINS
- *  (owner, 2026-09-18: "the breasts are hanging straight down and swinging,
- *  super stretched"). A bust/breast/butt chain is authored AT its rest shape
+ *  (owner, 2026-09-18: the chest chains hung straight down, swinging and
+ *  stretched). A chest or hip chain is authored AT its rest shape
  *  and its zero gravity is DESIGN, not omission: the author gives it a high
  *  stiffness so it returns to that shape and only wobbles. Measured on the
  *  on-stage gold-kitsune (VRM 0.x): `bust_root.L/R`, stiffness 2, gravityPower
@@ -56,8 +56,8 @@ function isBodyJiggleChain(bone: DeskNamedNode | undefined | null): boolean {
 }
 
 /** 🚩 THE DEFAULT IS THE MODEL'S OWN GRAVITY WHEN IT HAS ONE — 1.0 only when
- *  it has none (owner, 2026-09-18, minutes after the bust fix: "hair physics
- *  are fucked up now"). The 0.1 floor above was generalised from ONE model:
+ *  it has none (owner, 2026-09-18, minutes after the chest-chain fix: the hair
+ *  physics broke). The 0.1 floor above was generalised from ONE model:
  *  the demon authors 0.06 on 2 chains of 14 and 0 everywhere else, so that
  *  epsilon really was a rounding artifact. Measured across the roster, a
  *  sub-floor value is far more often a model-wide authored choice:
@@ -87,8 +87,8 @@ interface DeskSpringJoint {
 }
 
 /** 🚩 A DEFAULT MAY NEVER OUT-PULL THE STIFFNESS THAT HOLDS THE CHAIN'S SHAPE
- *  (owner, 2026-09-18: the fox tail is "not properly resting on the buttocks,
- *  it's like completely in the butt cheeks"). three-vrm adds `stiffness * dt`
+ *  (owner, 2026-09-18: the fox tail no longer rested on the hips -- it fell
+ *  straight through the body). three-vrm adds `stiffness * dt`
  *  along the chain's rest direction and `gravityPower * dt` downward, so a
  *  joint settles atan(gravity / stiffness) off its authored pose, and that
  *  angle compounds down the chain. gold-kitsune's tail authors stiffness 0.1:
@@ -131,7 +131,7 @@ export function applyDefaultSpringGravity(vrm: VRM) {
   } | null;
   if (!manager?.joints) return;
   // Body jiggle chains are out of the vote as well as out of the default: on
-  // tfw the bust and butt chains alone carry a third of the authored values.
+  // tfw the chest and hip chains alone carry a third of the authored values.
   const joints = [...manager.joints].filter((joint) => joint.settings && !isBodyJiggleChain(joint.bone));
   const modelGravity = modelAuthoredGravity(joints);
   const fallback = modelGravity ?? DEFAULT_SPRING_GRAVITY;
@@ -165,7 +165,7 @@ export function applyDefaultSpringGravity(vrm: VRM) {
  *  every scale change, never with a delta. */
 interface DeskSpringAuthored {
   stiffness: number; gravityPower: number; hitRadius: number; dragForce: number;
-  /** A bust/butt chain (BODY_JIGGLE_CHAIN) — the `jiggle` knob's subjects. */
+  /** A chest/hip chain (BODY_JIGGLE_CHAIN) — the `jiggle` knob's subjects. */
   jiggle: boolean;
 }
 
@@ -173,7 +173,7 @@ interface DeskSpringAuthored {
  *  cast-config.cjs and delivered as a `tune-avatar` event). Every number is a
  *  MULTIPLIER over what the model authored — 1 everywhere is the model as its
  *  author meant it, which is what made "a little too much" tunable without a
- *  per-model table: the same 0.5 tames a floppy tail and a bouncy bust alike.
+ *  per-model table: the same 0.5 tames a floppy tail and a soft chest chain alike.
  *  three-vrm's step (three-vrm-springbone 3.5.5, VRMSpringBoneJoint.update):
  *    next = tail + (tail - prevTail) * (1 - dragForce)
  *                + boneAxis * stiffness * dt + gravityDir * gravityPower * dt

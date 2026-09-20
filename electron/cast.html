@@ -119,9 +119,19 @@
       <div class="grid" id="stageGrid"></div>
     </section>
 
+    <section id="contentSection">
+      <h2>What this desk will show</h2>
+      <p class="lede">Mature characters are unlocked on the platform, not here — it needs an
+        adult opt-in <em>and</em> age verification, and this app can only read that answer.
+        Under it, this desk has its own ceiling, and a character nobody has rated stays
+        hidden with the mature ones until you rate the roster.</p>
+      <div class="grid" id="contentGrid"></div>
+      <div id="contentHidden"></div>
+    </section>
+
     <section id="physicsSection">
       <h2>Physics for everyone</h2>
-      <p class="lede">How much every body moves — hair, tails, cloth and the bust/butt chains.
+      <p class="lede">How much every body moves — hair, tails, cloth and the body's own soft chains.
         Each fader multiplies what the model's author set (×1 = as authored), so the same
         setting tames every model in the roster. A per-actor Physics block on a row above
         overrides these for that body only. Writes <code>defaults.physics</code>.</p>
@@ -180,13 +190,13 @@ const VOICE_DEFAULT = {
 
 // Mirrors cast-config.cjs's BUILTIN_PHYSICS / PHYSICS_FIELDS. Every knob is a
 // multiplier over the model's authored spring values; `jiggle` reaches ONLY
-// the bust/breast/butt chains (useVrmLoader.ts BODY_JIGGLE_CHAIN).
+// the body chains -- chest and hips (useVrmLoader.ts BODY_JIGGLE_CHAIN).
 const PHYSICS_DEFAULT = { enabled: true, weight: 1, stiffness: 1, damping: 1, jiggle: 1 };
 const PHYSICS_KNOBS = [
   { key: "weight", label: "Weight", max: 3, hint: "how hard hair and tails hang down" },
   { key: "stiffness", label: "Stiffness", max: 3, hint: "how fast a chain springs back (more = less swing)" },
   { key: "damping", label: "Damping", max: 3, hint: "how quickly motion dies out (more = fewer bounces)" },
-  { key: "jiggle", label: "Jiggle", max: 2, hint: "bust / butt chains only; 0 pins them still" },
+  { key: "jiggle", label: "Body softness", max: 2, hint: "the model's chest and hip chains only; 0 holds them still" },
 ];
 
 const stateEl = document.getElementById("state");
@@ -699,6 +709,73 @@ function renderStage() {
     stage.bubbles !== false, (v) => save({ bubbles: v })));
 }
 
+const CONTENT_RATINGS = ["general", "r15", "r18"];
+
+/** The three limits, most authoritative first. The first two are READ-ONLY here
+ *  on purpose: the platform gate needs age verification, and the live safety
+ *  plane is a fleet service. Only the ceiling is this desk's to set. */
+function renderContent() {
+  const grid = document.getElementById("contentGrid");
+  const hiddenEl = document.getElementById("contentHidden");
+  grid.replaceChildren();
+  hiddenEl.replaceChildren();
+  const content = (last && last.content) || null;
+  if (!content) {
+    grid.appendChild(el("div", "empty", "The content limits could not be read."));
+    return;
+  }
+  const save = (patch) => {
+    void call(window.aitherCast.setSection("content", patch), "Content").then(() => refresh());
+  };
+
+  const gate = el("div", "field");
+  gate.appendChild(el("label", null, "Mature content"));
+  gate.appendChild(el("div", "controls", content.gateOpen ? "unlocked" : "locked"));
+  gate.appendChild(el("div", "from", content.gateOpen
+    ? "the platform says this account opted in AND verified its age"
+    : "locked: turn it on in the platform's safety settings (opt-in + age verification)"));
+  grid.appendChild(gate);
+
+  const plane = el("div", "field");
+  plane.appendChild(el("label", null, "Safety plane"));
+  const verdict = content.safetyExplicitAllowed;
+  plane.appendChild(el("div", "controls",
+    verdict === null || verdict === undefined ? "no answer" : (verdict ? "permits explicit" : "forbids explicit")));
+  plane.appendChild(el("div", "from", "AitherSafety, live. It can only tighten what is above."));
+  grid.appendChild(plane);
+
+  const select = document.createElement("select");
+  for (const value of CONTENT_RATINGS) {
+    const opt = el("option", null, value === "r18" ? "r18 (whatever the platform allows)" : value);
+    opt.value = value;
+    select.appendChild(opt);
+  }
+  select.value = content.maxRating || "r18";
+  select.addEventListener("change", () => save({ maxRating: select.value }));
+  grid.appendChild(fieldBlock("This desk's ceiling", select,
+    content.from && content.from.maxRating !== "builtin" ? content.from.maxRating : null));
+
+  grid.appendChild(checkField("Hide unrated characters",
+    "a character nobody has judged is hidden with the mature ones (only while mature content is locked)",
+    content.hideUnrated !== false, (v) => save({ hideUnrated: v })));
+
+  const hidden = Array.isArray(content.hidden) ? content.hidden : [];
+  if (hidden.length === 0) {
+    hiddenEl.appendChild(el("div", "empty", "Nothing is hidden right now."));
+    return;
+  }
+  const label = {
+    gate: "mature — unlock it on the platform",
+    ceiling: "above this desk's ceiling",
+    unjudged: "never rated — run rate-characters.py --apply --vision --capture",
+  };
+  const counts = {};
+  for (const row of hidden) counts[row.why] = (counts[row.why] || 0) + 1;
+  hiddenEl.appendChild(el("div", "sub",
+    `${hidden.length} character(s) hidden: ` +
+    Object.entries(counts).map(([why, n]) => `${n} ${label[why] || why}`).join(" · ")));
+}
+
 function renderPhysics() {
   const grid = document.getElementById("physicsGrid");
   grid.replaceChildren();
@@ -880,6 +957,7 @@ async function refresh() {
   renderOnStage();
   renderWhoMaySpeak();
   renderStage();
+  renderContent();
   renderPhysics();
   renderVoice();
   renderDesk();

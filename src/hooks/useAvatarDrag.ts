@@ -22,7 +22,7 @@ import {
  *
  * De-jank rework: `onMove` is expected to mutate the THREE object IMPERATIVELY (a ref),
  * not setState -- a setState per pointermove forces a React re-render between the
- * pointer moving and the avatar following it, which is the measured "janky as fuck"
+ * pointer moving and the avatar following it, which is the measured "janky"
  * stutter. Commit to persisted state ONCE, in `onEnd`.
  *
  * SCREEN-SPACE rework (the fly-away fix, 2026-08-25): every earlier version moved the
