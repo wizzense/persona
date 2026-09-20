@@ -513,7 +513,8 @@ class RoomStage {
       return null;
     }
     const place = resolution && resolution.place ? resolution.place : null;
-    if (!this.io.spawn(slotId, character, author, place)) {
+    const physics = resolution && resolution.physics ? resolution.physics : null;
+    if (!this.io.spawn(slotId, character, author, place, physics)) {
       this._recordError("spawn-failed", `could not spawn ${character} for ${author}`);
       return null;
     }

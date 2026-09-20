@@ -25,6 +25,9 @@ const DOCUMENTED_CHANNELS = [
   "desk:cast-clear-actor",
   "desk:cast-set-stage",
   "desk:cast-set-voice",
+  // Added deliberately 2026-09-20: `defaults` is the ActorConfig every actor
+  // inherits from -- the "everyone" physics faders write here.
+  "desk:cast-set-defaults",
   // Added deliberately 2026-09-19: ONE door for the desk's own behaviour sections
   // (models / prompts / vision / sync). The section list is closed and enforced in
   // main (room-stage-host setSection) -- see the whitelist test at the end.
@@ -39,7 +42,7 @@ function handlersFor(impl) {
   return castHandlers(() => impl);
 }
 
-test("the desk:cast-* channel set is EXACTLY the documented ten -- nothing dropped, nothing extra", () => {
+test("the desk:cast-* channel set is EXACTLY the documented eleven -- nothing dropped, nothing extra", () => {
   const handlers = handlersFor({});
   assert.deepEqual(Object.keys(handlers).sort(), [...DOCUMENTED_CHANNELS].sort());
   for (const channel of DOCUMENTED_CHANNELS) {

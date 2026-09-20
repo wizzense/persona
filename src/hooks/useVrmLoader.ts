@@ -163,14 +163,67 @@ export function applyDefaultSpringGravity(vrm: VRM) {
  *  other three. The authored values are recorded on first call (after the
  *  gravity floor above has run) so the function is idempotent — call it with
  *  every scale change, never with a delta. */
-interface DeskSpringAuthored { stiffness: number; gravityPower: number; hitRadius: number }
+interface DeskSpringAuthored {
+  stiffness: number; gravityPower: number; hitRadius: number; dragForce: number;
+  /** A bust/butt chain (BODY_JIGGLE_CHAIN) — the `jiggle` knob's subjects. */
+  jiggle: boolean;
+}
 
-export function applySpringScale(vrm: VRM, worldScale: number) {
+/** The owner's per-avatar physics knobs (cast.json `physics`, resolved by
+ *  cast-config.cjs and delivered as a `tune-avatar` event). Every number is a
+ *  MULTIPLIER over what the model authored — 1 everywhere is the model as its
+ *  author meant it, which is what made "a little too much" tunable without a
+ *  per-model table: the same 0.5 tames a floppy tail and a bouncy bust alike.
+ *  three-vrm's step (three-vrm-springbone 3.5.5, VRMSpringBoneJoint.update):
+ *    next = tail + (tail - prevTail) * (1 - dragForce)
+ *                + boneAxis * stiffness * dt + gravityDir * gravityPower * dt
+ *  so `damping` scales how much velocity survives a frame, `stiffness` how
+ *  hard the chain is pulled back to its authored shape, `weight` how hard it
+ *  hangs. `jiggle` touches ONLY the body chains: 0 pins them at rest (drag 1,
+ *  no gravity, a firm pull to shape), 2 halves their stiffness and doubles the
+ *  velocity they keep. `enabled: false` pins EVERY chain the same way. */
+export interface DeskSpringTuning {
+  enabled: boolean;
+  weight: number;
+  stiffness: number;
+  damping: number;
+  jiggle: number;
+}
+
+export const DEFAULT_SPRING_TUNING: DeskSpringTuning = Object.freeze({
+  enabled: true, weight: 1, stiffness: 1, damping: 1, jiggle: 1,
+});
+
+/** A pinned chain is pulled to its rest shape at least this hard (in authored
+ *  units, before the scale compensation): a rope (stiffness 0) would otherwise
+ *  never return once a collider had pushed it. */
+const PINNED_MIN_STIFFNESS = 5;
+
+/** The event payload is whatever cast-config resolved; a missing or non-finite
+ *  knob falls back to 1 (as authored), never to 0 — a dropped field must not
+ *  read as "hair off". */
+export function sanitizeSpringTuning(raw: unknown): DeskSpringTuning {
+  const src = (raw && typeof raw === 'object' ? raw : {}) as Partial<Record<keyof DeskSpringTuning, unknown>>;
+  const num = (v: unknown, max: number) => {
+    const n = Number(v);
+    return Number.isFinite(n) && n >= 0 ? Math.min(n, max) : 1;
+  };
+  return {
+    enabled: src.enabled !== false,
+    weight: num(src.weight, 3),
+    stiffness: num(src.stiffness, 3),
+    damping: num(src.damping, 3),
+    jiggle: num(src.jiggle, 2),
+  };
+}
+
+export function applySpringScale(vrm: VRM, worldScale: number, tuning: DeskSpringTuning = DEFAULT_SPRING_TUNING) {
   const s = Number.isFinite(worldScale) && worldScale > 0 ? worldScale : 1;
   const manager = vrm.springBoneManager as unknown as {
     joints?: Set<{
+      bone?: DeskNamedNode;
       settings?: {
-        stiffness?: number; gravityPower?: number; hitRadius?: number;
+        stiffness?: number; gravityPower?: number; hitRadius?: number; dragForce?: number;
         __deskAuthored?: DeskSpringAuthored;
       };
     }>;
@@ -187,11 +240,27 @@ export function applySpringScale(vrm: VRM, worldScale: number) {
         stiffness: Number(settings.stiffness) || 0,
         gravityPower: Number(settings.gravityPower) || 0,
         hitRadius: Number(settings.hitRadius) || 0,
+        // three-vrm's own default when the file omits it (loader line 585).
+        dragForce: Number.isFinite(Number(settings.dragForce)) ? Number(settings.dragForce) : 0.4,
+        jiggle: isBodyJiggleChain(joint.bone),
       };
     }
     const a = settings.__deskAuthored;
-    settings.stiffness = a.stiffness * s;
-    settings.gravityPower = a.gravityPower * s;
+    // The body knob only reaches body chains; every other chain sees 1 here.
+    const jiggle = a.jiggle ? tuning.jiggle : 1;
+    const pinned = !tuning.enabled || jiggle <= 0;
+    if (pinned) {
+      settings.stiffness = Math.max(a.stiffness, PINNED_MIN_STIFFNESS) * s;
+      settings.gravityPower = 0;
+      settings.dragForce = 1;
+    } else {
+      settings.stiffness = (a.stiffness * tuning.stiffness / jiggle) * s;
+      settings.gravityPower = a.gravityPower * tuning.weight * s;
+      // `damping` scales the drag itself; `jiggle` scales the velocity that
+      // SURVIVES it (1 - drag). Both land inside three-vrm's 0..1.
+      const drag = Math.min(1, a.dragForce * tuning.damping);
+      settings.dragForce = Math.min(1, Math.max(0, 1 - (1 - drag) * jiggle));
+    }
     settings.hitRadius = a.hitRadius * s;
   }
   for (const group of manager.colliderGroups ?? []) {

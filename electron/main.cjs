@@ -1079,8 +1079,11 @@ function applyCharacter(name) {
  *  future dialogue/arbitration routing) — it does not change which character renders.
  *  `place` (U28), when given, is cast.json's resolved {position,scale,yaw} for
  *  this actor (see stagePlacement.ts's authoredTransform, U09) — sent as ONE
- *  place-avatar event right after spawn, never a reload. */
-function spawnAvatarSlot(slotId, name, agent, place) {
+ *  place-avatar event right after spawn, never a reload. `physics`, likewise,
+ *  is the resolved cast.json physics block for this actor -- one tune-avatar
+ *  event behind the spawn, so the body's first frame already has the owner's
+ *  knobs (room-stage-host.replayPhysics covers a renderer that mounts later). */
+function spawnAvatarSlot(slotId, name, agent, place, physics) {
   // Refuse slot IDs reserved for the default avatar
   if (slotId === "slot0" || slotId === "default" || slotId === "") return false;
 
@@ -1105,6 +1108,18 @@ function spawnAvatarSlot(slotId, name, agent, place) {
             type: "place-avatar", slotId, position: place.position, scale: place.scale, yaw: place.yaw,
           });
         }
+        // A spawn with no resolution of its own (tray, MCP spawn_avatar) still
+        // gets the owner's knobs: `actors["desk:<slotId>"]` / `authors.<agent>`
+        // / `defaults.physics`, resolved by the host.
+        let knobs = physics && typeof physics === "object" ? physics : null;
+        if (!knobs) {
+          try {
+            knobs = roomStageHost.physicsForBody(roomStageDeps(), { slotId, agent: agent || "" });
+          } catch (error) {
+            debugLog("physicsForBody failed", slotId, error?.message || error);
+          }
+        }
+        if (knobs) avatarWindow.webContents.send("desk:event", { type: "tune-avatar", slotId, physics: knobs });
       }
     },
     (error) => {
@@ -2196,6 +2211,14 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
           });
         }
         if (avatarSlots.size > 0) debugLog("replayed avatar slots", avatarSlots.size);
+        // The physics knobs live only in cast.json + this process (never in
+        // the renderer's storage), so a fresh renderer is told them here, for
+        // the resident and every slot just replayed. Same no-race argument.
+        try {
+          roomStageHost.replayPhysics(roomStageDeps(), stagePaneImpl().bodies());
+        } catch (error) {
+          debugLog("replayPhysics failed", error?.message || error);
+        }
       }
       return latestEvent;
     });

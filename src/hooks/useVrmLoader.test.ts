@@ -219,3 +219,80 @@ describe('applySpringScale', () => {
     expect(() => applySpringScale({} as VRM, 0.4)).not.toThrow();
   });
 });
+
+import { DEFAULT_SPRING_TUNING, sanitizeSpringTuning } from './useVrmLoader';
+
+/** Hair and a bust chain, with an authored drag, at scale 1. */
+function tunableVrm() {
+  const joints = new Set([
+    { bone: { name: 'J_Sec_Hair1_01' }, settings: { stiffness: 1.0, gravityPower: 0.5, hitRadius: 0.02, dragForce: 0.4 } },
+    { bone: { name: 'J_Sec_L_Bust' }, settings: { stiffness: 2.0, gravityPower: 0, hitRadius: 0.02, dragForce: 0.4 } },
+    { bone: { name: 'tail_1' }, settings: { stiffness: 0.1, gravityPower: 0.1, hitRadius: 0 } }, // no authored drag
+  ]);
+  return { springBoneManager: { joints, colliderGroups: [] } } as unknown as VRM;
+}
+type TunedManager = {
+  joints: Set<{ bone: { name: string }; settings: { stiffness: number; gravityPower: number; dragForce: number } }>;
+};
+const jointsOf = (vrm: VRM) => [...(vrm.springBoneManager as unknown as TunedManager).joints];
+
+describe('applySpringScale with the owner\'s physics knobs', () => {
+  it('the default tuning is the model as authored: identical to no tuning at all', () => {
+    const a = tunableVrm();
+    const b = tunableVrm();
+    applySpringScale(a, 0.7);
+    applySpringScale(b, 0.7, DEFAULT_SPRING_TUNING);
+    expect(jointsOf(a).map((j) => j.settings)).toEqual(jointsOf(b).map((j) => j.settings));
+    // three-vrm's own default drag (0.4) is what an unauthored chain keeps.
+    expect(jointsOf(b)[2].settings.dragForce).toBeCloseTo(0.4);
+  });
+
+  it('weight, stiffness and damping multiply the authored values (on top of the scale), damping clamped to 1', () => {
+    const vrm = tunableVrm();
+    applySpringScale(vrm, 0.5, { ...DEFAULT_SPRING_TUNING, weight: 0.5, stiffness: 2, damping: 3 });
+    const [hair] = jointsOf(vrm);
+    expect(hair.settings.gravityPower).toBeCloseTo(0.5 * 0.5 * 0.5); // authored x weight x scale
+    expect(hair.settings.stiffness).toBeCloseTo(1.0 * 2 * 0.5);
+    expect(hair.settings.dragForce).toBe(1); // 0.4 x 3 = 1.2 -> three-vrm's ceiling
+  });
+
+  it('jiggle reaches ONLY the body chains: 0 pins them at rest, 2 loosens them, hair is untouched', () => {
+    const still = tunableVrm();
+    applySpringScale(still, 1, { ...DEFAULT_SPRING_TUNING, jiggle: 0 });
+    const [hairStill, bustStill] = jointsOf(still);
+    expect(bustStill.settings.dragForce).toBe(1);
+    expect(bustStill.settings.gravityPower).toBe(0);
+    expect(bustStill.settings.stiffness).toBeGreaterThanOrEqual(5);
+    expect(hairStill.settings.dragForce).toBeCloseTo(0.4);
+    expect(hairStill.settings.stiffness).toBeCloseTo(1.0);
+
+    const loose = tunableVrm();
+    applySpringScale(loose, 1, { ...DEFAULT_SPRING_TUNING, jiggle: 2 });
+    const [hairLoose, bustLoose] = jointsOf(loose);
+    expect(bustLoose.settings.stiffness).toBeCloseTo(1.0); // 2.0 / 2
+    expect(bustLoose.settings.dragForce).toBe(0); // keeps twice the 0.6 it kept: 1 - 1.2, floored at 0
+    expect(hairLoose.settings.stiffness).toBeCloseTo(1.0);
+  });
+
+  it('enabled:false pins EVERY chain, and re-enabling restores the authored feel (idempotent over the knobs too)', () => {
+    const vrm = tunableVrm();
+    applySpringScale(vrm, 1, { ...DEFAULT_SPRING_TUNING, enabled: false });
+    for (const j of jointsOf(vrm)) {
+      expect(j.settings.dragForce).toBe(1);
+      expect(j.settings.gravityPower).toBe(0);
+    }
+    applySpringScale(vrm, 1, DEFAULT_SPRING_TUNING);
+    const [hair, , tail] = jointsOf(vrm);
+    expect(hair.settings.gravityPower).toBeCloseTo(0.5);
+    expect(hair.settings.dragForce).toBeCloseTo(0.4);
+    expect(tail.settings.stiffness).toBeCloseTo(0.1);
+  });
+});
+
+describe('sanitizeSpringTuning', () => {
+  it('a missing, non-finite or negative knob is 1 (as authored) -- never 0, which would read as "hair off"', () => {
+    expect(sanitizeSpringTuning(undefined)).toEqual(DEFAULT_SPRING_TUNING);
+    expect(sanitizeSpringTuning({ weight: 'x', stiffness: -1, damping: NaN })).toEqual(DEFAULT_SPRING_TUNING);
+    expect(sanitizeSpringTuning({ enabled: false, jiggle: 0, weight: 9 })).toEqual({ ...DEFAULT_SPRING_TUNING, enabled: false, jiggle: 0, weight: 3 });
+  });
+});
