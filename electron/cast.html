@@ -49,6 +49,10 @@
   .field { display: grid; gap: 2px; }
   .field label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
   .field .from { font-size: 10px; color: #5f6a80; }
+  /* The physics faders: one stacked block per body, each fader with its own readout. */
+  .field.physics { flex: 1 1 100%; gap: 4px; }
+  .field.physics .controls { flex-wrap: nowrap; }
+  .field.physics .controls .from { min-width: 110px; }
   select, input[type=text], input[type=number], textarea { background: var(--btn); color: var(--fg);
     border: 1px solid var(--line); border-radius: 5px; padding: 4px 6px; font: 12px system-ui; }
   select { min-width: 110px; }
@@ -115,6 +119,25 @@
       <div class="grid" id="stageGrid"></div>
     </section>
 
+    <section id="contentSection">
+      <h2>What this desk will show</h2>
+      <p class="lede">Mature characters are unlocked on the platform, not here — it needs an
+        adult opt-in <em>and</em> age verification, and this app can only read that answer.
+        Under it, this desk has its own ceiling, and a character nobody has rated stays
+        hidden with the mature ones until you rate the roster.</p>
+      <div class="grid" id="contentGrid"></div>
+      <div id="contentHidden"></div>
+    </section>
+
+    <section id="physicsSection">
+      <h2>Physics for everyone</h2>
+      <p class="lede">How much every body moves — hair, tails, cloth and the body's own soft chains.
+        Each fader multiplies what the model's author set (×1 = as authored), so the same
+        setting tames every model in the roster. A per-actor Physics block on a row above
+        overrides these for that body only. Writes <code>defaults.physics</code>.</p>
+      <div class="grid" id="physicsGrid"></div>
+    </section>
+
     <section id="voiceSection">
       <h2>Voice defaults</h2>
       <p class="lede">The endpoint host/port/path is what the desk dials for AitherVoice — today
@@ -165,6 +188,17 @@ const VOICE_DEFAULT = {
   speechFilterMaxChars: 220, speechFilterAllowCode: false,
 };
 
+// Mirrors cast-config.cjs's BUILTIN_PHYSICS / PHYSICS_FIELDS. Every knob is a
+// multiplier over the model's authored spring values; `jiggle` reaches ONLY
+// the body chains -- chest and hips (useVrmLoader.ts BODY_JIGGLE_CHAIN).
+const PHYSICS_DEFAULT = { enabled: true, weight: 1, stiffness: 1, damping: 1, jiggle: 1 };
+const PHYSICS_KNOBS = [
+  { key: "weight", label: "Weight", max: 3, hint: "how hard hair and tails hang down" },
+  { key: "stiffness", label: "Stiffness", max: 3, hint: "how fast a chain springs back (more = less swing)" },
+  { key: "damping", label: "Damping", max: 3, hint: "how quickly motion dies out (more = fewer bounces)" },
+  { key: "jiggle", label: "Body softness", max: 2, hint: "the model's chest and hip chains only; 0 holds them still" },
+];
+
 const stateEl = document.getElementById("state");
 const errEl = document.getElementById("err");
 const castPathEl = document.getElementById("castPath");
@@ -196,6 +230,58 @@ function numOrNull(value) {
   if (value === "" || value === null || value === undefined) return null;
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
+}
+
+/** The physics faders, shared by every actor row and the "everyone" section.
+ *  `resolved` is the effective block (with `from` provenance per knob) and
+ *  `own` is the record's OWN physics sub-object -- what a write must carry in
+ *  full, because setActor/setDefaults merge one level deep and `physics` is
+ *  one value to them. A knob set to null is dropped from `own` (back to the
+ *  tier below); the readout is "x1.25", never a percentage, because these are
+ *  multipliers over what the model's author chose. Writes on RELEASE only,
+ *  like every other fader here. */
+function physicsBlock({ resolved, from, own, onSave }) {
+  const wrap = el("div", "field physics");
+  wrap.appendChild(el("label", null, "Physics"));
+  const effective = { ...PHYSICS_DEFAULT, ...(resolved || {}) };
+  const ownBlock = own && typeof own === "object" ? own : {};
+  const write = (knob, value) => {
+    const next = { ...ownBlock };
+    if (value === null || value === undefined) delete next[knob];
+    else next[knob] = value;
+    onSave(next);
+  };
+
+  const enabledLabel = el("label", "ck");
+  const enabledBox = document.createElement("input");
+  enabledBox.type = "checkbox";
+  enabledBox.checked = effective.enabled !== false;
+  enabledBox.addEventListener("change", () => write("enabled", enabledBox.checked ? null : false));
+  enabledLabel.append(enabledBox, document.createTextNode("moving (off freezes every chain at rest)"));
+  wrap.appendChild(enabledLabel);
+
+  for (const knob of PHYSICS_KNOBS) {
+    const row = el("div", "controls");
+    const input = document.createElement("input");
+    input.type = "range";
+    input.min = "0";
+    input.max = String(knob.max);
+    input.step = "0.05";
+    input.value = String(effective[knob.key]);
+    input.title = knob.hint;
+    const text = () => `${knob.label} ×${Number(input.value).toFixed(2)}`;
+    const readout = el("span", "from", text());
+    input.addEventListener("input", () => { readout.textContent = text(); });
+    input.addEventListener("change", () => write(knob.key, numOrNull(input.value)));
+    const clear = el("button", "chip small", "✕");
+    clear.title = "reset to the tier below";
+    clear.addEventListener("click", () => write(knob.key, null));
+    row.append(input, readout, clear);
+    wrap.appendChild(row);
+    const fromText = from && from[knob.key] && from[knob.key] !== "builtin" ? from[knob.key] : null;
+    if (fromText) wrap.appendChild(el("div", "from", fromText));
+  }
+  return wrap;
 }
 
 function el(tag, className, text) {
@@ -265,7 +351,7 @@ function fieldBlock(labelText, control, fromText) {
 /** One editable actor row, shared by the on-stage list and the "known but not
  *  on stage" list — the ONLY difference is whether a live `resolution` (with
  *  provenance) exists or the raw `record` from snapshot.actors is all there is. */
-function actorRow({ key, title, subtitle, resolution, record, tag }) {
+function actorRow({ key, title, subtitle, resolution, record, tag, resident = false }) {
   const row = el("div", "row");
 
   const who = el("div", "who");
@@ -287,12 +373,17 @@ function actorRow({ key, title, subtitle, resolution, record, tag }) {
   const current = resolution || record || {};
   const character = resolution ? resolution.character : record && record.character;
   const characterFrom = resolution ? resolution.characterFrom : (record && "character" in record ? "actors" : null);
-  const charSelect = rosterSelect(character);
-  charSelect.addEventListener("change", () => {
-    void call(window.aitherCast.setActor(key, { character: charSelect.value || null }), "Character");
-    void refresh();
-  });
-  controls.appendChild(fieldBlock("Character", charSelect, characterFrom));
+  // The resident's model comes from the tray (.active-character) and the stage,
+  // not from this record: a Character/Presence/Speak/Body control here would
+  // write a field nothing reads for it. Volume, bubble and physics DO reach it.
+  if (!resident) {
+    const charSelect = rosterSelect(character);
+    charSelect.addEventListener("change", () => {
+      void call(window.aitherCast.setActor(key, { character: charSelect.value || null }), "Character");
+      void refresh();
+    });
+    controls.appendChild(fieldBlock("Character", charSelect, characterFrom));
+  }
 
   const voiceInput = document.createElement("input");
   voiceInput.type = "text";
@@ -345,6 +436,7 @@ function actorRow({ key, title, subtitle, resolution, record, tag }) {
   });
   controls.appendChild(volumeBlock);
 
+  if (!resident) {
   const presenceSelect = document.createElement("select");
   for (const level of PRESENCE_LEVELS) {
     const opt = el("option", null, level);
@@ -379,6 +471,7 @@ function actorRow({ key, title, subtitle, resolution, record, tag }) {
   });
   bodyLabel.append(bodyBox, document.createTextNode("body"));
   controls.appendChild(bodyLabel);
+  }
 
   const bubbleLabel = el("label", "ck");
   const bubbleBox = document.createElement("input");
@@ -390,6 +483,21 @@ function actorRow({ key, title, subtitle, resolution, record, tag }) {
   });
   bubbleLabel.append(bubbleBox, document.createTextNode("bubble"));
   controls.appendChild(bubbleLabel);
+
+  // This body's own physics. `own` is actors[key].physics from the live
+  // snapshot (the record for a not-on-stage row IS that), so a write carries
+  // the sibling knobs the owner already set instead of dropping them.
+  const snapshotActors = (last && last.snapshot && last.snapshot.actors) || {};
+  const ownRecord = (snapshotActors[key] || record || {});
+  controls.appendChild(physicsBlock({
+    resolved: resolution ? resolution.physics : { ...PHYSICS_DEFAULT, ...((record && record.physics) || {}) },
+    from: resolution ? resolution.physicsFrom : null,
+    own: ownRecord.physics,
+    onSave: (physics) => {
+      void call(window.aitherCast.setActor(key, { physics: Object.keys(physics).length ? physics : null }), "Physics")
+        .then(() => refresh());
+    },
+  }));
 
   const clear = el("button", "chip small danger", "Clear override");
   clear.addEventListener("click", async () => {
@@ -419,7 +527,12 @@ function renderOnStage() {
     const title = (row.resolution && row.resolution.displayName) || row.agent || row.actorId || row.origin;
     const subtitle = [row.actorKind, row.actorId, row.slotId].filter(Boolean).join(" · ");
     listEl.appendChild(actorRow({
-      key: row.origin, title, subtitle, resolution: row.resolution, tag: "on stage",
+      key: row.origin,
+      title: row.resident ? `${row.character || title} (resident)` : title,
+      subtitle,
+      resolution: row.resolution,
+      tag: row.resident ? "resident · slot0" : "on stage",
+      resident: row.resident === true,
     }));
   }
 
@@ -596,6 +709,91 @@ function renderStage() {
     stage.bubbles !== false, (v) => save({ bubbles: v })));
 }
 
+const CONTENT_RATINGS = ["general", "r15", "r18"];
+
+/** The three limits, most authoritative first. The first two are READ-ONLY here
+ *  on purpose: the platform gate needs age verification, and the live safety
+ *  plane is a fleet service. Only the ceiling is this desk's to set. */
+function renderContent() {
+  const grid = document.getElementById("contentGrid");
+  const hiddenEl = document.getElementById("contentHidden");
+  grid.replaceChildren();
+  hiddenEl.replaceChildren();
+  const content = (last && last.content) || null;
+  if (!content) {
+    grid.appendChild(el("div", "empty", "The content limits could not be read."));
+    return;
+  }
+  const save = (patch) => {
+    void call(window.aitherCast.setSection("content", patch), "Content").then(() => refresh());
+  };
+
+  const gate = el("div", "field");
+  gate.appendChild(el("label", null, "Mature content"));
+  gate.appendChild(el("div", "controls", content.gateOpen ? "unlocked" : "locked"));
+  gate.appendChild(el("div", "from", content.gateOpen
+    ? "the platform says this account opted in AND verified its age"
+    : "locked: turn it on in the platform's safety settings (opt-in + age verification)"));
+  grid.appendChild(gate);
+
+  const plane = el("div", "field");
+  plane.appendChild(el("label", null, "Safety plane"));
+  const verdict = content.safetyExplicitAllowed;
+  plane.appendChild(el("div", "controls",
+    verdict === null || verdict === undefined ? "no answer" : (verdict ? "permits explicit" : "forbids explicit")));
+  plane.appendChild(el("div", "from", "AitherSafety, live. It can only tighten what is above."));
+  grid.appendChild(plane);
+
+  const select = document.createElement("select");
+  for (const value of CONTENT_RATINGS) {
+    const opt = el("option", null, value === "r18" ? "r18 (whatever the platform allows)" : value);
+    opt.value = value;
+    select.appendChild(opt);
+  }
+  select.value = content.maxRating || "r18";
+  select.addEventListener("change", () => save({ maxRating: select.value }));
+  grid.appendChild(fieldBlock("This desk's ceiling", select,
+    content.from && content.from.maxRating !== "builtin" ? content.from.maxRating : null));
+
+  grid.appendChild(checkField("Hide unrated characters",
+    "a character nobody has judged is hidden with the mature ones (only while mature content is locked)",
+    content.hideUnrated !== false, (v) => save({ hideUnrated: v })));
+
+  const hidden = Array.isArray(content.hidden) ? content.hidden : [];
+  if (hidden.length === 0) {
+    hiddenEl.appendChild(el("div", "empty", "Nothing is hidden right now."));
+    return;
+  }
+  const label = {
+    gate: "mature — unlock it on the platform",
+    ceiling: "above this desk's ceiling",
+    unjudged: "never rated — run rate-characters.py --apply --vision --capture",
+  };
+  const counts = {};
+  for (const row of hidden) counts[row.why] = (counts[row.why] || 0) + 1;
+  hiddenEl.appendChild(el("div", "sub",
+    `${hidden.length} character(s) hidden: ` +
+    Object.entries(counts).map(([why, n]) => `${n} ${label[why] || why}`).join(" · ")));
+}
+
+function renderPhysics() {
+  const grid = document.getElementById("physicsGrid");
+  grid.replaceChildren();
+  const defaults = (last && last.snapshot && last.snapshot.defaults) || {};
+  const own = defaults.physics && typeof defaults.physics === "object" ? defaults.physics : {};
+  const from = {};
+  for (const knob of Object.keys(PHYSICS_DEFAULT)) from[knob] = knob in own ? `defaults.physics.${knob}` : "builtin";
+  grid.appendChild(physicsBlock({
+    resolved: { ...PHYSICS_DEFAULT, ...own },
+    from,
+    own,
+    onSave: (physics) => {
+      void call(window.aitherCast.setDefaults({ physics: Object.keys(physics).length ? physics : null }), "Physics")
+        .then(() => refresh());
+    },
+  }));
+}
+
 function renderVoice() {
   const grid = document.getElementById("voiceGrid");
   grid.replaceChildren();
@@ -759,6 +957,8 @@ async function refresh() {
   renderOnStage();
   renderWhoMaySpeak();
   renderStage();
+  renderContent();
+  renderPhysics();
   renderVoice();
   renderDesk();
   renderSync();

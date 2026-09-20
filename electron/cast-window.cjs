@@ -112,6 +112,11 @@ function castHandlers(getImpl) {
     "desk:cast-set-voice": (_event, patch) =>
       call("setVoice", () => impl().setVoice?.(isPlainObject(patch) ? patch : {})),
 
+    // `defaults` is an ActorConfig every actor inherits from (the tier under
+    // authors/actors): the "everyone" knobs -- today the physics faders.
+    "desk:cast-set-defaults": (_event, patch) =>
+      call("setDefaults", () => impl().setDefaults?.(isPlainObject(patch) ? patch : {})),
+
     "desk:cast-set-section": (_event, section, patch) =>
       invalidArg("setSection", section, "section") ||
       call("setSection", () => impl().setSection?.({ section: String(section), patch: isPlainObject(patch) ? patch : {} })),

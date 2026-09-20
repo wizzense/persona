@@ -204,6 +204,10 @@ function createBridgeServer({
   avatarBoundsProvider = null,
   // () => the room stage's status (who is on stage, queue, spoken), or null.
   stageStatusProvider = null,
+  // POST /roster/capture {names?, force?} (bearer: it writes into characters/)
+  // renders a full-body frame per character for the content rater;
+  // GET /roster/capture reports progress. Null = route absent (404).
+  rosterCaptureHandler = null,
   // undefined = resolve from env/file at start; null = none configured (mutators 503).
   bridgeToken = undefined,
 }) {
@@ -372,6 +376,54 @@ function createBridgeServer({
     // agent: the orchestrator's replies, a routine, awvoice, a Claude Code
     // session. Same trust class as /desktop: loopback, no foreign Origin,
     // no bearer -- speaking on the owner's own desk mutates nothing.
+    if (request.url === "/roster/capture") {
+      if (!originAllowed(origin)) {
+        response.writeHead(403);
+        response.end();
+        return;
+      }
+      if (rosterCaptureHandler == null) {
+        response.writeHead(404);
+        response.end();
+        return;
+      }
+      if (request.method === "GET") {
+        let status;
+        try {
+          status = rosterCaptureHandler({ method: "GET" });
+        } catch (error) {
+          status = { ok: false, error: String((error && error.message) || error) };
+        }
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify(status));
+        return;
+      }
+      if (request.method !== "POST") {
+        response.writeHead(405, { allow: "GET, POST" });
+        response.end();
+        return;
+      }
+      if (denyUnlessBearer(request, response, token)) return;
+      readJsonBody(request)
+        .then((body) => {
+          const names = Array.isArray(body?.names)
+            ? body.names.filter((n) => typeof n === "string" && n.length <= 200)
+            : null;
+          return rosterCaptureHandler({ method: "POST", names, force: body?.force === true });
+        })
+        .then((result) => {
+          if (response.headersSent) return;
+          response.writeHead(result && result.ok === false ? 409 : 200, { "content-type": "application/json" });
+          response.end(JSON.stringify(result));
+        })
+        .catch((error) => {
+          if (response.headersSent) return;
+          response.writeHead(400, { "content-type": "application/json" });
+          response.end(JSON.stringify({ ok: false, error: String((error && error.message) || error) }));
+        });
+      return;
+    }
+
     if (request.url === "/speak") {
       if (!originAllowed(origin)) {
         response.writeHead(403);

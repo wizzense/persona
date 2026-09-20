@@ -19,6 +19,12 @@ import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
 
 const SIZE = 256;
 const THUMB_QUALITY = 0.86;
+/** The full-body frame (owner, 2026-09-20: rating a character by its HEAD
+ *  crop under-judges the body -- the rater's vision pass reads this one when
+ *  it exists). Portrait, whole model in frame from its bounding box. */
+const BODY_W = 384;
+const BODY_H = 768;
+type Frame = 'head' | 'body';
 // Roster models run to 66 MB and a pathological GLB can leave loadAsync
 // pending forever — measured 2026-09-11, the serialized queue stalled at 5 of
 // 62 with no error (a resolved-never promise is invisible in a catch chain).
@@ -46,19 +52,24 @@ function hueFor(name: string): number {
   return hash % 360;
 }
 
-function renderSceneToDataUrl(source: HTMLCanvasElement | THREE.WebGLRenderer, hue: number): string {
+function renderSceneToDataUrl(
+  source: HTMLCanvasElement | THREE.WebGLRenderer,
+  hue: number,
+  width = SIZE,
+  height = SIZE,
+): string {
   const webglCanvas = source instanceof THREE.WebGLRenderer ? source.domElement : source;
   const composite = document.createElement('canvas');
-  composite.width = SIZE;
-  composite.height = SIZE;
+  composite.width = width;
+  composite.height = height;
   const ctx = composite.getContext('2d');
   if (!ctx) return '';
-  const gradient = ctx.createLinearGradient(0, 0, SIZE, SIZE);
+  const gradient = ctx.createLinearGradient(0, 0, width, height);
   gradient.addColorStop(0, `hsl(${hue} 55% 46%)`);
   gradient.addColorStop(1, `hsl(${(hue + 38) % 360} 60% 30%)`);
   ctx.fillStyle = gradient;
-  ctx.fillRect(0, 0, SIZE, SIZE);
-  ctx.drawImage(webglCanvas, 0, 0, SIZE, SIZE);
+  ctx.fillRect(0, 0, width, height);
+  ctx.drawImage(webglCanvas, 0, 0, width, height);
   return composite.toDataURL('image/jpeg', THUMB_QUALITY);
 }
 
@@ -114,9 +125,15 @@ function getRig(): ThumbRig {
 
 /** Render one VRM into a square JPEG data URL. Resolves null on ANY failure —
  *  a character that will not load must cost its own preview, not the deck. */
-async function renderOne(name: string, url: string): Promise<string | null> {
+async function renderOne(name: string, url: string, frame: Frame = 'head'): Promise<string | null> {
   const { renderer, scene, camera } = getRig();
   let added: THREE.Object3D | null = null;
+  // The one rig serves both frames: size it per render (cheap; no new context).
+  const width = frame === 'body' ? BODY_W : SIZE;
+  const height = frame === 'body' ? BODY_H : SIZE;
+  renderer.setSize(width, height, false);
+  camera.aspect = width / height;
+  camera.updateProjectionMatrix();
 
   try {
     const loader = new GLTFLoader();
@@ -136,20 +153,32 @@ async function renderOne(name: string, url: string): Promise<string | null> {
     // Frame the head from the HUMANOID BONE, never a bounding box: hair,
     // tails, wings and weapons all inflate the box and put the face at the
     // edge of the frame (measured on siren-head and the kitsune models).
-    const head = vrm.humanoid?.getNormalizedBoneNode('head');
     const target = new THREE.Vector3();
-    if (head) {
-      head.getWorldPosition(target);
-      target.y += 0.035;
-    } else {
+    if (frame === 'body') {
+      // The whole model, from its box: the rater needs to SEE the outfit, and
+      // a head crop is exactly what let a revealing body read as general.
       const box = new THREE.Box3().setFromObject(vrm.scene);
-      target.set(0, box.min.y + (box.max.y - box.min.y) * 0.9, 0);
+      const size = box.getSize(new THREE.Vector3());
+      box.getCenter(target);
+      const fit = Math.max(size.y, size.x * (height / width)) * 1.12;
+      const distance = (fit / 2) / Math.tan((camera.fov * Math.PI) / 360);
+      camera.position.set(target.x, target.y, target.z + Math.max(distance, 0.5));
+      camera.lookAt(target);
+    } else {
+      const head = vrm.humanoid?.getNormalizedBoneNode('head');
+      if (head) {
+        head.getWorldPosition(target);
+        target.y += 0.035;
+      } else {
+        const box = new THREE.Box3().setFromObject(vrm.scene);
+        target.set(0, box.min.y + (box.max.y - box.min.y) * 0.9, 0);
+      }
+      camera.position.set(target.x, target.y + 0.01, target.z + 0.72);
+      camera.lookAt(target.x, target.y - 0.02, target.z);
     }
-    camera.position.set(target.x, target.y + 0.01, target.z + 0.72);
-    camera.lookAt(target.x, target.y - 0.02, target.z);
 
     renderer.render(scene, camera);
-    const dataUrl = renderSceneToDataUrl(renderer, hueFor(name));
+    const dataUrl = renderSceneToDataUrl(renderer, hueFor(name), width, height);
     scene.remove(vrm.scene);
     disposeObject(vrm.scene);
     added = null;
@@ -174,7 +203,14 @@ let queue: Promise<unknown> = Promise.resolve();
 
 /** Serialized entry point: every request queues behind the previous one. */
 export function renderVrmThumbnail(name: string, url: string): Promise<string | null> {
-  const result = queue.then(() => renderOne(name, url));
+  const result = queue.then(() => renderOne(name, url, 'head'));
+  queue = result.catch(() => undefined);
+  return result;
+}
+
+/** The same queue, whole model in a portrait frame (characters/<slug>/fullbody.jpg). */
+export function renderVrmFullBody(name: string, url: string): Promise<string | null> {
+  const result = queue.then(() => renderOne(name, url, 'body'));
   queue = result.catch(() => undefined);
   return result;
 }

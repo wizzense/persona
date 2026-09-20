@@ -13,7 +13,7 @@ import { useAvatarDrag } from '../hooks/useAvatarDrag';
 import { authoredFields, freeSpot } from '../hooks/stagePlacement';
 import { anyoneAudible } from '../hooks/voiceLevels';
 import type { VRM } from '@pixiv/three-vrm';
-import { applySpringScale } from '../hooks/useVrmLoader';
+import { applySpringScale, sanitizeSpringTuning, DEFAULT_SPRING_TUNING, type DeskSpringTuning } from '../hooks/useVrmLoader';
 import type { SpeechBubble } from '../speech-bubble';
 import { SpeechBubbleView } from './SpeechBubbleView';
 
@@ -209,6 +209,9 @@ interface PlacedAvatarProps {
   avatarProps: Omit<AvatarProps, 'onReady'>;
   onReady: (scene: THREE.Object3D) => void;
   bubble?: SpeechBubble;
+  /** The owner's physics knobs for THIS body (cast.json `physics`, via a
+   *  `tune-avatar` event). Multipliers over the model's authored springs. */
+  physics?: DeskSpringTuning;
 }
 
 /** ALL avatars share ONE OrbitControls, so "disable on my drag start / enable on my drag
@@ -233,15 +236,17 @@ function resumeOrbit(orbit: { enabled?: boolean } | null) {
  *
  *  De-jank: during a drag the group is moved IMPERATIVELY via a ref every pointermove --
  *  the previous version setState'd per move, forcing a full React re-render between the
- *  pointer moving and the avatar following it (the "janky as fuck" stutter). The
+ *  pointer moving and the avatar following it (the "janky" stutter). The
  *  position is committed to persisted layout state ONCE, on pointerup. All live values
  *  (y, scale) are read through refs so a re-render mid-drag can never strand the drag on
  *  a stale closure. */
-function PlacedAvatar({ slotId, transform, onDrag, onScale, onRotate, avatarProps, onReady, bubble }: PlacedAvatarProps) {
+function PlacedAvatar({ slotId, transform, onDrag, onScale, onRotate, avatarProps, onReady, bubble, physics }: PlacedAvatarProps) {
   const getThreeState = useThree((state) => state.get);
   const groupRef = useRef<THREE.Group>(null);
   const transformRef = useRef(transform);
   transformRef.current = transform;
+  const physicsRef = useRef(physics ?? DEFAULT_SPRING_TUNING);
+  physicsRef.current = physics ?? DEFAULT_SPRING_TUNING;
   const draggingRef = useRef(false);
   // Where the left button went down, so pointerup can tell a CLICK (focus the
   // avatar) from a DRAG (move/rotate) — the same 5-6px band the drag hook uses.
@@ -269,12 +274,20 @@ function PlacedAvatar({ slotId, transform, onDrag, onScale, onRotate, avatarProp
     // persisted 0.4 shoved every hair chain out over a 2.5x-too-big head
     // collider on every boot (owner, 2026-09-13). Re-derive the spring
     // constants from the SAME number that scaled the group, in the same effect.
-    if (vrmRef.current) applySpringScale(vrmRef.current, transform.scale);
+    if (vrmRef.current) applySpringScale(vrmRef.current, transform.scale, physicsRef.current);
     // Keyed on the VALUES: a slot with no stored layout gets a fresh default
     // object every render, and an identity dep re-ran this (and the spring
     // rescale over every joint) on each one.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [transform.position[0], transform.position[1], transform.position[2], transform.scale, transform.yaw]);
+
+  // The physics knobs change on their own clock (a fader in the Cast pane, a
+  // cast.json edit): re-derive the springs from the SAME scale the group has,
+  // without touching the layout. Keyed on the values for the same reason as above.
+  const p = physics ?? DEFAULT_SPRING_TUNING;
+  useEffect(() => {
+    if (vrmRef.current) applySpringScale(vrmRef.current, transformRef.current.scale, physicsRef.current);
+  }, [p.enabled, p.weight, p.stiffness, p.damping, p.jiggle]);
 
   const { beginDrag } = useAvatarDrag(
     (nx, nz) => {
@@ -307,7 +320,7 @@ function PlacedAvatar({ slotId, transform, onDrag, onScale, onRotate, avatarProp
       // The model usually lands AFTER the layout effect restored the scale, so
       // the compensation must also run here, with the scale the group already has.
       vrmRef.current = vrm ?? null;
-      if (vrm) applySpringScale(vrm, transformRef.current.scale);
+      if (vrm) applySpringScale(vrm, transformRef.current.scale, physicsRef.current);
       setHeadBone(vrm?.humanoid?.getNormalizedBoneNode('head') ?? null);
       setReady(true);
       onReadyRef.current(scene);
@@ -341,8 +354,8 @@ function PlacedAvatar({ slotId, transform, onDrag, onScale, onRotate, avatarProp
               };
             }
             if (event.button !== 0 && event.button !== 2) return;
-            // Gestures, v5 (2026-09-18, owner: "the right-click move is
-            // fucked, can we make this more intuitive, I'm confused"). No
+            // Gestures, v5 (2026-09-18, owner: the right-click move was
+            // broken and confusing; make it intuitive). No
             // mode, no modifier: each button means ONE thing on a body.
             //   left-drag  = MOVE this body      right-drag = TURN this body
             //   wheel      = size this body      right-CLICK = its menu
@@ -514,13 +527,25 @@ export function Scene(props: SceneProps) {
   // spot for whatever later body reuses the id (the leak cleared just below). So it
   // waits here, briefly, and is applied the moment the slot goes live.
   const pendingPlaceRef = useRef(new Map<string, { fields: ReturnType<typeof authoredFields>; at: number }>());
+  // Per-slot physics knobs (tune-avatar). Kept for slots that are not live yet
+  // too -- main sends the tune right behind the spawn -- and dropped with the
+  // slot below, so a reused id never inherits the last body's feel.
+  const [physicsBySlot, setPhysicsBySlot] = useState<Record<string, DeskSpringTuning>>({});
   // A removed slot's stored spot must not leak onto whatever LATER slot reuses that id
   // (nextFreeSlotId() reuses freed ids), so clear it the moment it drops out of extraSlots.
   const previousExtraIdsRef = useState(() => new Set<string>())[0];
   useLayoutEffect(() => {
     const liveIds = new Set(extraSlots.map((s) => s.slotId));
     for (const id of previousExtraIdsRef) {
-      if (!liveIds.has(id)) clearSlot(id);
+      if (!liveIds.has(id)) {
+        clearSlot(id);
+        setPhysicsBySlot((current) => {
+          if (!(id in current)) return current;
+          const next = { ...current };
+          delete next[id];
+          return next;
+        });
+      }
     }
     previousExtraIdsRef.clear();
     liveIds.forEach((id) => previousExtraIdsRef.add(id));
@@ -613,6 +638,13 @@ export function Scene(props: SceneProps) {
           setScale(id, transform.scale);
           setYaw(id, transform.yaw ?? 0);
         }
+      } else if (event.type === 'tune-avatar') {
+        // The owner's physics knobs for one body (cast.json `physics`, resolved
+        // by main). Sanitised here: a dropped field is "as authored", never 0.
+        const id = event.slotId;
+        if (typeof id !== 'string' || !id) return;
+        const tuning = sanitizeSpringTuning(event.physics);
+        setPhysicsBySlot((current) => ({ ...current, [id]: tuning }));
       } else if (event.type === 'place-avatar') {
         // One AUTHORED body, from the cast file via main: an exact spot for a named
         // agent, which is what the single free lane per side cannot express (see
@@ -675,6 +707,7 @@ export function Scene(props: SceneProps) {
         avatarProps={props}
         onReady={handleAvatarReady}
         bubble={props.bubbles?.slot0}
+        physics={physicsBySlot.slot0}
       />
       {/* Extra slots: spawned avatars, each independently draggable/scalable — no longer
           pinned to a fixed side-by-side offset once the owner has moved one. */}
@@ -701,6 +734,7 @@ export function Scene(props: SceneProps) {
             avatarProps={avatarProps}
             onReady={(scene) => handleExtraReady(slot.slotId, scene)}
             bubble={props.bubbles?.[slot.slotId]}
+            physics={physicsBySlot[slot.slotId]}
           />
         );
       })}

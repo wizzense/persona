@@ -162,6 +162,32 @@ const BUILTIN_VOICE = Object.freeze({
   muted: false,
 });
 
+/** The desk's own content ceiling. It is NOT the adult gate: the gate is the
+ *  platform's two halves (an explicit opt-in AND age verification, mirrored to
+ *  ~/.aither/adult_content.json by UserPersonaConfig) and nothing in this file
+ *  or this app can open it. This is a SECOND limit under it, which the owner
+ *  sets per machine: "even when mature content is unlocked, this desk shows
+ *  nothing above <rating>". Default r18 = "whatever the gate allows".
+ *
+ *  It can only ever hide more, so it is safe to sync between machines (the
+ *  awsettings DESK domain carries it): an r18 ceiling arriving on a machine
+ *  whose gate is shut still shows nothing.
+ *
+ *  `hideUnrated` is the other half of the owner's 2026-09-20 ask -- a character
+ *  nobody has judged is hidden with the adult ones. It defaults ON and lives
+ *  here so a roster being rated can be browsed deliberately, never by accident. */
+const CONTENT_RATINGS = ["general", "r15", "r18"];
+
+const BUILTIN_CONTENT = Object.freeze({
+  maxRating: "r18",
+  hideUnrated: true,
+});
+
+const CONTENT_FIELDS = Object.freeze({
+  maxRating: (v) => vEnum(v, CONTENT_RATINGS),
+  hideUnrated: vBool,
+});
+
 const BUILTIN_ACTOR = Object.freeze({
   presence: "normal",
   speak: true,
@@ -346,6 +372,73 @@ function vPlace(value) {
   return { ok: true, value: out };
 }
 
+// ─── spring-bone physics: how much a body moves ──────────────────────────────
+// Owner, 2026-09-20: "I love it but sometimes it's a little too much and I'd
+// like to be able to tune it per avatar/agent." The renderer's springs were
+// fixed at what the model authored (plus the defaults useVrmLoader.ts
+// invents); nothing the owner could write reached them. These five knobs are
+// MULTIPLIERS over the authored values (1 = as the model's author meant it),
+// so a model that is already gentle stays gentle at the default and the same
+// file works on every model in the roster. The renderer applies them per
+// joint in useVrmLoader.ts's applySpringScale, on top of the size compensation.
+//
+//   enabled    false freezes every chain at its authored rest pose.
+//   weight     × gravityPower -- how hard hair/tails/cloth hang down.
+//   stiffness  × stiffness -- how fast a chain springs back to its shape
+//                (higher = less swing).
+//   damping    × dragForce -- how quickly motion dies out (higher = fewer
+//                bounces; the renderer clamps the product to three-vrm's 0..1).
+//   jiggle     the BODY chains only (chest and hips, useVrmLoader.ts's
+//                BODY_JIGGLE_CHAIN): 1 as authored, 0 pins them still, 2 twice
+//                as loose. Separate from the others because those chains are
+//                the ones the owner named, and a hair fader must not touch them.
+//
+// Resolved PER SUB-KEY across the tiers (an actor row may set only `jiggle`
+// and inherit `weight` from defaults), each with its own provenance string,
+// so the pane can say "jiggle 0.5 from actors[...].physics.jiggle".
+const PHYSICS_MULTIPLIER_MAX = 3;
+const JIGGLE_MAX = 2;
+
+const BUILTIN_PHYSICS = Object.freeze({
+  enabled: true,
+  weight: 1,
+  stiffness: 1,
+  damping: 1,
+  jiggle: 1,
+});
+
+const PHYSICS_FIELDS = Object.freeze({
+  enabled: vBool,
+  weight: (v) => vNumber(v, { min: 0, max: PHYSICS_MULTIPLIER_MAX }),
+  stiffness: (v) => vNumber(v, { min: 0, max: PHYSICS_MULTIPLIER_MAX }),
+  damping: (v) => vNumber(v, { min: 0, max: PHYSICS_MULTIPLIER_MAX }),
+  jiggle: (v) => vNumber(v, { min: 0, max: JIGGLE_MAX }),
+});
+
+/** A physics block is validated as a WHOLE like vPlace: one bad sub-value or
+ *  unknown key costs this tier's block (it lands in problems[] with the
+ *  sub-path) and the sub-keys fall through to the next tier. `null` on a
+ *  sub-key is an explicit "unset here", dropped from the value so the tier
+ *  below answers it. */
+function vPhysics(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { ok: false, reason: `expected {${Object.keys(PHYSICS_FIELDS).join("?, ")}?}` };
+  }
+  const unknown = Object.keys(value).filter((k) => !(k in PHYSICS_FIELDS));
+  if (unknown.length) {
+    return { ok: false, value: unknown, reason: `unknown key(s): ${unknown.join(", ")}` };
+  }
+  const out = {};
+  for (const [key, validate] of Object.entries(PHYSICS_FIELDS)) {
+    const v = value[key];
+    if (v === undefined || v === null) continue;
+    const verdict = validate(v);
+    if (!verdict.ok) return { ok: false, at: key, value: v, reason: verdict.reason };
+    out[key] = verdict.value;
+  }
+  return { ok: true, value: out };
+}
+
 /** One ActorConfig field table, used BOTH by validateCast (file time) and by
  *  resolveActor (resolve time). One table means a value the file rejects can
  *  never be honoured by a caller that hands resolveActor a raw object. */
@@ -360,6 +453,7 @@ const ACTOR_FIELDS = Object.freeze({
   speak: vBool,
   body: vBool,
   place: vPlace,
+  physics: vPhysics,
   cooldownSeconds: (v) => vNumber(v, { min: 0 }),
   idleSeconds: (v) => vInt(v, { min: 30 }),
   maxChars: (v) => vInt(v, { min: 40, max: 2000 }),
@@ -539,13 +633,14 @@ function emptyConfig() {
     prompts: {},
     vision: {},
     sync: {},
+    content: {},
     migratedLegacyAt: null,
   };
 }
 
 const TOP_LEVEL_KEYS = [
   "version", "stage", "voice", "defaults", "authors", "actors", "channels",
-  "models", "prompts", "vision", "sync", "migratedLegacyAt",
+  "models", "prompts", "vision", "sync", "content", "migratedLegacyAt",
 ];
 
 /**
@@ -563,6 +658,10 @@ const TOP_LEVEL_KEYS = [
  *   actors:   { "<origin key>": ActorConfig },
  *   channels: { "#chan": { voiced (default FALSE), presence|null } }
  * }
+ * ActorConfig.physics: { enabled, weight 0-3, stiffness 0-3, damping 0-3,
+ *   jiggle 0-2 } -- multipliers over the model's authored springs, resolved
+ *   per sub-key (see PHYSICS_FIELDS). The resident avatar (slot0) reads
+ *   `actors["service:awdesk"]`, the same key its own voice does.
  *
  * @returns {{config: object|null, problems: Array<{path,value,reason}>, fatal: boolean}}
  *   `fatal` marks a whole-file, parse-class refusal (not an object, or a
@@ -600,6 +699,7 @@ function validateCast(raw) {
   );
   config.voice = voice;
   config.defaults = validateRecord(raw.defaults, ACTOR_FIELDS, "defaults", problems);
+  config.content = validateRecord(raw.content, CONTENT_FIELDS, "content", problems);
   for (const [section, fields] of Object.entries(DESK_SECTIONS)) {
     config[section] = validateRecord(raw[section], fields, section, problems);
   }
@@ -1083,6 +1183,7 @@ function normaliseSnapshot(snapshot) {
     prompts: plainObject(snapshot.prompts),
     vision: plainObject(snapshot.vision),
     sync: plainObject(snapshot.sync),
+    content: plainObject(snapshot.content),
     migratedLegacyAt: typeof snapshot.migratedLegacyAt === "string" ? snapshot.migratedLegacyAt : null,
   };
 }
@@ -1113,6 +1214,24 @@ function envNumber(env, name, validate, problems) {
     return null;
   }
   return { value: verdict.value, from: `env.${name}` };
+}
+
+/**
+ * resolveContent — the desk's content ceiling, field by field, with provenance.
+ * Pure and synchronous: content-rating.cjs reads it on every roster listing.
+ */
+function resolveContent(snapshot) {
+  const cfg = normaliseSnapshot(snapshot);
+  const problems = [];
+  const record = plainObject(cfg.content);
+  const out = { ...BUILTIN_CONTENT };
+  const from = {};
+  for (const field of Object.keys(CONTENT_FIELDS)) {
+    const hit = readField(record, field, "content", problems, CONTENT_FIELDS[field]);
+    out[field] = hit ? hit.value : BUILTIN_CONTENT[field];
+    from[field] = hit ? hit.from : "builtin";
+  }
+  return { ...out, from, problems };
 }
 
 /**
@@ -1454,6 +1573,24 @@ function resolveActor(snapshot, ctx = {}) {
     captionedReason = `${chKey} is not voiced (${channelVoicedFrom})`;
   }
 
+  // Physics resolves PER SUB-KEY: each of the five knobs walks the tiers on
+  // its own, so `actors[x].physics = {jiggle: 0.3}` inherits weight/stiffness/
+  // damping from `defaults.physics` instead of resetting them. `pick` cannot
+  // do that (it returns the first tier's whole block), so the walk is inline.
+  const physics = { ...BUILTIN_PHYSICS };
+  const physicsFrom = {};
+  for (const knob of Object.keys(PHYSICS_FIELDS)) physicsFrom[knob] = "builtin";
+  for (const tier of tiers) {
+    if (tier.only && !tier.only.includes("physics")) continue;
+    const hit = readField(tier.record, "physics", tier.prefix, problems, vPhysics);
+    if (!hit) continue;
+    for (const [knob, value] of Object.entries(hit.value)) {
+      if (physicsFrom[knob] !== "builtin") continue; // a more specific tier already answered
+      physics[knob] = value;
+      physicsFrom[knob] = `${hit.from}.${knob}`;
+    }
+  }
+
   return {
     key: origin.key,
     keys: origin.keys,
@@ -1495,6 +1632,8 @@ function resolveActor(snapshot, ctx = {}) {
     bodyFrom: bodyHit ? bodyHit.from : "builtin",
     place: placeHit ? placeHit.value : null,
     placeFrom: placeHit ? placeHit.from : "builtin",
+    physics,
+    physicsFrom,
     channelVoiced,
     channelVoicedFrom,
     // Derived verdicts, so every consumer answers them the same way.
@@ -1665,7 +1804,9 @@ function migrateLegacy({ file = CAST_FILE(), avatarsFile = undefined, now = Date
 module.exports = {
   ACTOR_FIELDS,
   BUILTIN_ACTOR,
+  BUILTIN_CONTENT,
   BUILTIN_DESK,
+  BUILTIN_PHYSICS,
   BUILTIN_STAGE,
   BUILTIN_VOICE,
   CAST_FILE,
@@ -1673,6 +1814,9 @@ module.exports = {
   LEGACY_AGENT_VOICES,
   LEGACY_AVATARS_FILE,
   ORIGIN_LITERALS,
+  PHYSICS_FIELDS,
+  PHYSICS_MULTIPLIER_MAX,
+  JIGGLE_MAX,
   POSITION_BOUND,
   PRESENCE_LEVELS,
   SCALE_MAX,
@@ -1691,7 +1835,9 @@ module.exports = {
   noteSeen,
   originOf,
   readSeen,
+  CONTENT_RATINGS,
   resolveActor,
+  resolveContent,
   resolveDesk,
   resolveStage,
   resolveVoice,

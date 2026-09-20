@@ -61,6 +61,15 @@ type AvatarBridgeEvent =
       scale?: number;
       yaw?: number;
     }
+  // The owner's physics knobs for one body (cast.json `physics`, resolved by
+  // main with provenance; the renderer only sees the numbers). Multipliers
+  // over the model's authored springs -- see useVrmLoader.ts DeskSpringTuning.
+  // Sanitised on arrival: a missing knob is 1 (as authored), never 0.
+  | {
+      type: 'tune-avatar';
+      slotId: string;
+      physics?: { enabled?: boolean; weight?: number; stiffness?: number; damping?: number; jiggle?: number };
+    }
   // Drop-to-avatar (2026-08-29): main TTS'd the drop verdict and hands the
   // audio over for playback + lip sync in the avatar window.
   // `volume` is cast.json's master x actor fader, already multiplied (0..2).
@@ -73,7 +82,11 @@ type AvatarBridgeEvent =
   // Plan 40 slice C ("I also want to be able to talk back"): main asks the avatar
   // window to open the mic, because that window is up whenever the overlay is --
   // the deck's chat box was the only place the owner could speak from before.
-  | { type: 'listen'; listening: boolean };
+  | { type: 'listen'; listening: boolean }
+  // The content rater's full-body frames (main relays POST /roster/capture):
+  // render each model whole and hand the JPEG back through
+  // deck.saveCharacterFullBody. See src/thumbnails.ts renderVrmFullBody.
+  | { type: 'capture-roster'; characters: Array<{ name: string; modelUrl: string | null }> };
 
 /** The verdict of a dropped file (preload -> main -> drop-router). */
 interface DropVerdict {

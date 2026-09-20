@@ -836,6 +836,8 @@ function roomStageDeps() {
     listCharacters,
     // SAFE roster only: the content-rating gate decides what may have a body.
     filterCharacters: require("./content-rating.cjs").filterCharacters,
+    // UNFILTERED, for the Cast pane's "what is hidden and why" list ONLY.
+    listAllCharacters: require("./character-roster.cjs").listAllCharacters,
     getActiveCharacter,
     sendToRenderer: emitToRenderer,
     log: (...args) => debugLog(...args),
@@ -1079,8 +1081,11 @@ function applyCharacter(name) {
  *  future dialogue/arbitration routing) — it does not change which character renders.
  *  `place` (U28), when given, is cast.json's resolved {position,scale,yaw} for
  *  this actor (see stagePlacement.ts's authoredTransform, U09) — sent as ONE
- *  place-avatar event right after spawn, never a reload. */
-function spawnAvatarSlot(slotId, name, agent, place) {
+ *  place-avatar event right after spawn, never a reload. `physics`, likewise,
+ *  is the resolved cast.json physics block for this actor -- one tune-avatar
+ *  event behind the spawn, so the body's first frame already has the owner's
+ *  knobs (room-stage-host.replayPhysics covers a renderer that mounts later). */
+function spawnAvatarSlot(slotId, name, agent, place, physics) {
   // Refuse slot IDs reserved for the default avatar
   if (slotId === "slot0" || slotId === "default" || slotId === "") return false;
 
@@ -1105,6 +1110,18 @@ function spawnAvatarSlot(slotId, name, agent, place) {
             type: "place-avatar", slotId, position: place.position, scale: place.scale, yaw: place.yaw,
           });
         }
+        // A spawn with no resolution of its own (tray, MCP spawn_avatar) still
+        // gets the owner's knobs: `actors["desk:<slotId>"]` / `authors.<agent>`
+        // / `defaults.physics`, resolved by the host.
+        let knobs = physics && typeof physics === "object" ? physics : null;
+        if (!knobs) {
+          try {
+            knobs = roomStageHost.physicsForBody(roomStageDeps(), { slotId, agent: agent || "" });
+          } catch (error) {
+            debugLog("physicsForBody failed", slotId, error?.message || error);
+          }
+        }
+        if (knobs) avatarWindow.webContents.send("desk:event", { type: "tune-avatar", slotId, physics: knobs });
       }
     },
     (error) => {
@@ -1429,6 +1446,38 @@ function isValidCharacterName(name) {
  *  content pack that used to be a second candidate is gone from the product,
  *  2026-09-19), as a file:// URL — the deck's preview renderer loads it.
  *  Only main knows the real roster root, so the deck never builds these. */
+/** Full-body captures for the rater (POST /roster/capture on the bridge).
+ *  The avatar window renders each model offscreen (src/thumbnails.ts) and
+ *  hands the JPEG back through desk:save-character-fullbody. Every installed
+ *  character is offered, gate or no gate: this is the step that DECIDES the
+ *  rating, so it must see the ones the gate hides. `done` is what the rater
+ *  polls for; a renderer that never answers leaves a name pending. */
+const rosterCapture = { requested: new Set(), done: new Set(), startedAt: 0 };
+const { listAllCharacters } = require("./character-roster.cjs");
+
+function captureRoster({ names = null, force = false } = {}) {
+  const installed = listAllCharacters();
+  const wanted = Array.isArray(names) && names.length
+    ? names.filter((n) => isValidCharacterName(n) && installed.includes(n))
+    : installed;
+  const todo = wanted.filter((n) => force || !fs.existsSync(path.join(ROSTER_DIR, n, "fullbody.jpg")));
+  if (!avatarWindow || avatarWindow.isDestroyed()) {
+    return { ok: false, error: "no avatar window to render in", requested: 0, pending: todo };
+  }
+  rosterCapture.requested = new Set(todo);
+  rosterCapture.done = new Set();
+  rosterCapture.startedAt = Date.now();
+  sendToAvatar("capture-roster", {
+    characters: todo.map((name) => ({ name, modelUrl: characterModelUrl(name) })),
+  });
+  return { ok: true, requested: todo.length, pending: todo, skipped: wanted.length - todo.length };
+}
+
+function captureRosterStatus() {
+  const pending = [...rosterCapture.requested].filter((n) => !rosterCapture.done.has(n));
+  return { ok: true, requested: rosterCapture.requested.size, done: rosterCapture.done.size, pending, startedAt: rosterCapture.startedAt };
+}
+
 function characterModelUrl(name) {
   if (!isValidCharacterName(name)) return null;
   const candidates = [path.join(ROSTER_DIR, name, "model.vrm")];
@@ -1549,8 +1598,28 @@ function fsMkdirSafe(dir) {
   }
 }
 
+/** Ask the LIVE safety plane whether explicit content is permitted and hand
+ *  the verdict to content-rating (its limit 2 -- tightening only; see that
+ *  file's three-limits note). Fire-and-forget on the tray refresh: a slow or
+ *  dead fleet must never hold up a menu, and a plane that does not answer
+ *  leaves the verdict untouched. */
+function refreshSafetyPosture() {
+  try {
+    const { explicitAllowed } = require("./safety-gate.cjs");
+    const { setSafetyExplicitAllowed } = require("./content-rating.cjs");
+    void explicitAllowed()
+      .then((verdict) => {
+        if (verdict !== null) setSafetyExplicitAllowed(verdict);
+      })
+      .catch(() => {});
+  } catch (error) {
+    debugLog("safety posture refresh failed", error?.message || error);
+  }
+}
+
 function refreshTrayMenu() {
   invalidateGate();
+  refreshSafetyPosture();
   // Slice F: append a line the first time the gate MOVES. The desk cannot
   // authenticate the flip (the platform writes the mirror), so what it attests
   // is what it observed and when -- which is the part a desk can honestly claim.
@@ -2197,7 +2266,22 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
         }
         if (avatarSlots.size > 0) debugLog("replayed avatar slots", avatarSlots.size);
       }
-      return latestEvent;
+      // The snapshot the renderer asked for is the LAST STATE event; capture it
+      // before the physics replay below, which goes through emitToRenderer and
+      // would otherwise overwrite it with a tune-avatar the renderer's
+      // `type === "state"` check ignores -- leaving the voice state unset.
+      const snapshot = latestEvent;
+      if (avatarWindow && !avatarWindow.isDestroyed()) {
+        // The physics knobs live only in cast.json + this process (never in
+        // the renderer's storage), so a fresh renderer is told them here, for
+        // the resident and every slot just replayed. Same no-race argument.
+        try {
+          roomStageHost.replayPhysics(roomStageDeps(), stagePaneImpl().bodies());
+        } catch (error) {
+          debugLog("replayPhysics failed", error?.message || error);
+        }
+      }
+      return snapshot;
     });
     ipcMain.on("desk:hide", () => void hideOverlay());
 
@@ -2255,6 +2339,23 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
         return `data:image/jpeg;base64,${fs.readFileSync(file).toString("base64")}`;
       } catch {
         return null;
+      }
+    });
+    // The rater's full-body frame (rate-characters.py --vision reads
+    // fullbody.jpg before thumbnail.jpg). Same validation as the thumbnail.
+    ipcMain.handle("desk:save-character-fullbody", (_event, name, dataUrl) => {
+      if (!isValidCharacterName(name)) return false;
+      const prefix = "data:image/jpeg;base64,";
+      if (typeof dataUrl !== "string" || !dataUrl.startsWith(prefix)) return false;
+      const base64 = dataUrl.slice(prefix.length);
+      if (base64.length === 0 || base64.length > 2 * 1024 * 1024) return false;
+      try {
+        fs.writeFileSync(path.join(ROSTER_DIR, name, "fullbody.jpg"), Buffer.from(base64, "base64"));
+        rosterCapture.done.add(name);
+        return true;
+      } catch (error) {
+        debugLog("fullbody write failed", name, error);
+        return false;
       }
     });
     ipcMain.handle("desk:save-character-thumb", (_event, name, dataUrl) => {
@@ -2762,6 +2863,8 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
         return { ok: focusPane(pane) !== false, pane };
       },
       stageStatusProvider: () => ({ ...(roomStageHost.status() || { room: false }), mainLag, present: { mode: presentState.present, gpu: presentState.gpu } }),
+      // POST /roster/capture (bearer): full-body frames for the rater. GET: progress.
+      rosterCaptureHandler: (req) => (req.method === "GET" ? captureRosterStatus() : captureRoster(req)),
       avatarBoundsProvider: () =>
         avatarWindow && !avatarWindow.isDestroyed() && avatarWindow.isVisible()
           ? avatarWindow.getBounds()
@@ -2925,7 +3028,14 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
 
     if (!startInBackground) {
       createWindow();
-      showOverlay({ focus: true });
+      // INACTIVE at launch. Nobody is waiting to type into the avatar when it
+      // comes up: it is started by the logon shim, by restart_persona.py, or by
+      // a peer session rebuilding it -- measured 2026-09-20, the fresh Desk
+      // window took the foreground on every relaunch, in the middle of the
+      // owner's typing ("stealing context"). The window is alwaysOnTop, so it
+      // is seen either way; the owner's own gestures (tray "Show avatar", a
+      // second launch, macOS activate) still pass { focus: true } below.
+      showOverlay();
     }
     if (deckIsRequested) createDeckWindow();
     if (consoleIsRequested) openConsole();

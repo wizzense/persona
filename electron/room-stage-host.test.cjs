@@ -451,3 +451,100 @@ test("castPaneImpl.describe: carries the RESOLVED desk settings (with provenance
   assert.equal(described.sync.reason, "sync.enabled is off");
 });
 
+
+// ─── physics: the knobs reach the renderer, for rows AND the resident ───────
+
+test("cast-config.watch: a changed physics block sends ONE tune-avatar for that slot, and the resident's on its own key", async () => {
+  const dir = tmpDir();
+  const file = castFileIn(dir);
+  writeCast(file, { version: 1, authors: { "agent-a": { character: "Nova" } } });
+
+  const sent = [];
+  const spawnCalls = [];
+  const deps = baseDeps({
+    castFile: file,
+    watchDebounceMs: 30,
+    sendToRenderer: (event) => sent.push(event),
+    spawnAvatarSlot: (...args) => { spawnCalls.push(args); return true; },
+  });
+  try {
+    const stage = host.startRoomStage(deps);
+    stage.slots.set("room-agent-a", { agent: "agent-a", character: "Nova", actorId: "", actorKind: "" });
+
+    writeCast(file, {
+      version: 1,
+      authors: { "agent-a": { character: "Nova", physics: { jiggle: 0.25 } } },
+      actors: { "service:awdesk": { physics: { weight: 0.5 } } },
+    });
+    await sleep(400);
+
+    const tunes = sent.filter((e) => e.type === "tune-avatar");
+    const forRow = tunes.find((e) => e.slotId === "room-agent-a");
+    assert.ok(forRow, "the row whose block changed is tuned");
+    assert.equal(forRow.physics.jiggle, 0.25);
+    assert.equal(forRow.physics.weight, 1, "an unset knob is 1 (as authored), never absent");
+    const forResident = tunes.find((e) => e.slotId === "slot0");
+    assert.ok(forResident, "the resident is tuned from service:awdesk without being a room row");
+    assert.equal(forResident.physics.weight, 0.5);
+    assert.equal(spawnCalls.length, 0, "a physics-only change never re-spawns");
+
+    // Same file saved again with no physics change: nothing is re-sent.
+    const before = sent.length;
+    writeCast(file, {
+      version: 1,
+      authors: { "agent-a": { character: "Nova", physics: { jiggle: 0.25 } } },
+      actors: { "service:awdesk": { physics: { weight: 0.5 } } },
+      stage: { gapMs: 400 },
+    });
+    await sleep(400);
+    assert.equal(sent.slice(before).filter((e) => e.type === "tune-avatar").length, 0, "unchanged knobs are not re-sent on every save");
+  } finally {
+    host.stopRoomStage();
+  }
+});
+
+test("replayPhysics: tells a fresh renderer every body's knobs -- room rows by origin, hand-spawned by desk:<slotId>, the resident by service:awdesk", () => {
+  const dir = tmpDir();
+  const file = castFileIn(dir);
+  writeCast(file, {
+    version: 1,
+    defaults: { physics: { damping: 2 } },
+    actors: { "service:awdesk": { physics: { weight: 0.5 } }, "desk:slot2": { physics: { stiffness: 3 } } },
+  });
+  const sent = [];
+  const deps = baseDeps({ castFile: file, sendToRenderer: (event) => sent.push(event) });
+  try {
+    const n = host.replayPhysics(deps, [
+      { slotId: "slot0", agent: "aither", resident: true },
+      { slotId: "slot2", agent: "", resident: false },
+    ]);
+    assert.equal(n, 2);
+    const byId = Object.fromEntries(sent.filter((e) => e.type === "tune-avatar").map((e) => [e.slotId, e.physics]));
+    assert.equal(byId.slot0.weight, 0.5);
+    assert.equal(byId.slot0.damping, 2, "the resident inherits defaults for the knobs it does not set");
+    assert.equal(byId.slot2.stiffness, 3, "a hand-spawned slot is addressable as desk:<slotId>");
+    assert.equal(byId.slot2.damping, 2);
+    assert.equal(typeof host.physicsForBody(deps, { slotId: "slot0", resident: true }).jiggle, "number");
+  } finally {
+    host.stopRoomStage();
+  }
+});
+
+test("castPaneImpl.describe lists the resident FIRST with its service:awdesk resolution; setDefaults writes the defaults tier", () => {
+  const dir = tmpDir();
+  const file = castFileIn(dir);
+  writeCast(file, { version: 1 });
+  const impl = host.castPaneImpl(baseDeps({ castFile: file }));
+  const result = impl.setDefaults({ physics: { weight: 0.4 } });
+  assert.equal(result.ok, true);
+  assert.equal(JSON.parse(fs.readFileSync(file, "utf8")).defaults.physics.weight, 0.4);
+
+  const described = impl.describe();
+  const first = described.onStage[0];
+  assert.equal(first.slotId, "slot0");
+  assert.equal(first.resident, true);
+  assert.equal(first.origin, "service:awdesk");
+  assert.equal(first.character, "Aither", "the live resident name, from getActiveCharacter");
+  assert.equal(first.resolution.physics.weight, 0.4);
+  assert.equal(first.resolution.physicsFrom.weight, "defaults.physics.weight");
+});

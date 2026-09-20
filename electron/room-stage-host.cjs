@@ -67,6 +67,9 @@ const seatState = {}; // cast-config.seatIndexFor's own bookkeeping object --
 const placeCache = new Map(); // slotId -> JSON.stringify(place), so the
 // watch-driven reconcile sends a place-avatar event only when the RESOLVED
 // place actually changed, not on every file save.
+const physicsCache = new Map(); // slotId -> JSON.stringify(physics), same idea:
+// a fader release rewrites the whole file, and only the body whose knobs
+// changed should have its springs re-derived.
 
 //: A safe stage-center default `captureStage()` pins for an on-stage actor
 //: that has never been placed -- position [0,0,0] and scale 1 pass vPlace's
@@ -93,8 +96,11 @@ function resolveCastFile(deps) {
 /** The SAFE roster (content-rating already applied) `resolveActor` hashes a
  *  character out of. Fail-soft: an empty roster means "nothing to judge
  *  against" to stableCharacter/resolveActor, not a thrown error mid-poll. */
-function safeRoster(deps) {
+function safeRoster(deps, { all = false } = {}) {
   try {
+    // `all` is the UNFILTERED roster -- only the Cast pane's "what is hidden
+    // and why" list asks for it, never anything that shows a character.
+    if (all) return deps.listAllCharacters ? deps.listAllCharacters() : deps.listCharacters();
     return deps.filterCharacters(deps.listCharacters());
   } catch {
     return [];
@@ -239,6 +245,75 @@ function maybeSendPlace(deps, slotId, place) {
   sendPlace(deps, slotId, place);
 }
 
+/** The physics knobs for one body, sent as ONE tune-avatar event. Unlike
+ *  place there is always a value (the built-in is a full set of 1s), so the
+ *  renderer's per-slot map is authoritative once this has fired. */
+function sendPhysics(deps, slotId, physics) {
+  if (!physics) return;
+  physicsCache.set(slotId, JSON.stringify(physics));
+  deps.sendToRenderer({ type: "tune-avatar", slotId, physics });
+}
+
+function maybeSendPhysics(deps, slotId, physics) {
+  const key = physics ? JSON.stringify(physics) : null;
+  if (!key || physicsCache.get(slotId) === key) return;
+  sendPhysics(deps, slotId, physics);
+}
+
+/** The resident avatar (slot0) is not a room row -- it is the desk itself --
+ *  so its knobs resolve under the desk's own origin, `service:awdesk`, the
+ *  key its voice already answers to (voice-resolve.cjs). The owner tunes it
+ *  as `actors["service:awdesk"].physics`, or everyone at once as
+ *  `defaults.physics`. */
+function residentPhysics(resolve) {
+  const origin = cast.originOf({ key: cast.ORIGIN_LITERALS.SERVICE_AWDESK });
+  return resolve({ actorKind: origin.kind, actorId: origin.id, origin }).physics;
+}
+
+/**
+ * replayPhysics — main's desk:get-snapshot hook. The renderer keeps the knobs
+ * only in memory (cast.json is the ONE plane; nothing physics-shaped is
+ * persisted renderer-side on purpose), so every mount -- first paint and the
+ * reload applyCharacter() does -- must be told again, for the resident and for
+ * every body main replays right before this. The cache is cleared first: the
+ * renderer that asked is a fresh one, whatever this process last sent.
+ *
+ * @param {Array<{slotId, agent?, resident?}>} bodies  main's live slot list
+ *   (stagePaneImpl().bodies() shape). A body on the room stage resolves as
+ *   its row; a hand-spawned one (tray / MCP spawn) as `desk:<slotId>` plus
+ *   its roster agent as author, so `actors["desk:slot1"]` and
+ *   `authors.<agent>` both reach it.
+ */
+function replayPhysics(deps, bodies) {
+  physicsCache.clear();
+  let sent = 0;
+  for (const body of Array.isArray(bodies) ? bodies : []) {
+    if (!body || typeof body.slotId !== "string" || !body.slotId) continue;
+    sendPhysics(deps, body.slotId, physicsForBody(deps, body));
+    sent += 1;
+  }
+  return sent;
+}
+
+/** The resolved physics block for one live body -- see replayPhysics for the
+ *  three cases. Also what main's spawnAvatarSlot asks when a spawn arrives
+ *  with no resolution of its own (tray / MCP `spawn_avatar`). */
+function physicsForBody(deps, body) {
+  const resolve = activeStage && liveSnapshot
+    ? buildResolver(deps, () => resolveCastFile(deps), () => liveSnapshot)
+    : buildResolver(deps, () => resolveCastFile(deps), null);
+  const rows = status();
+  const onStage = rows && Array.isArray(rows.onStage) ? rows.onStage : [];
+  const row = onStage.find((r) => r.slotId === body.slotId);
+  if (row) {
+    const origin = cast.originOf({ kind: row.actorKind, id: row.actorId });
+    return resolve({ author: row.agent, actorId: row.actorId, actorKind: row.actorKind, origin }).physics;
+  }
+  if (body.resident || body.slotId === "slot0") return residentPhysics(resolve);
+  const origin = cast.originOf({ kind: "desk", id: body.slotId });
+  return resolve({ author: body.agent || undefined, actorKind: "desk", actorId: body.slotId, origin }).physics;
+}
+
 /**
  * reconcileOnStage — cast-config.watch's onChange handler, past
  * `roomStage.setConfig(snapshot)`. For every row already on stage, resolve it
@@ -265,7 +340,7 @@ function reconcileOnStage(deps, stage, resolve) {
     const origin = cast.originOf({ kind: row.actorKind, id: row.actorId });
     const resolution = resolve({ author: row.agent, actorId: row.actorId, actorKind: row.actorKind, origin });
     if (resolution.character && resolution.character !== row.character) {
-      const ok = deps.spawnAvatarSlot(row.slotId, resolution.character, row.agent, resolution.place);
+      const ok = deps.spawnAvatarSlot(row.slotId, resolution.character, row.agent, resolution.place, resolution.physics);
       if (!ok) continue;
       // 🚩 room-stage.cjs (U02, peer-held -- not touched by this unit)
       // exposes no public setter for a slot's character once spawned:
@@ -277,10 +352,14 @@ function reconcileOnStage(deps, stage, resolve) {
       // with a hot-reload re-spawn without editing the peer's file.
       stage.slots.set(row.slotId, { agent: row.agent, character: resolution.character, actorId: row.actorId || "", actorKind: row.actorKind || "" });
       sendPlace(deps, row.slotId, resolution.place);
+      sendPhysics(deps, row.slotId, resolution.physics);
     } else {
       maybeSendPlace(deps, row.slotId, resolution.place);
+      maybeSendPhysics(deps, row.slotId, resolution.physics);
     }
   }
+  // The resident is not a row, but its knobs live in the same file.
+  maybeSendPhysics(deps, "slot0", residentPhysics(resolve));
 }
 
 /**
@@ -294,7 +373,7 @@ function reconcileOnStage(deps, stage, resolve) {
  *
  * @param {object} deps
  * @param {object} deps.roomPublisher   .recentChat(opts) -> Promise<rows>
- * @param {(slotId, character, agent, place) => boolean} deps.spawnAvatarSlot
+ * @param {(slotId, character, agent, place, physics) => boolean} deps.spawnAvatarSlot
  * @param {(slotId) => boolean} deps.removeAvatarSlot
  * @param {(text, voice, speed, slotId) => Promise<{ok, durationMs?, reason?}>} deps.speakAloud
  *   main's REAL signature (text, voice, speed, slotId) -- see the io.speak
@@ -335,7 +414,7 @@ function startRoomStage(deps = {}) {
       recentChat: (opts) => deps.roomPublisher.recentChat(opts),
       resolve,
       onEvict: (slotId) => placeCache.delete(slotId),
-      spawn: (slotId, character, agent, place) => deps.spawnAvatarSlot(slotId, character, agent, place),
+      spawn: (slotId, character, agent, place, physics) => deps.spawnAvatarSlot(slotId, character, agent, place, physics),
       remove: (slotId) => deps.removeAvatarSlot(slotId),
       // io.speak's own call shape is (text, voice, slotId, speed) -- see
       // room-stage.cjs's drain(); deps.speakAloud's is main's REAL
@@ -357,6 +436,7 @@ function startRoomStage(deps = {}) {
 
   activeStage = stage;
   placeCache.clear();
+  physicsCache.clear();
 
   activeUnwatch = cast.watch(
     (result) => {
@@ -385,6 +465,7 @@ function stopRoomStage() {
   activeStage = null;
   liveSnapshot = null;
   placeCache.clear();
+  physicsCache.clear();
 }
 
 /** `roomStage.status()` for whatever main/mcp-server used to read directly
@@ -445,6 +526,24 @@ function castPaneImpl(deps = {}) {
         resolution: resolve({ author: row.agent, actorId: row.actorId, actorKind: row.actorKind, origin }),
       };
     });
+    // The resident (slot0) is not a room row, but it IS a body the owner
+    // tunes -- its volume, bubble and physics all resolve under the desk's
+    // own origin. Listed first, flagged `resident` so the pane hides the
+    // controls that do not reach it (character/body/presence come from
+    // .active-character and the stage, not from this record).
+    {
+      const origin = cast.originOf({ key: cast.ORIGIN_LITERALS.SERVICE_AWDESK });
+      onStage.unshift({
+        slotId: "slot0",
+        agent: "aither",
+        actorKind: origin.kind,
+        actorId: origin.id,
+        character: liveResident(deps, loaded.snapshot),
+        resident: true,
+        origin: origin.key,
+        resolution: resolve({ actorKind: origin.kind, actorId: origin.id, origin }),
+      });
+    }
     let seen;
     try {
       seen = cast.readSeen({ file: cast.SEEN_FILE(castFile()) });
@@ -458,6 +557,22 @@ function castPaneImpl(deps = {}) {
       deskResolved = cast.resolveDesk(loaded.snapshot || { version: 1 }, { env: deps.env || process.env });
     } catch {
       deskResolved = null;
+    }
+    // The three limits, so the pane can say which one is hiding a character
+    // rather than leaving a short roster unexplained.
+    let content;
+    try {
+      const rating = require("./content-rating.cjs");
+      content = {
+        ...cast.resolveContent(loaded.snapshot || { version: 1 }),
+        gateOpen: rating.isAdultContentVisible(),
+        safetyExplicitAllowed: rating.getSafetyExplicitAllowed(),
+        hidden: safeRoster(deps, { all: true })
+          .map((name) => ({ name, why: rating.hiddenReason(name) }))
+          .filter((row) => row.why),
+      };
+    } catch {
+      content = null;
     }
     let syncStatus;
     try {
@@ -473,6 +588,7 @@ function castPaneImpl(deps = {}) {
       onStage,
       seen,
       desk: deskResolved,
+      content,
       sync: syncStatus,
     };
   }
@@ -511,10 +627,22 @@ function castPaneImpl(deps = {}) {
     });
   }
 
+  /** `defaults`: the ActorConfig under every author/actor tier. The pane's
+   *  "everyone" physics faders write here. */
+  function setDefaults(patch = {}) {
+    return write((draft) => {
+      draft.defaults = { ...(draft.defaults || {}), ...(patch || {}) };
+      return draft;
+    });
+  }
+
   /** The desk's own behaviour sections. ONE door with a closed list, rather than
    *  a door per section: the list is what stops a renderer from using this to
    *  write `actors` or `channels` around the handlers that exist for them. */
-  const DESK_SECTIONS = ["models", "prompts", "vision", "sync"];
+  // `content` is on this list because it can only ever HIDE more (a ceiling,
+  //  not a grant) -- the adult gate itself is the platform's, and no door here
+  //  can open it. See content-rating.cjs's three-limits note.
+  const DESK_SECTIONS = ["models", "prompts", "vision", "sync", "content"];
   function setSection({ section, patch } = {}) {
     if (!DESK_SECTIONS.includes(section)) {
       return { ok: false, snapshot: null, problems: [], error: `setSection: unknown section ${JSON.stringify(section)}` };
@@ -586,7 +714,7 @@ function castPaneImpl(deps = {}) {
     });
   }
 
-  return { describe, setActor, clearActor, setStage, setVoice, setSection, setChannel, captureStage, muteOrigin, reveal };
+  return { describe, setActor, clearActor, setStage, setVoice, setDefaults, setSection, setChannel, captureStage, muteOrigin, reveal };
 }
 
 module.exports = {
@@ -594,7 +722,9 @@ module.exports = {
   buildResolver,
   castPaneImpl,
   evictSlot,
+  physicsForBody,
   reconcileOnStage,
+  replayPhysics,
   resolveStageKnobs,
   startRoomStage,
   status,

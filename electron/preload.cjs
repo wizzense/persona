@@ -41,6 +41,10 @@ contextBridge.exposeInMainWorld("deskBridge", {
     characterThumb: (name) => ipcRenderer.invoke("desk:character-thumb", name ?? ""),
     saveCharacterThumb: (name, dataUrl) =>
       ipcRenderer.invoke("desk:save-character-thumb", name ?? "", dataUrl ?? ""),
+    // The full-body capture the rater's vision pass reads (characters/<slug>/
+    // fullbody.jpg). Requested by main (capture-roster event), never on its own.
+    saveCharacterFullBody: (name, dataUrl) =>
+      ipcRenderer.invoke("desk:save-character-fullbody", name ?? "", dataUrl ?? ""),
   },
   // Full system awareness (#9): the five snapshot sources the System section
   // renders. Read-only; every one fails soft to ok:true + ERROR notes.
