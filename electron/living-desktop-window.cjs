@@ -3,7 +3,7 @@
 /** The Aitheros Online surface as a REAL desktop overlay — not a browser tab.
  *
  *  History, so nobody rebuilds the failures:
- *  - Attempt 1 loaded the auth-gated portal in a framed BrowserWindow and rendered
+ *  - Attempt 1 loaded the old portal host in a framed BrowserWindow and rendered
  *    BLANK WHITE: portal. is auth-gated, a fresh webContents has no cookies, and the
  *    login redirect renders nothing.
  *  - Attempt 2 punted to shell.openExternal — explicitly rejected by the owner ("I don't
@@ -66,7 +66,7 @@ function setShell(id) {
 }
 
 const PARTITION = "persist:living-desktop";
-//: The apex, not portal.aitherium.com: that host is RETIRED and 301s here
+//: The apex, not the old `portal.` host: that one is RETIRED and 301s here
 //: (measured 2026-09-19). Loading the redirect costs a round trip and leaves a
 //: dead hostname in the one window the owner signs in through.
 const PORTAL_LOGIN_URL = "https://aitherium.com/login";
