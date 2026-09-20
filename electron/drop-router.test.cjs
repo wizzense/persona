@@ -1,5 +1,10 @@
 "use strict";
 
+// Hermetic: these modules now read cast.json (desk-settings.cjs). Without this the
+// suite would read the OWNER'S live file, and go red the day they change a setting.
+process.env.DESK_CAST_FILE = require("node:path").join(
+  require("node:os").tmpdir(), `desk-no-cast-${process.pid}`, "cast.json");
+
 /**
  * drop-router tests — the four lanes + the bridge contract, with the
  * gateway call injected so nothing here needs the fleet. Run:

@@ -49,10 +49,12 @@
   .field { display: grid; gap: 2px; }
   .field label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
   .field .from { font-size: 10px; color: #5f6a80; }
-  select, input[type=text], input[type=number] { background: var(--btn); color: var(--fg);
+  select, input[type=text], input[type=number], textarea { background: var(--btn); color: var(--fg);
     border: 1px solid var(--line); border-radius: 5px; padding: 4px 6px; font: 12px system-ui; }
   select { min-width: 110px; }
   input[type=number] { width: 68px; }
+  textarea { width: 100%; min-width: 220px; resize: vertical; font: inherit; box-sizing: border-box; }
+  input[type=range] { width: 130px; vertical-align: middle; accent-color: var(--fg); }
   .ck { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--muted); }
   .tag { font-size: 10px; border-radius: 999px; padding: 1px 7px; border: 1px solid var(--line);
     color: var(--muted); white-space: nowrap; }
@@ -119,6 +121,22 @@
         it is hardcoded to 127.0.0.1:8084 in code; here it is a setting.</p>
       <div class="grid" id="voiceGrid"></div>
     </section>
+
+    <section id="deskSection">
+      <h2>Desk behaviour</h2>
+      <p class="lede">Which backend the Command window's agent runs on, what it is told, and
+        whether the desk looks at images you drop on it. Each was an environment variable or a
+        constant in code; the small print under a field says where its current value comes from.</p>
+      <div class="grid" id="deskGrid"></div>
+    </section>
+
+    <section id="syncSection">
+      <h2>Sync to your other machines</h2>
+      <p class="lede">Off until you turn it on. Point it at a file in a folder you already sync, or
+        at a profile URL. This section itself never leaves this machine — it holds local paths.</p>
+      <div class="state" id="syncState"></div>
+      <div class="grid" id="syncGrid"></div>
+    </section>
   </div>
 
   <footer>
@@ -142,7 +160,7 @@ const VOICES = ["nova", "alloy", "echo", "fable", "onyx", "shimmer"];
 // never sent unless the owner actually edits the field.
 const STAGE_DEFAULT = { maxBodies: 3, idleSeconds: 600, cooldownSeconds: 20, gapMs: 350, pollMs: 2000, resident: "" };
 const VOICE_DEFAULT = {
-  defaultVoice: "nova", defaultSpeed: 1.35, maxChars: 2000, affectIntensity: 1,
+  defaultVoice: "nova", defaultSpeed: 1.35, maxChars: 2000, affectIntensity: 1, volume: 1,
   endpointHost: "127.0.0.1", endpointPort: 8084, endpointPath: "/voice/synthesize",
   speechFilterMaxChars: 220, speechFilterAllowCode: false,
 };
@@ -300,6 +318,33 @@ function actorRow({ key, title, subtitle, resolution, record, tag }) {
   });
   controls.appendChild(fieldBlock("Speed", speedInput, resolution ? resolution.speedFrom : null));
 
+  // This speaker's own fader, 0..200%: voices are not equally loud at the source,
+  // so a quiet one can be boosted to MATCH. It multiplies the master, never
+  // overrides it -- the label says what will actually play.
+  const volumeInput = document.createElement("input");
+  volumeInput.type = "range";
+  volumeInput.min = "0";
+  volumeInput.max = "2";
+  volumeInput.step = "0.05";
+  const volumeValue = resolution ? resolution.volume : record && record.volume;
+  volumeInput.value = String(volumeValue == null ? 1 : volumeValue);
+  const volumeLabel = () => {
+    const own = Math.round(Number(volumeInput.value) * 100);
+    const master = resolution && typeof resolution.masterVolume === "number" ? resolution.masterVolume : 1;
+    const muted = resolution && resolution.muted === true;
+    return muted ? `Volume ${own}% (room muted)` : `Volume ${own}% → plays at ${Math.round(own * master)}%`;
+  };
+  const volumeBlock = fieldBlock(volumeLabel(), volumeInput, resolution ? resolution.volumeFrom : null);
+  volumeInput.addEventListener("input", () => {
+    const lbl = volumeBlock.querySelector("label");
+    if (lbl) lbl.textContent = volumeLabel();
+  });
+  volumeInput.addEventListener("change", () => {
+    void call(window.aitherCast.setActor(key, { volume: numOrNull(volumeInput.value) }), "Volume");
+    void refresh();
+  });
+  controls.appendChild(volumeBlock);
+
   const presenceSelect = document.createElement("select");
   for (const level of PRESENCE_LEVELS) {
     const opt = el("option", null, level);
@@ -334,6 +379,17 @@ function actorRow({ key, title, subtitle, resolution, record, tag }) {
   });
   bodyLabel.append(bodyBox, document.createTextNode("body"));
   controls.appendChild(bodyLabel);
+
+  const bubbleLabel = el("label", "ck");
+  const bubbleBox = document.createElement("input");
+  bubbleBox.type = "checkbox";
+  bubbleBox.checked = (resolution ? resolution.bubble : record && record.bubble) !== false;
+  bubbleBox.addEventListener("change", () => {
+    void call(window.aitherCast.setActor(key, { bubble: bubbleBox.checked }), "Bubble");
+    void refresh();
+  });
+  bubbleLabel.append(bubbleBox, document.createTextNode("bubble"));
+  controls.appendChild(bubbleLabel);
 
   const clear = el("button", "chip small danger", "Clear override");
   clear.addEventListener("click", async () => {
@@ -479,6 +535,45 @@ function textField(labelText, value, placeholder, onSave) {
   return wrap;
 }
 
+/** A fader. The readout follows the thumb live (`input`); the WRITE happens on
+ *  release (`change`) -- a write per pixel of drag would rewrite cast.json, and
+ *  wake its watcher, dozens of times a second. `null` = back to the tier below. */
+function sliderField(labelText, value, builtin, opts, onSave, fromText) {
+  const wrap = el("div", "field");
+  wrap.appendChild(el("label", null, labelText));
+  const row = el("div", "controls");
+  const input = document.createElement("input");
+  input.type = "range";
+  input.min = String(opts.min);
+  input.max = String(opts.max);
+  input.step = String(opts.step);
+  const shown = value === null || value === undefined ? builtin : value;
+  input.value = String(shown);
+  const readout = el("span", "from", `${Math.round(Number(shown) * 100)}%`);
+  input.addEventListener("input", () => { readout.textContent = `${Math.round(Number(input.value) * 100)}%`; });
+  input.addEventListener("change", () => onSave(numOrNull(input.value)));
+  const clear = el("button", "chip small", "✕");
+  clear.title = "reset to the tier below";
+  clear.addEventListener("click", () => onSave(null));
+  row.append(input, readout, clear);
+  wrap.appendChild(row);
+  if (fromText) wrap.appendChild(el("div", "from", fromText));
+  return wrap;
+}
+
+function checkField(labelText, text, checked, onSave) {
+  const wrap = el("div", "field");
+  wrap.appendChild(el("label", null, labelText));
+  const label = el("label", "ck");
+  const box = document.createElement("input");
+  box.type = "checkbox";
+  box.checked = checked;
+  box.addEventListener("change", () => onSave(box.checked));
+  label.append(box, document.createTextNode(text));
+  wrap.appendChild(label);
+  return wrap;
+}
+
 function renderStage() {
   const grid = document.getElementById("stageGrid");
   grid.replaceChildren();
@@ -497,6 +592,8 @@ function renderStage() {
     { min: 250, step: 50 }, (v) => save({ pollMs: v })));
   grid.appendChild(textField("Resident override", stage.resident, "(live .active-character)",
     (v) => save({ resident: v })));
+  grid.appendChild(checkField("Speech bubbles", "show what each avatar says over its head (stays on while muted)",
+    stage.bubbles !== false, (v) => save({ bubbles: v })));
 }
 
 function renderVoice() {
@@ -512,6 +609,13 @@ function renderVoice() {
   // wipe the other two fields sitting beside it.
   const saveEndpoint = (field, v) => save({ endpoint: { ...endpoint, [field]: v } });
   const saveFilter = (field, v) => save({ speechFilter: { ...speechFilter, [field]: v } });
+
+  // Loudness first: it is the control the owner reaches for most. Master x each
+  // speaker's own fader (set per actor above) is what actually plays.
+  grid.appendChild(sliderField("Master volume", voice.volume, VOICE_DEFAULT.volume,
+    { min: 0, max: 1, step: 0.05 }, (v) => save({ volume: v })));
+  grid.appendChild(checkField("Mute everyone", "silence the whole room; speech bubbles keep showing the words",
+    voice.muted === true, (v) => save({ muted: v })));
 
   const voiceWrap = el("div", "field");
   voiceWrap.appendChild(el("label", null, "Default voice"));
@@ -553,6 +657,92 @@ function renderVoice() {
   grid.appendChild(allowWrap);
 }
 
+function areaField(labelText, value, placeholder, fromText, onSave) {
+  const wrap = el("div", "field");
+  wrap.appendChild(el("label", null, labelText));
+  const input = document.createElement("textarea");
+  input.rows = 3;
+  input.placeholder = String(placeholder);
+  input.value = value || "";
+  input.addEventListener("change", () => onSave(input.value.trim() || null));
+  wrap.appendChild(input);
+  if (fromText) wrap.appendChild(el("div", "from", fromText));
+  return wrap;
+}
+
+/** A text field that also shows WHERE the value in force comes from. */
+function sourcedText(labelText, value, placeholder, fromText, onSave) {
+  const wrap = textField(labelText, value, placeholder, onSave);
+  if (fromText) wrap.appendChild(el("div", "from", fromText));
+  return wrap;
+}
+
+function renderDesk() {
+  const grid = document.getElementById("deskGrid");
+  grid.replaceChildren();
+  const snapshot = (last && last.snapshot) || {};
+  const resolved = (last && last.desk) || {};
+  const models = snapshot.models || {};
+  const prompts = snapshot.prompts || {};
+  const vision = snapshot.vision || {};
+  const rm = resolved.models || {};
+  const rv = resolved.vision || {};
+  const save = (section, patch) => {
+    void call(window.aitherCast.setSection(section, patch), section).then(() => refresh());
+  };
+
+  grid.appendChild(sourcedText("Command agent backend", models.commandProfile, rm.commandProfile || "deepseek",
+    rm.commandProfileFrom ? `in force: ${rm.commandProfile} (${rm.commandProfileFrom})` : null,
+    (v) => save("models", { commandProfile: v })));
+  grid.appendChild(areaField("Command agent persona", prompts.commandPersona,
+    "e.g. You are Aither, the operator of this machine.",
+    "added BEFORE the built-in instruction; it cannot replace the decision-card rule",
+    (v) => save("prompts", { commandPersona: v })));
+  grid.appendChild(areaField("Extra instructions", prompts.commandAppend,
+    "e.g. Keep the final summary under 60 words.",
+    "added AFTER the built-in instruction",
+    (v) => save("prompts", { commandAppend: v })));
+  grid.appendChild(checkField("Vision", "look at images and video frames dropped on the avatar",
+    (rv.enabled !== undefined ? rv.enabled : vision.enabled) !== false,
+    (v) => save("vision", { enabled: v })));
+  grid.appendChild(areaField("What to look for", vision.imagePrompt,
+    "(the built-in description prompt)", null,
+    (v) => save("vision", { imagePrompt: v })));
+}
+
+function syncLine(label, row) {
+  if (!row) return `${label}: not run yet`;
+  // First line only: the CLI's output can be several, and this is one status row.
+  const firstLine = String(row.output || "").split(/\r?\n/)[0];
+  const detail = firstLine ? ` — ${firstLine}` : "";
+  return `${label}: ${row.verdict}${detail} (${row.at || ""})`;
+}
+
+function renderSync() {
+  const grid = document.getElementById("syncGrid");
+  grid.replaceChildren();
+  const sync = (last && last.snapshot && last.snapshot.sync) || {};
+  const status = (last && last.sync) || null;
+  const stateEl2 = document.getElementById("syncState");
+  stateEl2.textContent = !status
+    ? "sync status unavailable"
+    : status.enabled
+      ? `on → ${status.target} · ${syncLine("pull", status.pull)} · ${syncLine("push", status.push)}`
+      : `off — ${status.reason}`;
+  const save = (patch) => { void call(window.aitherCast.setSection("sync", patch), "Sync").then(() => refresh()); };
+
+  grid.appendChild(checkField("Sync", "keep this cast in step with my other machines", sync.enabled === true,
+    (v) => save({ enabled: v })));
+  grid.appendChild(textField("Profile file", sync.profile, "D:/Dropbox/awsettings.json", (v) => save({ profile: v })));
+  grid.appendChild(textField("Profile URL", sync.url, "https://…/api/settings/preferences", (v) => save({ url: v })));
+  grid.appendChild(textField("Bearer token FILE (a path, never the token)", sync.tokenFile, "~/.aither/session-bearer",
+    (v) => save({ tokenFile: v })));
+  grid.appendChild(checkField("On start", "pull when the desk starts", sync.pullOnStart !== false,
+    (v) => save({ pullOnStart: v })));
+  grid.appendChild(checkField("On change", "push a few seconds after a setting changes", sync.pushOnChange !== false,
+    (v) => save({ pushOnChange: v })));
+}
+
 // ─── refresh loop ─────────────────────────────────────────────────────────
 
 async function refresh() {
@@ -570,6 +760,8 @@ async function refresh() {
   renderWhoMaySpeak();
   renderStage();
   renderVoice();
+  renderDesk();
+  renderSync();
 }
 
 document.getElementById("refresh").addEventListener("click", () => void refresh());

@@ -114,10 +114,10 @@ function cleanupStage(host) {
 }
 
 /** The image lane: gemma4-12b sees the staged file (or a video's first frame). */
-async function analyzeImage(containerPath, call) {
+async function analyzeImage(containerPath, call, prompt = IMAGE_PROMPT) {
   const text = await call("analyze_image_content", {
     image_path: containerPath,
-    prompt: IMAGE_PROMPT,
+    prompt: prompt || IMAGE_PROMPT,
   });
   const parsed = parseMaybeJson(text);
   const summary = typeof parsed === "string" ? parsed
@@ -312,10 +312,20 @@ async function routeDrop({ filePath, mime = "" }, deps = {}) {
         reason: `I don't know what to do with ${ext || "that file"} — drop an image, audio, video, or document (pdf/docx/pptx/xlsx/txt/md)`,
       };
     }
+    // cast.json's vision section (desk-settings.cjs). Checked BEFORE staging: a
+    // look that is switched off must not copy the owner's file anywhere first.
+    // `deps.deskSettings` is the test seam; production reads the live file.
+    const vision = ((deps.deskSettings || require("./desk-settings.cjs").current)() || {}).vision || {};
+    if ((kind === "image" || kind === "video") && vision.enabled === false) {
+      return {
+        ok: false,
+        reason: `vision is switched off (${vision.enabledFrom || "cast.json vision.enabled"}) — turn it on in the Cast pane to have me look at ${kind === "video" ? "videos" : "images"}`,
+      };
+    }
     const staged = stagePath(filePath);
     try {
       if (kind === "image") {
-        const summary = await analyzeImage(staged.container, call);
+        const summary = await analyzeImage(staged.container, call, vision.imagePrompt);
         if (!summary || /^error/i.test(summary)) {
           return { ok: false, reason: `vision could not read it: ${summary.slice(0, 200) || "no answer"}` };
         }
@@ -334,7 +344,7 @@ async function routeDrop({ filePath, mime = "" }, deps = {}) {
           LIBRARY_CONTAINER, DROP_REL.replace(/\\/g, "/"), path.basename(frameHost));
         let summary;
         try {
-          summary = await analyzeImage(frameContainer, call);
+          summary = await analyzeImage(frameContainer, call, vision.imagePrompt);
         } finally {
           cleanupStage(frameHost);
         }

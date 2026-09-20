@@ -343,6 +343,9 @@ let relayFeedTimer = null;
 let roomFeed = [];
 let roomFeedTimer = null;
 let roomPublisher = null;
+/** cast.json <-> the owner's other machines (settings-sync.cjs). Null until
+ *  app.whenReady; OFF unless cast.json's own `sync` section turns it on. */
+let settingsSync = null;
 let relayPoller = null;
 let decisionWatchStop = null;
 let hyprlandConfigured = false;
@@ -837,6 +840,8 @@ function roomStageDeps() {
     sendToRenderer: emitToRenderer,
     log: (...args) => debugLog(...args),
     env: process.env,
+    // Read at CALL time for the same reason roomPublisher is: null until ready.
+    syncStatus: () => (settingsSync ? settingsSync.status() : null),
   };
 }
 
@@ -2822,6 +2827,20 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
     const commandAgent = getCommandAgent(getFleetControl());
     roomPublisher = new RoomPublisher();
     startRoomStage();
+    // Never awaited and never able to throw into launch: offline is the normal
+    // state of a laptop, and a sync that can delay the desk coming up is worse
+    // than no sync. The Cast pane shows whatever it ended with.
+    try {
+      const { createSettingsSync } = require("./settings-sync.cjs");
+      settingsSync = createSettingsSync({
+        castFile: () => require("./cast-config.cjs").CAST_FILE(),
+        settings: () => require("./desk-settings.cjs").current(),
+        log: (...args) => debugLog(...args),
+      });
+      void settingsSync.start().catch((error) => debugLog("settings sync start failed", error?.message || error));
+    } catch (error) {
+      debugLog("settings sync unavailable", error?.message || error);
+    }
     roomPublisher.attach(commandAgent, {
       actorFor: (p) => (/^relay:/.test(String(p.source || ""))
         ? { kind: "human", id: RELAY_NICK, name: RELAY_NICK }
@@ -2920,6 +2939,7 @@ app.on("before-quit", () => {
   clearTimeout(hyprlandConfigurationTimer);
   if (relayFeedTimer) clearInterval(relayFeedTimer);
   decisionWatchStop?.();
+  settingsSync?.stop();
   audioListener?.stop();
   globalShortcut.unregisterAll();
   void bridge?.close().catch((error) => debugLog("integration server close failed", error));

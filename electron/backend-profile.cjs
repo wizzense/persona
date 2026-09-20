@@ -35,7 +35,18 @@ function helperPath() {
     || "C:\\AitherOS-Fresh\\tools\\claude-backend\\claude-backend.ps1";
 }
 
+/** cast.json `models.commandProfile`, then the legacy AWDESK_CLAUDE_PROFILE, then
+ *  "deepseek" -- resolved (and VALIDATED: this string becomes an argument to the
+ *  helper script) by cast-config. Read per call, so a change in the Cast pane or
+ *  a sync pull moves the very next Command run; the resolved-env cache below is
+ *  keyed on the profile, so switching never serves the old backend's env. */
 function profileName() {
+  try {
+    const name = require("./desk-settings.cjs").current().models.commandProfile;
+    if (name) return name;
+  } catch {
+    /* fall through to the pre-existing behaviour */
+  }
   return process.env.AWDESK_CLAUDE_PROFILE || "deepseek";
 }
 
@@ -56,14 +67,23 @@ class BackendResolver {
     if (process.env.AWDESK_BACKEND_RESOLVE === "0") {
       return { ok: false, profile: profileName(), env: {}, note: "disabled by AWDESK_BACKEND_RESOLVE=0" };
     }
-    if (this._cached && this.now() - this._cached.at < this._cached.ttl) return this._cached.result;
-    if (!this._inflight) {
-      this._inflight = this._resolveOnce()
+    // Keyed on the PROFILE, not just on time. The profile is now a setting the
+    // owner changes from the Cast pane; a time-only cache would go on handing out
+    // the previous backend's env -- base URL, model AND token -- for up to half an
+    // hour after the switch, which reads as "the setting does nothing".
+    const wanted = profileName();
+    if (this._cached && this._cached.profile === wanted && this.now() - this._cached.at < this._cached.ttl) {
+      return this._cached.result;
+    }
+    if (!this._inflight || this._inflightProfile !== wanted) {
+      this._inflightProfile = wanted;
+      const flight = this._resolveOnce()
         .then((result) => {
-          this._cached = { at: this.now(), ttl: result.ok ? this.ttlMs : FAILURE_TTL_MS, result };
+          this._cached = { at: this.now(), ttl: result.ok ? this.ttlMs : FAILURE_TTL_MS, result, profile: wanted };
           return result;
         })
-        .finally(() => { this._inflight = null; });
+        .finally(() => { if (this._inflight === flight) this._inflight = null; });
+      this._inflight = flight;
     }
     return this._inflight;
   }

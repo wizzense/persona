@@ -334,10 +334,19 @@ class CommandAgent extends EventEmitter {
       });
     }
     return new Promise((resolve, reject) => {
-      const systemPrompt =
+      // The built-in is the floor and is never replaceable: cast.json's
+      // prompts.commandPersona / commandAppend are added AROUND it (see
+      // desk-settings.cjs), so a persona cannot delete the decision-card rule.
+      const builtinPrompt =
         `You are dispatched from the awdesk Command window by the owner. ` +
         `You must finish without asking questions unless you raise a decision card via the awdk decisions daemon (http://127.0.0.1:8362). ` +
         `End with a 3-line summary of what was done.`;
+      let systemPrompt;
+      try {
+        systemPrompt = require("./desk-settings.cjs").commandSystemPrompt(builtinPrompt);
+      } catch {
+        systemPrompt = builtinPrompt;
+      }
 
       const args = [
         "-p",
