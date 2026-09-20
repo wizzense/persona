@@ -117,3 +117,38 @@ describe('authored placement (place-avatar)', () => {
     expect(authoredFields(bare)).toEqual({});
   });
 });
+
+// Overlap regression, owner-reported 2026-09-19: "clicking and interacting when
+// multiple avatars overlap tends to make all but one disappear". A body that had
+// never been dragged carried no stored layout entry, Scene's defaultTransform
+// dropped it from `occupied`, and every such body resolved to the SAME first free
+// spot -- perfectly stacked, one raycast target, the rest unreachable. This pins
+// the rule the fix restores: each unplaced body in turn takes a DIFFERENT spot,
+// because the ones decided before it are already occupied.
+describe('successive unplaced bodies', () => {
+  it('never resolve to the same spot', () => {
+    // The stage holds the resident plus candidateSpots(POSITION_BOUND) bodies --
+    // two here (+-STAGE_STEP), which is exactly maxBodies=3. Past that freeSpot
+    // documents a least-crowded fallback, so the invariant is "every body the
+    // stage CAN separate is separated", not "infinitely many distinct spots".
+    const capacity = candidateSpots(POSITION_BOUND).length;
+    const occupied: number[] = [0];
+    const taken: number[] = [];
+    for (let i = 0; i < capacity; i += 1) {
+      const x = freeSpot(occupied, POSITION_BOUND);
+      taken.push(x);
+      occupied.push(x);
+    }
+    expect(capacity).toBeGreaterThan(1);
+    expect(new Set(taken).size).toBe(taken.length);
+    for (const x of taken) expect(Math.abs(x)).toBeGreaterThanOrEqual(STAGE_MIN_GAP);
+  });
+
+  it('is what the OLD code failed: reusing one occupied list gives one spot', () => {
+    // The defect, expressed: when each body computes against the same list
+    // (because unplaced siblings were filtered out), they all get one answer.
+    const stale = [0];
+    const taken = [freeSpot(stale, POSITION_BOUND), freeSpot(stale, POSITION_BOUND)];
+    expect(taken[0]).toBe(taken[1]);
+  });
+});
