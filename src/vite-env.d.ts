@@ -63,7 +63,13 @@ type AvatarBridgeEvent =
     }
   // Drop-to-avatar (2026-08-29): main TTS'd the drop verdict and hands the
   // audio over for playback + lip sync in the avatar window.
-  | { type: 'speak'; audioBase64: string; slotId?: string }
+  // `volume` is cast.json's master x actor fader, already multiplied (0..2).
+  // Optional: an absent value plays at full volume (see speech-gain.ts).
+  | { type: 'speak'; audioBase64: string; slotId?: string; volume?: number }
+  // The words over the speaker's head. Arrives WITH a speak event when there is
+  // audio, and ALONE when there is none (muted, or the voice service is down):
+  // `muted` means "there is no clip to time this against".
+  | { type: 'bubble'; slotId?: string; text: string; muted?: boolean; durationMs?: number }
   // Plan 40 slice C ("I also want to be able to talk back"): main asks the avatar
   // window to open the mic, because that window is up whenever the overlay is --
   // the deck's chat box was the only place the owner could speak from before.

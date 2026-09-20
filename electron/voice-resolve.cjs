@@ -107,6 +107,9 @@ function matchedTier(resolution) {
     resolution.voiceFrom,
     resolution.speedFrom,
     resolution.bodyFrom,
+    // A record that authors ONLY a fader is still a configured origin; without
+    // this it would be re-noted as "seen but silent" on every line it speaks.
+    resolution.volumeFrom,
   ];
   return froms.some((from) => typeof from === "string" && /^(actors\[|channels\[|authors\.)/.test(from));
 }
@@ -153,6 +156,9 @@ function resolveSpeech(ctx = {}) {
       voiceFrom: resolution.voiceFrom,
       speedFrom: resolution.speedFrom,
       maxCharsFrom: resolution.maxCharsFrom,
+      volumeFrom: resolution.volumeFrom,
+      masterVolumeFrom: resolution.masterVolumeFrom,
+      mutedFrom: resolution.mutedFrom,
     };
 
     if (!resolution.voiced) {
@@ -162,6 +168,8 @@ function resolveSpeech(ctx = {}) {
         voice: resolution.voice,
         speed: resolution.speed,
         maxChars: resolution.maxChars,
+        volume: resolution.effectiveVolume,
+        caption: resolution.captioned,
         provenance,
       };
     }
@@ -172,6 +180,10 @@ function resolveSpeech(ctx = {}) {
       voice: resolution.voice,
       speed: resolution.speed,
       maxChars: resolution.maxChars,
+      // master x actor, already multiplied: the renderer applies ONE number
+      // and never learns the config shape.
+      volume: resolution.effectiveVolume,
+      caption: resolution.captioned,
       provenance,
     };
   } catch (error) {
@@ -183,6 +195,9 @@ function resolveSpeech(ctx = {}) {
       voice: "nova",
       speed: null,
       maxChars: 2000,
+      volume: 1,
+      // Fail open for the caption too: a gate bug must not hide the words.
+      caption: true,
       provenance: { key: null, slotId, error: String(error && error.message ? error.message : error) },
     };
   }
