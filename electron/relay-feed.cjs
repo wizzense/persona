@@ -77,24 +77,7 @@ const DETAIL_NO_HUMANITY = "no humanity attestation on this machine -- take the 
 
 // The AitherNet CA chain, same file the python services trust
 // (lib/security/TLSConfig.py -> Library/Data/tls/ca-chain.pem).
-function relayCa() {
-  const candidates = [];
-  if (process.env.AITHEROS_ROOT) {
-    candidates.push(path.join(process.env.AITHEROS_ROOT, "Library", "Data", "tls", "ca-chain.pem"));
-  }
-  candidates.push(
-    "C:\\AitherOS-Data\\Library\\Data\\tls\\ca-chain.pem",
-    "C:\\AitherOS-Fresh\\AitherOS\\Library\\Data\\tls\\ca-chain.pem",
-  );
-  for (const p of candidates) {
-    try {
-      if (fs.existsSync(p)) return { ca: fs.readFileSync(p) };
-    } catch {
-      // an unreadable candidate is simply not the CA — try the next
-    }
-  }
-  return {};
-}
+const { internalCaOptions: relayCa } = require("./internal-ca.cjs");
 
 /**
  * One JSON request as the owner. `urlPath` is relay-relative ("/v1/...") or
