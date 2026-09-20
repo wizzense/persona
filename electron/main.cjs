@@ -2211,6 +2211,13 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
           });
         }
         if (avatarSlots.size > 0) debugLog("replayed avatar slots", avatarSlots.size);
+      }
+      // The snapshot the renderer asked for is the LAST STATE event; capture it
+      // before the physics replay below, which goes through emitToRenderer and
+      // would otherwise overwrite it with a tune-avatar the renderer's
+      // `type === "state"` check ignores -- leaving the voice state unset.
+      const snapshot = latestEvent;
+      if (avatarWindow && !avatarWindow.isDestroyed()) {
         // The physics knobs live only in cast.json + this process (never in
         // the renderer's storage), so a fresh renderer is told them here, for
         // the resident and every slot just replayed. Same no-race argument.
