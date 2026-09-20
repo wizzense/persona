@@ -151,7 +151,7 @@ const { parseProtocolUrl, voiceState } = require("./protocol-actions.cjs");
 const {
   ROSTER_DIR,
   getRecentCharacters,
-  enrollNewestDownload,
+  enrollNewestDownloadChecked,
   getActiveCharacter,
   installCharacter,
   planSlotInstall,
@@ -211,6 +211,15 @@ try {
 } catch (error) {
   console.warn("[desk] voice-resolve.cjs not present yet (U06) -- speakAloud is ungated:", error?.message || error);
 }
+// The safety funnel. Guarded like the gate above: a missing module leaves speech
+// UNFILTERED rather than mute, which is the same trade voice-resolve.cjs makes.
+let safetyGate = null;
+try {
+  safetyGate = require("./safety-gate.cjs");
+} catch (error) {
+  console.warn("[desk] safety-gate.cjs not present -- output is unfiltered:", error?.message || error);
+}
+
 
 /** "Detach to own window" — pull one extra avatar out of the shared canvas into its own
  *  real, separately-draggable/resizable OS window. See detached-avatar-window.cjs. */
@@ -763,15 +772,33 @@ async function speakAloud(text, voice = "nova", speed = undefined, slotId = "slo
       if (typeof gate.volume === "number" && Number.isFinite(gate.volume)) effectiveVolume = gate.volume;
     }
   }
-  const tts = await synthesizeVerdict(text, effectiveVoice, { speed: effectiveSpeed, maxChars: effectiveMaxChars });
+  // THE SAFETY FUNNEL, speech half (`.AITHERIUM/CAPABILITY/AVATAR-FORGE-PIPELINE.md` stage
+  // 6). The cast gate above decided WHETHER this origin may be heard; this decides WHAT is
+  // said. AitherSafety filters rather than refusing, so a rewritten line is spoken in its
+  // filtered form: muting here would be a gate that gets switched off, and an unreachable
+  // safety plane must not silence the fleet (safety-gate.cjs fails open and records it).
+  let spoken = text;
+  if (safetyGate && typeof safetyGate.consultSpeech === "function") {
+    try {
+      const verdict = await safetyGate.consultSpeech(text);
+      if (verdict && typeof verdict.content === "string" && verdict.content) spoken = verdict.content;
+      if (verdict && verdict.changed) debugLog("safety filtered an utterance", origin, verdict.level);
+      if (verdict && verdict.reachable === false) debugLog("safety plane unreachable", verdict.reason);
+    } catch (error) {
+      debugLog("safety gate threw; speaking unfiltered", error?.message || error);
+    }
+  }
+  const tts = await synthesizeVerdict(spoken, effectiveVoice, { speed: effectiveSpeed, maxChars: effectiveMaxChars });
   if (!tts.ok) {
     // A dead voice service takes the audio, not the words.
-    const shown = captioned ? sendBubble(slotId, text, { muted: true }) : 0;
+    const shown = captioned ? sendBubble(slotId, spoken, { muted: true }) : 0;
     return { ok: false, reason: tts.reason || "voice service unavailable", captioned: shown > 0 };
   }
   // Sent WITH the audio, after synthesis, so the caption appears as the mouth
   // starts moving rather than seconds ahead of it.
-  if (captioned) sendBubble(slotId, text, { durationMs: tts.durationMs || 0 });
+  // The caption shows what was SAID, i.e. the filtered text -- a bubble carrying the
+  // unfiltered line would put the words on screen that the funnel just took out of the audio.
+  if (captioned) sendBubble(slotId, spoken, { durationMs: tts.durationMs || 0 });
   let delivered = 0;
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {
@@ -1352,10 +1379,12 @@ function buildCharacterMenu() {
     { label: "Get a model from VRoid Hub…", click: openVroidHub },
     {
       label: "Enroll newest Downloads .vrm",
-      click: () => {
-        const name = enrollNewestDownload();
-        if (name) applyCharacter(name);
-        else debugLog("no .vrm found in Downloads to enroll");
+      click: async () => {
+        // Through the safety funnel: a downloaded VRM is an outside artifact, and its
+        // name becomes the roster folder, the cast binding and the guide key.
+        const result = await enrollNewestDownloadChecked();
+        if (result.ok) applyCharacter(result.name);
+        else debugLog("enrollment refused or unavailable:", result.reason);
       },
     },
     {
@@ -2382,10 +2411,11 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
           const addMenu = Menu.buildFromTemplate([
             {
               label: "Enroll newest Downloads .vrm",
-              click: () => {
-                const name = enrollNewestDownload();
-                if (name) applyCharacter(name);
-                else debugLog("no .vrm found in Downloads to enroll");
+              click: async () => {
+                // Same funnel as the tray path: the verdict comes before the copy.
+                const result = await enrollNewestDownloadChecked();
+                if (result.ok) applyCharacter(result.name);
+                else debugLog("enrollment refused or unavailable:", result.reason);
               },
             },
             { label: "Get a model from VRoid Hub…", click: openVroidHub },

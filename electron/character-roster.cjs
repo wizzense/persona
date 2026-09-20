@@ -129,8 +129,12 @@ function installCharacter(name) {
   return true;
 }
 
-/** Enroll the newest .vrm from Downloads into the roster; returns its roster name. */
-function enrollNewestDownload(preferredName = null) {
+/** Decide WHAT would be enrolled, writing nothing: `{ base, from }` or null.
+ *
+ *  Split out from `enrollNewestDownload` on 2026-09-19 so the safety funnel has a
+ *  point to refuse AT. A verdict that arrives after the bytes are copied is not a
+ *  gate, it is a log line. */
+function planEnrollment(preferredName = null) {
   const downloads = path.join(os.homedir(), "Downloads");
   let candidates;
   try {
@@ -155,10 +159,77 @@ function enrollNewestDownload(preferredName = null) {
       .replace(/^-+|-+$/g, "")
       .toLowerCase() ||
     "character";
-  const dir = path.join(ROSTER_DIR, base);
+  return { base, from: newest.full };
+}
+
+/** Do the copy a plan describes; returns the roster name. */
+function performEnrollment(plan) {
+  if (!plan || !plan.base || !plan.from) return null;
+  const dir = path.join(ROSTER_DIR, plan.base);
   fs.mkdirSync(dir, { recursive: true });
-  fs.copyFileSync(newest.full, path.join(dir, "model.vrm"));
-  return base;
+  fs.copyFileSync(plan.from, path.join(dir, "model.vrm"));
+  return plan.base;
+}
+
+/** Enroll the newest .vrm from Downloads into the roster; returns its roster name.
+ *  Unchecked: kept for callers that already hold a verdict. New UI paths use
+ *  `enrollNewestDownloadChecked`. */
+function enrollNewestDownload(preferredName = null) {
+  return performEnrollment(planEnrollment(preferredName));
+}
+
+/** The SAFETY-FUNNELLED enrollment path (`.AITHERIUM/CAPABILITY/AVATAR-FORGE-PIPELINE.md`
+ *  stage 6: "consulted at the two places output becomes visible").
+ *
+ *  A downloaded VRM is an outside artifact entering the roster under a name that becomes
+ *  the folder, the cast binding and the Dark Matters guide key — so the name is asked
+ *  about BEFORE any byte is copied. A refusal writes nothing and says why; an unreachable
+ *  safety plane enrolls anyway and records `degraded` (see safety-gate.cjs: refusing every
+ *  enrollment while a container restarts would be an outage this funnel invented).
+ *
+ *  @returns {{ok: boolean, name: string|null, reason: string|null, verdict: object|null}}
+ */
+async function enrollNewestDownloadChecked(preferredName = null, options = {}) {
+  // `plan` and `perform` are TEST SEAMS: production passes neither, so a box with no .vrm in
+  // Downloads cannot make the refusal path untestable (it did — the first version of the
+  // test passed for the wrong reason, reporting "nothing to enroll" as a refusal).
+  const plan = options.plan || planEnrollment(preferredName);
+  if (!plan) return { ok: false, name: null, reason: "no .vrm found in Downloads to enroll", verdict: null };
+
+  let verdict = null;
+  const consult = options.consultInstall || safetyConsultInstall();
+  if (consult) {
+    try {
+      verdict = await consult(plan.base, options.safety || {});
+    } catch (error) {
+      // Fails OPEN like the speech half: a bug in the funnel must not make enrolling a
+      // model impossible, and an unhandled rejection in a menu click handler is invisible.
+      verdict = {
+        allow: true,
+        changed: false,
+        reachable: false,
+        reason: `safety gate threw: ${error && error.message ? error.message : error}`,
+      };
+    }
+    if (verdict && verdict.allow === false) {
+      return { ok: false, name: null, reason: verdict.reason || "refused by the safety plane", verdict };
+    }
+  }
+  const perform = options.perform || performEnrollment;
+  const name = perform(plan);
+  if (!name) return { ok: false, name: null, reason: "the copy into the roster failed", verdict };
+  return { ok: true, name, reason: null, verdict };
+}
+
+/** Guarded require, the same shape main.cjs uses for voice-resolve: a missing or broken
+ *  gate module must not take the enrollment path down with it. */
+function safetyConsultInstall() {
+  try {
+    const gate = require("./safety-gate.cjs");
+    return typeof gate.consultInstall === "function" ? gate.consultInstall : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Where a spawned slot's model comes from and where it must land -- decided
@@ -233,6 +304,9 @@ module.exports = {
   ROSTER_DIR,
   getRecentCharacters,
   enrollNewestDownload,
+  enrollNewestDownloadChecked,
+  planEnrollment,
+  performEnrollment,
   getActiveCharacter,
   installCharacter,
   copyIfChanged,
