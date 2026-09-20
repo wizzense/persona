@@ -2220,7 +2220,7 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
           debugLog("replayPhysics failed", error?.message || error);
         }
       }
-      return latestEvent;
+      return snapshot;
     });
     ipcMain.on("desk:hide", () => void hideOverlay());
 
