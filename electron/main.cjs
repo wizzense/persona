@@ -2955,7 +2955,14 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
 
     if (!startInBackground) {
       createWindow();
-      showOverlay({ focus: true });
+      // INACTIVE at launch. Nobody is waiting to type into the avatar when it
+      // comes up: it is started by the logon shim, by restart_persona.py, or by
+      // a peer session rebuilding it -- measured 2026-09-20, the fresh Desk
+      // window took the foreground on every relaunch, in the middle of the
+      // owner's typing ("stealing context"). The window is alwaysOnTop, so it
+      // is seen either way; the owner's own gestures (tray "Show avatar", a
+      // second launch, macOS activate) still pass { focus: true } below.
+      showOverlay();
     }
     if (deckIsRequested) createDeckWindow();
     if (consoleIsRequested) openConsole();
