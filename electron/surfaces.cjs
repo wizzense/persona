@@ -19,11 +19,9 @@
  * .claude/rules/aitheros-dispatch.md — so its row IS the gateway's health.
  */
 
-const fs = require("node:fs");
 const http = require("node:http");
 const os = require("node:os");
 const https = require("node:https");
-const path = require("node:path");
 
 // Doors every install has: its own loopback front doors.
 const LOCAL_SURFACES = [
@@ -68,24 +66,7 @@ const SURFACES = [...loadOperatorSurfaces(), ...LOCAL_SURFACES];
 
 const OPENABLE = new Set(SURFACES.map((s) => s.open));
 
-function internalCa() {
-  const candidates = [];
-  if (process.env.AITHEROS_ROOT) {
-    candidates.push(path.join(process.env.AITHEROS_ROOT, "Library", "Data", "tls", "ca-chain.pem"));
-  }
-  candidates.push(
-    "C:\\AitherOS-Data\\Library\\Data\\tls\\ca-chain.pem",
-    "C:\\AitherOS-Fresh\\AitherOS\\Library\\Data\\tls\\ca-chain.pem",
-  );
-  for (const p of candidates) {
-    try {
-      if (fs.existsSync(p)) return fs.readFileSync(p);
-    } catch {
-      /* next candidate */
-    }
-  }
-  return undefined;
-}
+const { internalCaBuffer: internalCa } = require("./internal-ca.cjs");
 
 /** GET a URL; resolve { status, body, ms } — status 0 on any transport failure. */
 function defaultRequest(url, { timeoutMs = 3000, ca } = {}) {

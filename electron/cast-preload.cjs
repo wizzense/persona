@@ -27,6 +27,8 @@ contextBridge.exposeInMainWorld("aitherCast", {
   setStage: (patch) => ipcRenderer.invoke("desk:cast-set-stage", patch || {}),
   /** Merge `patch` into `voice` (defaultVoice, defaultSpeed, maxChars, endpoint, speechFilter, affectIntensity). */
   setVoice: (patch) => ipcRenderer.invoke("desk:cast-set-voice", patch || {}),
+  /** models / prompts / vision / sync -- the list is enforced in main, not here. */
+  setSection: (section, patch) => ipcRenderer.invoke("desk:cast-set-section", String(section || ""), patch || {}),
   /** Merge `patch` into `channels[channel]` (voiced, presence). */
   setChannel: (channel, patch) => ipcRenderer.invoke("desk:cast-set-channel", String(channel || ""), patch || {}),
   /** Pin every on-stage actor's CURRENT resolved place into `actors[key].place`. */

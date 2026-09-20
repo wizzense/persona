@@ -405,6 +405,81 @@ const CHANNEL_FIELDS = Object.freeze({
   presence: (v) => vEnum(v, PRESENCE_LEVELS),
 });
 
+// ─── the desk's OWN behaviour: which model, which words, which eyes ─────────
+// Each of these existed already -- as an environment variable nobody could
+// author from a pane, or as a string constant in one module. They are in THIS
+// file for the same reason the cast is: one place the owner writes, with a
+// provenance string saying why each value is what it is. None is decoration;
+// every field below names the consumer it changes.
+
+/** A launcher profile id: the shape claude-backend's own table uses. Tight on
+ *  purpose -- this string is handed to a helper script as an ARGUMENT. */
+function vProfile(value) {
+  const verdict = vString(value, { max: 40 });
+  if (!verdict.ok) return verdict;
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(verdict.value)) {
+    return { ok: false, reason: "letters, digits, dot, underscore and dash only" };
+  }
+  return verdict;
+}
+
+function vHttpUrl(value) {
+  const verdict = vString(value, { max: 400 });
+  if (!verdict.ok) return verdict;
+  if (!/^https?:\/\/[^\s]+$/i.test(verdict.value)) return { ok: false, reason: "must be an http(s) URL" };
+  return verdict;
+}
+
+/** models.commandProfile -> backend-profile.cjs: the backend the Command pane's
+ *  agent runs on. Was AWDESK_CLAUDE_PROFILE, which is now the tier below. */
+const MODELS_FIELDS = Object.freeze({
+  commandProfile: vProfile,
+});
+
+/** prompts.* -> command-agent.cjs. Both are ADDED to the built-in instruction,
+ *  never a replacement for it: the built-in carries the "raise a decision card,
+ *  do not ask questions" protocol, and an owner tuning a persona must not be
+ *  able to delete the thing that stops a headless agent from hanging. */
+const PROMPTS_FIELDS = Object.freeze({
+  commandPersona: (v) => vString(v, { max: 400 }),
+  commandAppend: (v) => vString(v, { max: 2000 }),
+});
+
+/** vision.* -> drop-router.cjs's image lane (a dropped picture or a video's
+ *  first frame). `enabled: false` skips the look entirely and says so. */
+const VISION_FIELDS = Object.freeze({
+  enabled: vBool,
+  imagePrompt: (v) => vString(v, { max: 1000 }),
+});
+
+/** sync.* -> settings-sync.cjs. DEVICE-LOCAL by construction: `profile` and
+ *  `tokenFile` are paths on THIS machine, so the sync tool never sends this
+ *  section and refuses one that arrives. Off until the owner turns it on. */
+const SYNC_FIELDS = Object.freeze({
+  enabled: vBool,
+  profile: (v) => vString(v, { max: 400 }),
+  url: vHttpUrl,
+  tokenFile: (v) => vString(v, { max: 400 }),
+  pullOnStart: vBool,
+  pushOnChange: vBool,
+});
+
+const BUILTIN_DESK = Object.freeze({
+  models: Object.freeze({ commandProfile: "deepseek" }),
+  prompts: Object.freeze({ commandPersona: null, commandAppend: null }),
+  vision: Object.freeze({ enabled: true, imagePrompt: null }),
+  sync: Object.freeze({
+    enabled: false, profile: null, url: null, tokenFile: null, pullOnStart: true, pushOnChange: true,
+  }),
+});
+
+const DESK_SECTIONS = Object.freeze({
+  models: MODELS_FIELDS,
+  prompts: PROMPTS_FIELDS,
+  vision: VISION_FIELDS,
+  sync: SYNC_FIELDS,
+});
+
 function pushProblem(problems, prefix, field, raw, verdict) {
   const at = verdict && verdict.at ? `${field}.${verdict.at}` : field;
   problems.push({
@@ -460,11 +535,18 @@ function emptyConfig() {
     authors: {},
     actors: {},
     channels: {},
+    models: {},
+    prompts: {},
+    vision: {},
+    sync: {},
     migratedLegacyAt: null,
   };
 }
 
-const TOP_LEVEL_KEYS = ["version", "stage", "voice", "defaults", "authors", "actors", "channels", "migratedLegacyAt"];
+const TOP_LEVEL_KEYS = [
+  "version", "stage", "voice", "defaults", "authors", "actors", "channels",
+  "models", "prompts", "vision", "sync", "migratedLegacyAt",
+];
 
 /**
  * validateCast — the pure reader of the v1 file shape. Never throws.
@@ -518,6 +600,9 @@ function validateCast(raw) {
   );
   config.voice = voice;
   config.defaults = validateRecord(raw.defaults, ACTOR_FIELDS, "defaults", problems);
+  for (const [section, fields] of Object.entries(DESK_SECTIONS)) {
+    config[section] = validateRecord(raw[section], fields, section, problems);
+  }
 
   // authors: keyed on the lowercased author name, with an optional seats[] for
   // the parallel-session case (two Claude Code tabs of one repo are one author
@@ -994,6 +1079,10 @@ function normaliseSnapshot(snapshot) {
     authors: plainObject(snapshot.authors),
     actors: plainObject(snapshot.actors),
     channels: plainObject(snapshot.channels),
+    models: plainObject(snapshot.models),
+    prompts: plainObject(snapshot.prompts),
+    vision: plainObject(snapshot.vision),
+    sync: plainObject(snapshot.sync),
     migratedLegacyAt: typeof snapshot.migratedLegacyAt === "string" ? snapshot.migratedLegacyAt : null,
   };
 }
@@ -1054,6 +1143,46 @@ function resolveStage(snapshot, { env = process.env } = {}) {
   pick("pollMs", null);
   pick("resident", null);
   pick("bubbles", null);
+  out.problems = problems;
+  return out;
+}
+
+/**
+ * resolveDesk — models / prompts / vision / sync, FIELD BY FIELD, with provenance.
+ *
+ * Order per field: the file, then a legacy environment variable where one
+ * existed (so a box configured the old way keeps working and the pane can SAY
+ * that is why), then the built-in. Same drop-do-not-clamp rule as everything
+ * else here: a bad value costs that one field and lands in problems[].
+ *
+ * @returns {{models, prompts, vision, sync, problems}} -- never throws.
+ */
+const DESK_LEGACY_ENV = Object.freeze({
+  "models.commandProfile": "AWDESK_CLAUDE_PROFILE",
+});
+
+function resolveDesk(snapshot, { env = process.env } = {}) {
+  const cfg = normaliseSnapshot(snapshot);
+  const problems = [];
+  const out = {};
+  for (const [section, fields] of Object.entries(DESK_SECTIONS)) {
+    const resolved = {};
+    for (const field of Object.keys(fields)) {
+      let hit = readField(cfg[section], field, section, problems, fields[field]);
+      const envName = DESK_LEGACY_ENV[`${section}.${field}`];
+      if (!hit && envName) {
+        const raw = env ? env[envName] : undefined;
+        if (raw !== undefined && raw !== null && String(raw).trim() !== "") {
+          const verdict = fields[field](String(raw).trim());
+          if (verdict.ok) hit = { value: verdict.value, from: `env.${envName}` };
+          else problems.push({ path: `env.${envName}`, value: raw, reason: verdict.reason });
+        }
+      }
+      resolved[field] = hit ? hit.value : BUILTIN_DESK[section][field];
+      resolved[`${field}From`] = hit ? hit.from : "builtin";
+    }
+    out[section] = resolved;
+  }
   out.problems = problems;
   return out;
 }
@@ -1536,6 +1665,7 @@ function migrateLegacy({ file = CAST_FILE(), avatarsFile = undefined, now = Date
 module.exports = {
   ACTOR_FIELDS,
   BUILTIN_ACTOR,
+  BUILTIN_DESK,
   BUILTIN_STAGE,
   BUILTIN_VOICE,
   CAST_FILE,
@@ -1562,6 +1692,7 @@ module.exports = {
   originOf,
   readSeen,
   resolveActor,
+  resolveDesk,
   resolveStage,
   resolveVoice,
   seatIndexFor,

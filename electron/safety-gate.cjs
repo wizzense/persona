@@ -56,24 +56,7 @@ const LEVEL_TTL_MS = 60_000;
 const STATUS_FILE = process.env.DESK_SAFETY_STATUS_FILE
   || path.join(os.homedir(), ".aither", "desk-safety-gate.json");
 
-function internalCa() {
-  const candidates = [];
-  if (process.env.AITHEROS_ROOT) {
-    candidates.push(path.join(process.env.AITHEROS_ROOT, "Library", "Data", "tls", "ca-chain.pem"));
-  }
-  candidates.push(
-    "C:\\AitherOS-Data\\Library\\Data\\tls\\ca-chain.pem",
-    "C:\\AitherOS-Fresh\\AitherOS\\Library\\Data\\tls\\ca-chain.pem",
-  );
-  for (const p of candidates) {
-    try {
-      if (fs.existsSync(p)) return { ca: fs.readFileSync(p) };
-    } catch {
-      // an unreadable candidate is simply not the CA — try the next
-    }
-  }
-  return {};
-}
+const { internalCaOptions: internalCa } = require("./internal-ca.cjs");
 
 /** One JSON request to the safety plane. Resolves {status, json}; never rejects. */
 function safetyRequest(method, urlPath, body, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {

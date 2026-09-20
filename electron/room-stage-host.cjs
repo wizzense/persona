@@ -451,6 +451,20 @@ function castPaneImpl(deps = {}) {
     } catch {
       seen = {};
     }
+    // Resolved WITH provenance, so the pane can say "deepseek, from the built-in"
+    // or "opus, from env.AWDESK_CLAUDE_PROFILE" instead of showing a blank box.
+    let deskResolved;
+    try {
+      deskResolved = cast.resolveDesk(loaded.snapshot || { version: 1 }, { env: deps.env || process.env });
+    } catch {
+      deskResolved = null;
+    }
+    let syncStatus;
+    try {
+      syncStatus = typeof deps.syncStatus === "function" ? deps.syncStatus() : null;
+    } catch {
+      syncStatus = null;
+    }
     return {
       snapshot: loaded.snapshot,
       problems: loaded.problems,
@@ -458,6 +472,8 @@ function castPaneImpl(deps = {}) {
       roster: safeRoster(deps),
       onStage,
       seen,
+      desk: deskResolved,
+      sync: syncStatus,
     };
   }
 
@@ -491,6 +507,20 @@ function castPaneImpl(deps = {}) {
   function setVoice(patch = {}) {
     return write((draft) => {
       draft.voice = { ...(draft.voice || {}), ...(patch || {}) };
+      return draft;
+    });
+  }
+
+  /** The desk's own behaviour sections. ONE door with a closed list, rather than
+   *  a door per section: the list is what stops a renderer from using this to
+   *  write `actors` or `channels` around the handlers that exist for them. */
+  const DESK_SECTIONS = ["models", "prompts", "vision", "sync"];
+  function setSection({ section, patch } = {}) {
+    if (!DESK_SECTIONS.includes(section)) {
+      return { ok: false, snapshot: null, problems: [], error: `setSection: unknown section ${JSON.stringify(section)}` };
+    }
+    return write((draft) => {
+      draft[section] = { ...(draft[section] || {}), ...(patch || {}) };
       return draft;
     });
   }
@@ -556,7 +586,7 @@ function castPaneImpl(deps = {}) {
     });
   }
 
-  return { describe, setActor, clearActor, setStage, setVoice, setChannel, captureStage, muteOrigin, reveal };
+  return { describe, setActor, clearActor, setStage, setVoice, setSection, setChannel, captureStage, muteOrigin, reveal };
 }
 
 module.exports = {

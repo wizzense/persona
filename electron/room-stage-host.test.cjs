@@ -412,3 +412,42 @@ test("resolveStageKnobs: cooldown/gap/poll have no legacy env tier -- file or bu
   assert.equal(knobsFile.gapMs, 100);
   assert.equal(knobsFile.pollMs, 500);
 });
+
+// ─── setSection: one door, a CLOSED list ────────────────────────────────────
+
+test("castPaneImpl.setSection: writes the four desk sections and merges into what is already there", () => {
+  const file = castFileIn(tmpDir());
+  const pane = host.castPaneImpl(baseDeps({ castFile: file }));
+  assert.equal(pane.setSection({ section: "vision", patch: { enabled: false } }).ok, true);
+  assert.equal(pane.setSection({ section: "vision", patch: { imagePrompt: "Describe the UI." } }).ok, true);
+  assert.equal(pane.setSection({ section: "models", patch: { commandProfile: "opus" } }).ok, true);
+  const onDisk = JSON.parse(fs.readFileSync(file, "utf8"));
+  assert.deepEqual(onDisk.vision, { enabled: false, imagePrompt: "Describe the UI." });
+  assert.deepEqual(onDisk.models, { commandProfile: "opus" });
+});
+
+test("castPaneImpl.setSection: is NOT a way around the actor / channel / voice handlers", () => {
+  const file = castFileIn(tmpDir());
+  const pane = host.castPaneImpl(baseDeps({ castFile: file }));
+  for (const section of ["actors", "channels", "authors", "voice", "stage", "defaults", "version", "__proto__", "", undefined]) {
+    const result = pane.setSection({ section, patch: { "relay:*": { speak: true, presence: "chatty" } } });
+    assert.equal(result.ok, false, `setSection accepted ${JSON.stringify(section)}`);
+  }
+  assert.equal(fs.existsSync(file), false, "a refused section still wrote the file");
+});
+
+test("castPaneImpl.describe: carries the RESOLVED desk settings (with provenance) and the sync status", () => {
+  const file = castFileIn(tmpDir());
+  fs.writeFileSync(file, JSON.stringify({ version: 1, models: { commandProfile: "opus" } }), "utf8");
+  const pane = host.castPaneImpl(baseDeps({
+    castFile: file,
+    env: {},
+    syncStatus: () => ({ enabled: false, reason: "sync.enabled is off", pull: null, push: null }),
+  }));
+  const described = pane.describe();
+  assert.equal(described.desk.models.commandProfile, "opus");
+  assert.equal(described.desk.models.commandProfileFrom, "models.commandProfile");
+  assert.equal(described.desk.vision.enabledFrom, "builtin");
+  assert.equal(described.sync.reason, "sync.enabled is off");
+});
+

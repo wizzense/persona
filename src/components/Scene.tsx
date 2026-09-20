@@ -466,10 +466,28 @@ export function Scene(props: SceneProps) {
       if (slotId === 'slot0') return { position: [0, 0, 0], scale: 1 };
       // The nearest FREE spot, never an index: two spawned bodies used to land
       // on the same point after a removal (see stagePlacement.ts).
-      const occupied = [0, ...extraSlots
-        .filter((slot) => slot.slotId !== slotId)
-        .map((slot) => layoutRef.current[slot.slotId]?.position[0])
-        .filter((x): x is number => typeof x === 'number')];
+      //
+      // A slot that has never been dragged has NO layout entry, and reading
+      // only stored entries dropped it from `occupied` entirely -- so every
+      // freshly spawned body computed the SAME first free spot and they landed
+      // exactly on top of each other. Overlapping bodies share one raycast
+      // target, so a click moves the front one and the rest read as having
+      // disappeared (owner, 2026-09-19). Walking the roster in order and
+      // assigning each unplaced slot the spot it WOULD take keeps the
+      // computation deterministic and every body its own x.
+      const occupied = [0];
+      for (const slot of extraSlots) {
+        if (slot.slotId === slotId) break;
+        const stored = layoutRef.current[slot.slotId]?.position[0];
+        occupied.push(typeof stored === 'number' ? stored : freeSpot(occupied, POSITION_BOUND));
+      }
+      for (const slot of extraSlots) {
+        // Slots after this one in the roster can still hold a STORED position,
+        // which this slot must not sit on; their defaults are decided above.
+        if (slot.slotId === slotId) continue;
+        const stored = layoutRef.current[slot.slotId]?.position[0];
+        if (typeof stored === 'number' && !occupied.includes(stored)) occupied.push(stored);
+      }
       return { position: [freeSpot(occupied, POSITION_BOUND), 0, 0], scale: 1 };
     },
     [extraSlots],

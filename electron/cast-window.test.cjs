@@ -25,6 +25,10 @@ const DOCUMENTED_CHANNELS = [
   "desk:cast-clear-actor",
   "desk:cast-set-stage",
   "desk:cast-set-voice",
+  // Added deliberately 2026-09-19: ONE door for the desk's own behaviour sections
+  // (models / prompts / vision / sync). The section list is closed and enforced in
+  // main (room-stage-host setSection) -- see the whitelist test at the end.
+  "desk:cast-set-section",
   "desk:cast-set-channel",
   "desk:cast-capture-stage",
   "desk:cast-mute-origin",
@@ -35,7 +39,7 @@ function handlersFor(impl) {
   return castHandlers(() => impl);
 }
 
-test("the desk:cast-* channel set is EXACTLY the documented nine -- nothing dropped, nothing extra", () => {
+test("the desk:cast-* channel set is EXACTLY the documented ten -- nothing dropped, nothing extra", () => {
   const handlers = handlersFor({});
   assert.deepEqual(Object.keys(handlers).sort(), [...DOCUMENTED_CHANNELS].sort());
   for (const channel of DOCUMENTED_CHANNELS) {
@@ -191,4 +195,18 @@ test("cast-preload.cjs exposes window.aitherCast over exactly the documented cha
     assert.match(source, new RegExp(channel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
       `cast-preload.cjs never invokes ${channel}`);
   }
+});
+
+test("desk:cast-set-section forwards {section, patch}, refuses a missing section, and never forwards a non-object patch", () => {
+  const seen = [];
+  const handlers = handlersFor({ setSection: (arg) => { seen.push(arg); return { ok: true }; } });
+  handlers["desk:cast-set-section"](null, "vision", { enabled: false });
+  handlers["desk:cast-set-section"](null, "models", "not-an-object");
+  assert.deepEqual(seen, [
+    { section: "vision", patch: { enabled: false } },
+    { section: "models", patch: {} },
+  ]);
+  const refused = handlers["desk:cast-set-section"](null, "", { enabled: false });
+  assert.equal(seen.length, 2, "a blank section reached the implementation");
+  assert.ok(refused && refused.ok === false, JSON.stringify(refused));
 });
