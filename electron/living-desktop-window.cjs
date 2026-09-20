@@ -66,7 +66,9 @@ function setShell(id) {
 }
 
 const PARTITION = "persist:living-desktop";
-// The retired portal host 301s to the apex login; ask the apex directly.
+//: The apex, not portal.aitherium.com: that host is RETIRED and 301s here
+//: (measured 2026-09-19). Loading the redirect costs a round trip and leaves a
+//: dead hostname in the one window the owner signs in through.
 const PORTAL_LOGIN_URL = "https://aitherium.com/login";
 
 let desktopWin = null; // the singleton overlay window
