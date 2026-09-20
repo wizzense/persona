@@ -299,7 +299,7 @@ function validateParty(manifest) {
   if (typeof manifest.exported_at !== "string" || Number.isNaN(Date.parse(manifest.exported_at))) {
     bad("exported_at", "must be an ISO date-time string");
   }
-  if (!["awdesk", "dark-matters", "saga"].includes(manifest.source)) bad("source", "unknown source");
+  if (!["awdesk", "dark-matters", "saga", "forge"].includes(manifest.source)) bad("source", "unknown source");
   if (manifest.roster_dir !== undefined && manifest.roster_dir !== null && typeof manifest.roster_dir !== "string") {
     bad("roster_dir", "must be a string or null");
   }
