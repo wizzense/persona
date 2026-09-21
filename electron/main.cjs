@@ -2163,6 +2163,17 @@ function openConsole() {
         },
         isOpen: () => Boolean(chatWindow && !chatWindow.isDestroyed()),
       },
+      // The Characters pane (owner, 2026-09-20): the inbox stopped carrying bodies, so the
+      // spawn chips and the Models & Market grid live here. It is the SAME renderer and the
+      // same deck window as the inbox -- one component with a view prop -- so detaching it
+      // reuses createDeckWindow rather than opening a second subscription to the same bridge.
+      characters: {
+        open: () => createDeckWindow(),
+        close: () => {
+          if (deckWindow && !deckWindow.isDestroyed()) deckWindow.close();
+        },
+        isOpen: () => Boolean(deckWindow && !deckWindow.isDestroyed()),
+      },
       // The AitherDesktop shell -- the SAME aitherium.com desktop the standalone
       // app window shows, hosted here on its own session partition so the two are
       // one login rather than two. The OVERLAY is deliberately not a pane: it is a
