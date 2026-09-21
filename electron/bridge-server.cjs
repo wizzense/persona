@@ -411,7 +411,13 @@ function createBridgeServer({
           const names = Array.isArray(body?.names)
             ? body.names.filter((n) => typeof n === "string" && n.length <= 200)
             : null;
-          return rosterCaptureHandler({ method: "POST", names, force: body?.force === true });
+          return rosterCaptureHandler({
+            method: "POST",
+            names,
+            force: body?.force === true,
+            // >1 renders a turntable per character (the LoRA dataset).
+            angles: Number(body?.angles) || 1,
+          });
         })
         .then((result) => {
           if (response.headersSent) return;

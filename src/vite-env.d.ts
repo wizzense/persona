@@ -100,6 +100,8 @@ type AvatarBridgeEvent =
   // deck.saveCharacterFullBody. See src/thumbnails.ts renderVrmFullBody.
   | {
       type: 'capture-roster';
+      /** >1 asks for a turntable of that many evenly spaced yaws (LoRA dataset). */
+      angles?: number;
       characters: Array<{
         name: string;
         modelUrl: string | null;

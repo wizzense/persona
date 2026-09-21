@@ -1465,12 +1465,17 @@ function isValidCharacterName(name) {
 const rosterCapture = { requested: new Set(), done: new Set(), startedAt: 0 };
 const { listAllCharacters } = require("./character-roster.cjs");
 
-function captureRoster({ names = null, force = false } = {}) {
+function captureRoster({ names = null, force = false, angles = 1 } = {}) {
   const installed = listAllCharacters();
   const wanted = Array.isArray(names) && names.length
     ? names.filter((n) => isValidCharacterName(n) && installed.includes(n))
     : installed;
-  const todo = wanted.filter((n) => force || !fs.existsSync(path.join(ROSTER_DIR, n, "fullbody.jpg")));
+  const shots = Number.isFinite(Number(angles)) ? Math.max(1, Math.min(24, Number(angles))) : 1;
+  // A turntable run is judged on the turntable dir, not on fullbody.jpg -- a
+  // character that already has a front shot still needs its ring.
+  const todo = wanted.filter((n) => force || !fs.existsSync(
+    shots > 1 ? path.join(ROSTER_DIR, n, "turntable") : path.join(ROSTER_DIR, n, "fullbody.jpg"),
+  ));
   if (!avatarWindow || avatarWindow.isDestroyed()) {
     return { ok: false, error: "no avatar window to render in", requested: 0, pending: todo };
   }
@@ -1478,6 +1483,7 @@ function captureRoster({ names = null, force = false } = {}) {
   rosterCapture.done = new Set();
   rosterCapture.startedAt = Date.now();
   sendToAvatar("capture-roster", {
+    angles: shots,
     // `customise` rides along: a FORK renders its base's mesh, so without the
     // recipe the capture would show the BASE's body and the rater would judge
     // the wrong thing -- and a fork exists precisely to look different.
@@ -1487,7 +1493,7 @@ function captureRoster({ names = null, force = false } = {}) {
       customise: safeCustomise(name),
     })),
   });
-  return { ok: true, requested: todo.length, pending: todo, skipped: wanted.length - todo.length };
+  return { ok: true, requested: todo.length, pending: todo, skipped: wanted.length - todo.length, angles: shots };
 }
 
 function safeCustomise(name) {
@@ -1508,10 +1514,11 @@ function characterModelUrl(name) {
   if (!isValidCharacterName(name)) return null;
   // A fork resolves through its `base` (character-roster.resolveModelFile); an
   // ordinary character answers with its own file on the first candidate.
-  let resolved = null;
+  let resolved;
   try {
     resolved = require("./character-roster.cjs").resolveModelFile(name);
   } catch {
+    // The roster module is not loadable here; fall through to the plain path.
     resolved = null;
   }
   const candidates = [resolved, path.join(ROSTER_DIR, name, "model.vrm")].filter(Boolean);
@@ -2377,6 +2384,24 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
     });
     // The rater's full-body frame (rate-characters.py --vision reads
     // fullbody.jpg before thumbnail.jpg). Same validation as the thumbnail.
+    ipcMain.handle("desk:save-character-turntable", (_event, name, shot, dataUrl) => {
+      if (!isValidCharacterName(name)) return false;
+      const index = Number(shot);
+      if (!Number.isInteger(index) || index < 0 || index > 23) return false;
+      const prefix = "data:image/jpeg;base64,";
+      if (typeof dataUrl !== "string" || !dataUrl.startsWith(prefix)) return false;
+      const base64 = dataUrl.slice(prefix.length);
+      if (base64.length === 0 || base64.length > 2 * 1024 * 1024) return false;
+      try {
+        const dir = path.join(ROSTER_DIR, name, "turntable");
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, `${String(index).padStart(2, "0")}.jpg`), Buffer.from(base64, "base64"));
+        return true;
+      } catch (error) {
+        debugLog("turntable write failed", name, index, error);
+        return false;
+      }
+    });
     ipcMain.handle("desk:save-character-fullbody", (_event, name, dataUrl) => {
       if (!isValidCharacterName(name)) return false;
       const prefix = "data:image/jpeg;base64,";

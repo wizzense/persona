@@ -45,6 +45,10 @@ contextBridge.exposeInMainWorld("deskBridge", {
     // fullbody.jpg). Requested by main (capture-roster event), never on its own.
     saveCharacterFullBody: (name, dataUrl) =>
       ipcRenderer.invoke("desk:save-character-fullbody", name ?? "", dataUrl ?? ""),
+    // One turntable shot (characters/<slug>/turntable/<NN>.jpg) -- the dataset
+    // a per-character LoRA trains on.
+    saveCharacterTurntable: (name, shot, dataUrl) =>
+      ipcRenderer.invoke("desk:save-character-turntable", name ?? "", Number(shot) || 0, dataUrl ?? ""),
   },
   // Full system awareness (#9): the five snapshot sources the System section
   // renders. Read-only; every one fails soft to ok:true + ERROR notes.

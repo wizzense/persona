@@ -26,6 +26,9 @@ const THUMB_QUALITY = 0.86;
 const BODY_W = 384;
 const BODY_H = 768;
 type Frame = 'head' | 'body';
+/** A turntable shot: the body frame, rotated. Feeds a per-character LoRA --
+ *  a likeness trained on one T-pose front shot is a vibe, not a character. */
+const TURNTABLE_TAG = 'turn';
 // Roster models run to 66 MB and a pathological GLB can leave loadAsync
 // pending forever — measured 2026-09-11, the serialized queue stalled at 5 of
 // 62 with no error (a resolved-never promise is invisible in a catch chain).
@@ -126,7 +129,7 @@ function getRig(): ThumbRig {
 
 /** Render one VRM into a square JPEG data URL. Resolves null on ANY failure —
  *  a character that will not load must cost its own preview, not the deck. */
-async function renderOne(name: string, url: string, frame: Frame = 'head', customise?: DeskCustomise): Promise<string | null> {
+async function renderOne(name: string, url: string, frame: Frame = 'head', customise?: DeskCustomise, yaw = 0): Promise<string | null> {
   const { renderer, scene, camera } = getRig();
   let added: THREE.Object3D | null = null;
   // The one rig serves both frames: size it per render (cheap; no new context).
@@ -152,6 +155,10 @@ async function renderOne(name: string, url: string, frame: Frame = 'head', custo
     // maths: the content rater judges this picture, and a variant judged on its
     // base's body is the wrong verdict on the wrong character.
     if (customise) applyCustomise(vrm, customise);
+    // Turn the MODEL, not the camera: the lights stay put, so a turntable set
+    // is lit consistently and the trainer learns the character rather than a
+    // rotating key light.
+    vrm.scene.rotation.y = yaw;
     vrm.update(0);
     scene.updateMatrixWorld(true);
 
@@ -220,3 +227,14 @@ export function renderVrmFullBody(name: string, url: string, customise?: DeskCus
   queue = result.catch(() => undefined);
   return result;
 }
+
+/** One turntable shot at `yaw` radians. Same queue and the same one rig, so a
+ *  66-character turntable is still one WebGL context (see getRig's note). */
+export function renderVrmTurntable(
+  name: string, url: string, yaw: number, customise?: DeskCustomise,
+): Promise<string | null> {
+  const result = queue.then(() => renderOne(name, url, 'body', customise, yaw));
+  queue = result.catch(() => undefined);
+  return result;
+}
+void TURNTABLE_TAG;

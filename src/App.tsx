@@ -16,7 +16,7 @@ import { bubbleDurationMs, bubbleText, type SpeechBubble } from './speech-bubble
 import { Deck } from './components/Deck';
 import { ChatView } from './components/ChatView';
 import { Beads } from './components/Beads';
-import { renderVrmFullBody } from './thumbnails';
+import { renderVrmFullBody, renderVrmTurntable } from './thumbnails';
 import type { AnimationType } from './animation-catalog';
 import {
   bridgeAnimationOverride,
@@ -241,14 +241,32 @@ function AvatarSceneApp() {
         // load costs its own frame, never the batch. Fire-and-forget: main
         // counts the saves (GET /roster/capture) and the rater polls it.
         const api = (window.deskBridge as unknown as {
-          deck?: { saveCharacterFullBody?: (name: string, dataUrl: string) => Promise<boolean> };
+          deck?: {
+            saveCharacterFullBody?: (name: string, dataUrl: string) => Promise<boolean>;
+            saveCharacterTurntable?: (name: string, shot: number, dataUrl: string) => Promise<boolean>;
+          };
         }).deck;
         const list = Array.isArray(event.characters) ? event.characters : [];
+        // `angles > 1` asks for a TURNTABLE: the dataset a per-character LoRA
+        // needs. One front shot trains a vibe; a ring of them trains the
+        // character. Angle 0 is the same front frame the rater reads, so a
+        // turntable run also refreshes fullbody.jpg rather than duplicating it.
+        const angles = Number.isFinite(Number(event.angles)) ? Math.max(1, Math.min(24, Number(event.angles))) : 1;
         for (const item of list) {
           if (!item || typeof item.name !== 'string' || typeof item.modelUrl !== 'string') continue;
-          void renderVrmFullBody(item.name, item.modelUrl, item.customise ?? undefined).then((dataUrl) => {
-            if (dataUrl) void api?.saveCharacterFullBody?.(item.name, dataUrl);
-          });
+          const recipe = item.customise ?? undefined;
+          for (let i = 0; i < angles; i += 1) {
+            const yaw = (i / angles) * Math.PI * 2;
+            const shot = i;
+            const render = angles === 1
+              ? renderVrmFullBody(item.name, item.modelUrl, recipe)
+              : renderVrmTurntable(item.name, item.modelUrl, yaw, recipe);
+            void render.then((dataUrl) => {
+              if (!dataUrl) return;
+              if (shot === 0) void api?.saveCharacterFullBody?.(item.name, dataUrl);
+              if (angles > 1) void api?.saveCharacterTurntable?.(item.name, shot, dataUrl);
+            });
+          }
         }
       } else if (event.type === 'listen') {
         // Slice C. The recorder lives outside React (src/voice/pushToTalk.ts) so
