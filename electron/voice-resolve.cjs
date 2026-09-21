@@ -203,8 +203,34 @@ function resolveSpeech(ctx = {}) {
   }
 }
 
+/**
+ * effectiveVoice -- the voice an utterance is actually synthesised with.
+ *
+ * The owner's cast wins over the caller: an authored row (actors[], authors[],
+ * defaults.voice, voice.defaultVoice) is "what the owner has chosen to hear"
+ * and a caller may not talk its way past it. But when NOTHING was authored the
+ * gate's voice is only a stable hash over a pool that is four men to two
+ * women, and that hash must not overrule a caller that asked for a voice by
+ * name. Measured 2026-09-21: every desk utterance for a day came out
+ * en-GB-RyanNeural because `service:awdesk` and `bridge:/speak` had no row,
+ * hashed to "fable", and the hash beat every explicit `voice` the callers
+ * sent -- the owner heard "some male British voice" and could not change it.
+ *
+ * @param {string|undefined} requested  the caller's `voice`, if any
+ * @param {{voice?: string, provenance?: {voiceFrom?: string}}|null} gate
+ * @param {string} [fallback="nova"]
+ */
+function effectiveVoice(requested, gate, fallback = "nova") {
+  const asked = typeof requested === "string" && requested.trim() ? requested.trim() : "";
+  const gateVoice = gate && typeof gate.voice === "string" && gate.voice.trim() ? gate.voice.trim() : "";
+  const from = gate && gate.provenance && typeof gate.provenance.voiceFrom === "string" ? gate.provenance.voiceFrom : "";
+  if (gateVoice && !(asked && from === "hash")) return gateVoice;
+  return asked || gateVoice || fallback;
+}
+
 module.exports = {
   resolveSpeech,
+  effectiveVoice,
 };
 
 if (require.main === module) {

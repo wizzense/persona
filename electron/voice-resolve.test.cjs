@@ -278,3 +278,30 @@ test("resolveSpeech: presence=off refuses the sound AND the caption", () => {
 test("resolveSpeech: the fail-open verdict shows the words", () => {
   assert.equal(resolveSpeech(undefined).caption, true);
 });
+
+// ─── effectiveVoice: authored beats caller, hash does not ────────────────────
+
+test("effectiveVoice: an authored voice beats the caller's; a hash-derived one yields to an explicit caller voice", () => {
+  const { effectiveVoice } = require("./voice-resolve.cjs");
+  const authored = { voice: "en-US-AnaNeural", provenance: { voiceFrom: 'actors["bridge:/speak"]' } };
+  const hashed = { voice: "fable", provenance: { voiceFrom: "hash" } };
+  assert.equal(effectiveVoice("nova", authored), "en-US-AnaNeural", "the owner's cast wins over the caller");
+  assert.equal(effectiveVoice(undefined, authored), "en-US-AnaNeural");
+  assert.equal(effectiveVoice("nova", hashed), "nova", "a bare hash must not overrule a voice asked for by name");
+  assert.equal(effectiveVoice("", hashed), "fable", "no caller preference: the hash stands");
+  assert.equal(effectiveVoice(undefined, null), "nova", "no gate at all: built-in");
+  assert.equal(effectiveVoice("shimmer", null), "shimmer");
+});
+
+test("effectiveVoice: end to end -- an unconfigured origin no longer re-voices an explicit POST /speak voice", () => {
+  const { effectiveVoice } = require("./voice-resolve.cjs");
+  const dir = tmpDir();
+  const file = castFileIn(dir);
+  writeCast(file, { version: 1 });
+  const gate = resolveSpeech({ origin: "bridge:/speak", slotId: "slot0", text: "hi", file });
+  assert.equal(gate.provenance.voiceFrom, "hash");
+  assert.equal(effectiveVoice("en-US-JennyNeural", gate), "en-US-JennyNeural");
+  writeCast(file, { version: 1, actors: { "bridge:/speak": { voice: "en-US-AnaNeural" } } });
+  const gate2 = resolveSpeech({ origin: "bridge:/speak", slotId: "slot0", text: "hi", file });
+  assert.equal(effectiveVoice("en-US-JennyNeural", gate2), "en-US-AnaNeural");
+});

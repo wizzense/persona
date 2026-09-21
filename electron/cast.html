@@ -189,7 +189,12 @@
 // every other settings file in this tree).
 
 const PRESENCE_LEVELS = ["off", "quiet", "normal", "chatty"];
-const VOICES = ["nova", "alloy", "echo", "fable", "onyx", "shimmer"];
+const VOICES = [
+  // AitherVoice short names (nova/shimmer = Aria/Jenny, US women; alloy/echo/onyx = US men; fable = Ryan, GB man).
+  "nova", "shimmer", "alloy", "echo", "onyx", "fable",
+  // Any `en-*Neural` id passes straight through to edge-tts; these are the US women.
+  "en-US-AnaNeural", "en-US-JennyNeural", "en-US-AriaNeural", "en-US-MichelleNeural", "en-US-EmmaNeural", "en-US-AvaNeural",
+];
 // Mirrors cast-config.cjs's BUILTIN_STAGE / BUILTIN_VOICE — placeholders only,
 // never sent unless the owner actually edits the field.
 const STAGE_DEFAULT = { maxBodies: 3, idleSeconds: 600, cooldownSeconds: 20, gapMs: 350, pollMs: 2000, resident: "" };

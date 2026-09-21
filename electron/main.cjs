@@ -206,8 +206,9 @@ try {
   console.warn("[desk] cast-window.cjs not present yet (U03) -- Cast pane unavailable:", error?.message || error);
 }
 let resolveSpeech = null;
+let effectiveVoiceFor = (requested, gate, fallback) => (gate && gate.voice) || requested || fallback;
 try {
-  ({ resolveSpeech } = require("./voice-resolve.cjs")); // U06: the per-origin audibility gate
+  ({ resolveSpeech, effectiveVoice: effectiveVoiceFor } = require("./voice-resolve.cjs")); // U06: the per-origin audibility gate
 } catch (error) {
   console.warn("[desk] voice-resolve.cjs not present yet (U06) -- speakAloud is ungated:", error?.message || error);
 }
@@ -769,7 +770,8 @@ async function speakAloud(text, voice = "nova", speed = undefined, slotId = "slo
       return { ok: false, reason: gate.reason || `${origin} is not audible`, captioned: shown > 0 };
     }
     if (gate) {
-      if (gate.voice) effectiveVoice = gate.voice;
+      // An authored voice beats the caller; a HASH-derived one does not (voice-resolve.effectiveVoice).
+      effectiveVoice = effectiveVoiceFor(voice, gate, effectiveVoice);
       if (gate.speed != null) effectiveSpeed = gate.speed;
       if (gate.maxChars != null) effectiveMaxChars = gate.maxChars;
       if (typeof gate.volume === "number" && Number.isFinite(gate.volume)) effectiveVolume = gate.volume;
