@@ -136,10 +136,20 @@ function buildCommand(action, { script = scriptPath(), arcScript = arcScriptPath
  *  could not run is the exact silence this surface exists to end. */
 function parseVerdict(stdout, code, stderrTail = "") {
   const text = String(stdout ?? "");
-  const start = text.indexOf("{");
+  // A LIST verb answers with a top-level JSON ARRAY of service rows, not an object.
+  // Seeking "{" alone found the first row's brace INSIDE the array, and parsing from
+  // there threw on the trailing "]" -- so every row was discarded in silence and the
+  // caller got {ok:false,error:"exit 1"}. The desk pane looked right because my proof
+  // ran the script directly; the bridge, awsh and MCP all come through here.
+  const brace = text.indexOf("{");
+  const bracket = text.indexOf("[");
+  const start = bracket >= 0 && (brace < 0 || bracket < brace) ? bracket : brace;
   if (start >= 0) {
     try {
       const doc = JSON.parse(text.slice(start));
+      // rc 1 on a list means "found some" (unhealthy services) -- that is the ANSWER,
+      // not a failure -- so an array is ok whatever the rc, with the rc carried along.
+      if (Array.isArray(doc)) return { ok: true, rows: doc, count: doc.length, rc: code };
       if (doc && typeof doc === "object") {
         if (doc.verdict === "CANNOT_JUDGE") return { ok: false, cannotJudge: true, ...doc };
         if (typeof doc.ok !== "boolean") doc.ok = code === 0;

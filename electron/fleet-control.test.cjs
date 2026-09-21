@@ -38,6 +38,25 @@ test("buildCommand crosses the WSL hop as ONE sh -c string and knows every actio
   assert.throws(() => buildCommand("nuke"), /unknown fleet action/);
 });
 
+test("parseVerdict keeps the ROWS of a list verb, and rc 1 there is an answer", () => {
+  // A list verb answers with a top-level ARRAY. Seeking "{" found the first row's brace
+  // inside it and threw on the trailing "]", so the rc fallback returned
+  // {ok:false,error:"exit 1"} and every row was lost in silence. rc 1 from
+  // `list --unhealthy` means "found some", which is the answer, not a failure.
+  const rows = '[\n  {"name": "aitheros-room", "status": "running", "health": "unhealthy"},\n'
+    + '  {"name": "aither-llamacpp-bonsai", "status": "stopped", "health": "-"}\n]';
+  const verdict = parseVerdict(rows, 1, "");
+  assert.equal(verdict.ok, true, "rc 1 on a list is 'found some', not a failure");
+  assert.equal(verdict.count, 2);
+  assert.equal(verdict.rc, 1);
+  assert.equal(verdict.rows[0].name, "aitheros-room");
+  assert.equal(verdict.rows[1].status, "stopped");
+  // An empty list is still a valid answer, not a cannot-judge.
+  const none = parseVerdict("[]", 0, "");
+  assert.equal(none.ok, true);
+  assert.equal(none.count, 0);
+});
+
 test("parseVerdict: JSON wins, rc 2 is CANNOT_JUDGE never ok, garbage is a refusal", () => {
   const ok = parseVerdict('progress noise\n{"ok": true, "fleet": {"running": 0}}', 0);
   assert.equal(ok.ok, true);
