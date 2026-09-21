@@ -268,8 +268,99 @@ async function consultInstall(name, options = {}) {
   return consult({ ...options, kind: "install", content: name });
 }
 
+
+/**
+ * setAdultContent(enabled) — turn mature content on or off FROM THIS DESK.
+ *
+ * Owner, 2026-09-20: "why is there not settings to do this in app?" The Cast pane
+ * showed the gate as a sentence — "locked: turn it on in the platform's safety
+ * settings" — and there was nowhere obvious to go; the platform's own toggle writes
+ * `Path.home()/.aither/adult_content.json` from INSIDE the Genesis container, so it
+ * never touched the file this desk reads. The setting existed and reached nothing.
+ *
+ * 🚩 THIS IS A CLIENT OF THE PLATFORM GATE, NOT A SECOND GATE. The asymmetry is the
+ * security property, and it is deliberate:
+ *
+ *   OPENING  goes through the platform, always. The gate is `opt_in AND age_verified`
+ *            and only the platform can attest the second half. If it does not answer,
+ *            this REFUSES and says so. Writing `visible:true` locally would be an age
+ *            attestation forged by an app that cannot verify an age.
+ *   CLOSING  never needs anything. It writes the mirror unconditionally and tells the
+ *            platform as a courtesy. A kill switch that needs the network is not a
+ *            kill switch.
+ *
+ * The mirror is a CACHE of the platform's answer. It is written from what the platform
+ * just said, or from a close — never from this desk's own opinion.
+ */
+const ADULT_PATH = "/safety/config/user/adult-content";
+
+function mirrorPath() {
+  return (
+    process.env.DESK_ADULT_CONTENT_MIRROR ||
+    path.join(os.homedir(), ".aither", "adult_content.json")
+  );
+}
+
+function writeMirror(visible, userId) {
+  try {
+    const file = mirrorPath();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(
+      file,
+      `${JSON.stringify({ visible: !!visible, user_id: userId || "", source: "awdesk/safety-gate" })}\n`,
+      "utf8",
+    );
+    return true;
+  } catch {
+    return false; // an unwritable mirror reads as LOCKED downstream, which is safe
+  }
+}
+
+async function setAdultContent(enabled, { requestFn = safetyRequest, timeoutMs } = {}) {
+  if (!enabled) {
+    try {
+      await requestFn("PUT", ADULT_PATH, { enabled: false }, { timeoutMs });
+    } catch {
+      // courtesy only -- a closed gate must not depend on the fleet answering
+    }
+    writeMirror(false, null);
+    return { ok: true, visible: false, note: "mature content turned off on this desk" };
+  }
+
+  let res;
+  try {
+    res = await requestFn("PUT", ADULT_PATH, { enabled: true }, { timeoutMs });
+  } catch (error) {
+    res = null;
+  }
+  if (!res || res.status == null) {
+    return {
+      ok: false,
+      visible: false,
+      needsPlatform: true,
+      error:
+        "the platform did not answer, so mature content cannot be turned on here — " +
+        "that needs an age verification only the platform can attest. Turning it OFF always works.",
+    };
+  }
+  const body = res.json && typeof res.json === "object" ? res.json : {};
+  if (res.status !== 200 || body.success === false) {
+    return {
+      ok: false,
+      visible: false,
+      needsAgeVerification: [400, 401, 403, 412].includes(res.status),
+      error: body.detail || `the platform refused (HTTP ${res.status}). Verify your age first.`,
+    };
+  }
+  const visible = body.adult_content_visible === true;
+  writeMirror(visible, body.user_id);
+  return { ok: true, visible };
+}
+
 module.exports = {
   consult,
+  setAdultContent,
+  mirrorPath,
   explicitAllowed,
   consultSpeech,
   consultInstall,

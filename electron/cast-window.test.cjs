@@ -33,6 +33,11 @@ const DOCUMENTED_CHANNELS = [
   // main (room-stage-host setSection) -- see the whitelist test at the end.
   "desk:cast-set-section",
   "desk:cast-set-channel",
+  // Added deliberately 2026-09-20: the mature-content gate is a CONTROL now, not a
+  // readout. It is the only ASYNC verb here -- turning it ON is a round trip to the
+  // platform, which is the only thing that can attest age verification. Turning it
+  // OFF is local and unconditional.
+  "desk:cast-set-adult-content",
   "desk:cast-capture-stage",
   "desk:cast-mute-origin",
   "desk:cast-reveal",
@@ -42,7 +47,7 @@ function handlersFor(impl) {
   return castHandlers(() => impl);
 }
 
-test("the desk:cast-* channel set is EXACTLY the documented eleven -- nothing dropped, nothing extra", () => {
+test("the desk:cast-* channel set is EXACTLY the documented twelve -- nothing dropped, nothing extra", () => {
   const handlers = handlersFor({});
   assert.deepEqual(Object.keys(handlers).sort(), [...DOCUMENTED_CHANNELS].sort());
   for (const channel of DOCUMENTED_CHANNELS) {
@@ -212,4 +217,35 @@ test("desk:cast-set-section forwards {section, patch}, refuses a missing section
   const refused = handlers["desk:cast-set-section"](null, "", { enabled: false });
   assert.equal(seen.length, 2, "a blank section reached the implementation");
   assert.ok(refused && refused.ok === false, JSON.stringify(refused));
+});
+
+
+test("setAdultContent REFUSES to open when the platform does not answer, and closes anyway", async () => {
+  // The asymmetry is the security property: opening is an age attestation only the
+  // platform can make, so an unreachable platform must NOT open the gate here; closing
+  // is a kill switch and must work with the fleet down.
+  const os = require("node:os");
+  const fsMod = require("node:fs");
+  const scratch = fsMod.mkdtempSync(path.join(os.tmpdir(), "desk-gate-"));
+  const mirror = path.join(scratch, "adult_content.json");
+  const prior = process.env.DESK_ADULT_CONTENT_MIRROR;
+  process.env.DESK_ADULT_CONTENT_MIRROR = mirror;
+  try {
+    delete require.cache[require.resolve("./safety-gate.cjs")];
+    const gate = require("./safety-gate.cjs");
+    const dead = () => Promise.reject(new Error("no route to the safety plane"));
+
+    const opened = await gate.setAdultContent(true, { requestFn: dead });
+    assert.equal(opened.ok, false, "an unreachable platform OPENED the gate");
+    assert.equal(opened.needsPlatform, true);
+    assert.ok(!fsMod.existsSync(mirror), "a refused open still wrote the mirror");
+
+    const closed = await gate.setAdultContent(false, { requestFn: dead });
+    assert.equal(closed.ok, true, "closing needed the platform");
+    assert.equal(JSON.parse(fsMod.readFileSync(mirror, "utf8")).visible, false);
+  } finally {
+    if (prior === undefined) delete process.env.DESK_ADULT_CONTENT_MIRROR;
+    else process.env.DESK_ADULT_CONTENT_MIRROR = prior;
+    delete require.cache[require.resolve("./safety-gate.cjs")];
+  }
 });
