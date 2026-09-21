@@ -70,6 +70,18 @@ type AvatarBridgeEvent =
       slotId: string;
       physics?: { enabled?: boolean; weight?: number; stiffness?: number; damping?: number; jiggle?: number };
     }
+  // A forked character's recipe (character-roster.customiseOf): the variant
+  // renders its BASE's mesh with these deltas applied at load -- no mesh is
+  // copied. See useVrmLoader.applyCustomise.
+  | {
+      type: 'customise-avatar';
+      slotId: string;
+      customise: {
+        blendshapes?: Record<string, number>;
+        boneScale?: Record<string, number>;
+        materials?: { tint?: string; tintStrength?: number; outlineWidth?: number };
+      };
+    }
   // Drop-to-avatar (2026-08-29): main TTS'd the drop verdict and hands the
   // audio over for playback + lip sync in the avatar window.
   // `volume` is cast.json's master x actor fader, already multiplied (0..2).
@@ -86,7 +98,19 @@ type AvatarBridgeEvent =
   // The content rater's full-body frames (main relays POST /roster/capture):
   // render each model whole and hand the JPEG back through
   // deck.saveCharacterFullBody. See src/thumbnails.ts renderVrmFullBody.
-  | { type: 'capture-roster'; characters: Array<{ name: string; modelUrl: string | null }> };
+  | {
+      type: 'capture-roster';
+      characters: Array<{
+        name: string;
+        modelUrl: string | null;
+        /** A fork's recipe, applied before the shot so the rater judges the VARIANT. */
+        customise?: {
+          blendshapes?: Record<string, number>;
+          boneScale?: Record<string, number>;
+          materials?: { tint?: string; tintStrength?: number; outlineWidth?: number };
+        } | null;
+      }>;
+    };
 
 /** The verdict of a dropped file (preload -> main -> drop-router). */
 interface DropVerdict {

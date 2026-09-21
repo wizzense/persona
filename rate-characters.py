@@ -93,11 +93,18 @@ def installed_characters() -> list[str]:
     if not ROSTER.is_dir():
         print(f"ERROR: roster not found at {ROSTER}", file=sys.stderr)
         raise SystemExit(2)
-    return sorted(
-        entry.name
-        for entry in ROSTER.iterdir()
-        if entry.is_dir() and (entry / "model.vrm").exists()
-    )
+    # A FORK owns no model.vrm -- it is a recipe over a base (fork-character.py),
+    # and it still has to be judged, because the recipe changes what the body
+    # shows. Include any directory that either holds a mesh or names a base.
+    def has_model_or_base(entry):
+        if (entry / "model.vrm").exists():
+            return True
+        try:
+            return bool(json.loads((entry / "character.json").read_text(encoding="utf-8")).get("base"))
+        except (OSError, ValueError):
+            return False
+
+    return sorted(entry.name for entry in ROSTER.iterdir() if entry.is_dir() and has_model_or_base(entry))
 
 
 def read_rating(name: str) -> tuple[str, str]:
@@ -111,12 +118,28 @@ def read_rating(name: str) -> tuple[str, str]:
 
 
 def write_rating(name: str, rating: str, source: str) -> bool:
+    """MERGE the verdict into character.json -- never rewrite the file.
+
+    🚩 This used to write `{"rating", "source"}` and nothing else, which silently
+    DELETED every other key. Measured 2026-09-20 the first time the rater met a
+    fork: `base` and `customise` vanished and the variant became an ordinary
+    character pointing at no mesh -- i.e. rating a fork destroyed the fork. The
+    same shape as electron/content-rating.cjs setRating, which spreads the
+    existing record for exactly this reason.
+    """
     if rating not in VALID_RATINGS:
         print(f"  ERROR invalid rating '{rating}' for {name}", file=sys.stderr)
         return False
+    target = ROSTER / name / "character.json"
     try:
-        (ROSTER / name / "character.json").write_text(
-            json.dumps({"rating": rating, "source": source}, indent=2),
+        existing = json.loads(target.read_text(encoding="utf-8"))
+        if not isinstance(existing, dict):
+            existing = {}
+    except (OSError, ValueError):
+        existing = {}
+    try:
+        target.write_text(
+            json.dumps({**existing, "rating": rating, "source": source}, indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
         return True

@@ -1122,6 +1122,16 @@ function spawnAvatarSlot(slotId, name, agent, place, physics) {
           }
         }
         if (knobs) avatarWindow.webContents.send("desk:event", { type: "tune-avatar", slotId, physics: knobs });
+        // A FORKED character renders its base's mesh plus a recipe; send it with
+        // the body so the first frame is already the variant, not the base.
+        try {
+          const customise = require("./character-roster.cjs").customiseOf(name);
+          if (customise && Object.keys(customise).length) {
+            avatarWindow.webContents.send("desk:event", { type: "customise-avatar", slotId, customise });
+          }
+        } catch (error) {
+          debugLog("customiseOf failed", name, error?.message || error);
+        }
       }
     },
     (error) => {
@@ -1468,9 +1478,25 @@ function captureRoster({ names = null, force = false } = {}) {
   rosterCapture.done = new Set();
   rosterCapture.startedAt = Date.now();
   sendToAvatar("capture-roster", {
-    characters: todo.map((name) => ({ name, modelUrl: characterModelUrl(name) })),
+    // `customise` rides along: a FORK renders its base's mesh, so without the
+    // recipe the capture would show the BASE's body and the rater would judge
+    // the wrong thing -- and a fork exists precisely to look different.
+    characters: todo.map((name) => ({
+      name,
+      modelUrl: characterModelUrl(name),
+      customise: safeCustomise(name),
+    })),
   });
   return { ok: true, requested: todo.length, pending: todo, skipped: wanted.length - todo.length };
+}
+
+function safeCustomise(name) {
+  try {
+    const recipe = require("./character-roster.cjs").customiseOf(name);
+    return recipe && Object.keys(recipe).length ? recipe : null;
+  } catch {
+    return null;
+  }
 }
 
 function captureRosterStatus() {
@@ -1480,7 +1506,15 @@ function captureRosterStatus() {
 
 function characterModelUrl(name) {
   if (!isValidCharacterName(name)) return null;
-  const candidates = [path.join(ROSTER_DIR, name, "model.vrm")];
+  // A fork resolves through its `base` (character-roster.resolveModelFile); an
+  // ordinary character answers with its own file on the first candidate.
+  let resolved = null;
+  try {
+    resolved = require("./character-roster.cjs").resolveModelFile(name);
+  } catch {
+    resolved = null;
+  }
+  const candidates = [resolved, path.join(ROSTER_DIR, name, "model.vrm")].filter(Boolean);
   for (const candidate of candidates) {
     try {
       if (fs.existsSync(candidate)) return pathToFileURL(candidate).href;

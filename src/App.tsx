@@ -246,7 +246,7 @@ function AvatarSceneApp() {
         const list = Array.isArray(event.characters) ? event.characters : [];
         for (const item of list) {
           if (!item || typeof item.name !== 'string' || typeof item.modelUrl !== 'string') continue;
-          void renderVrmFullBody(item.name, item.modelUrl).then((dataUrl) => {
+          void renderVrmFullBody(item.name, item.modelUrl, item.customise ?? undefined).then((dataUrl) => {
             if (dataUrl) void api?.saveCharacterFullBody?.(item.name, dataUrl);
           });
         }

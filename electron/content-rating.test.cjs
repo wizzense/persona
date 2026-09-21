@@ -342,3 +342,68 @@ test("rateOnEnroll never throws when the rater cannot be started -- the enroll s
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ─── forking must never launder a rating (owner, 2026-09-20) ───────────────
+
+test("a fork inherits the STRONGEST rating in its chain -- rating the variant tamer cannot free it", () => {
+  const roster = require("./character-roster.cjs");
+  const base = "zz-fork-base";
+  const dir = path.join(ROSTER, base);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "model.vrm"), "not-a-real-vrm");
+  fs.writeFileSync(path.join(dir, "character.json"), JSON.stringify({ rating: "r18", source: "vision" }));
+  const variant = `${base}-tame`;
+  const vdir = path.join(ROSTER, variant);
+  try {
+    // An unjudged fork is hidden like any unjudged character, whatever its base.
+    fs.mkdirSync(vdir, { recursive: true });
+    fs.writeFileSync(path.join(vdir, "character.json"),
+      JSON.stringify({ base, source: "fork", customise: { boneScale: { head: 1.1 } } }));
+    assert.equal(rating.getRating(variant), "unrated");
+    withGate(false, () => assert.equal(rating.hiddenReason(variant), "unjudged"));
+
+    // THE LAUNDERING ATTEMPT: judge the fork of an r18 model as "general".
+    fs.writeFileSync(path.join(vdir, "character.json"),
+      JSON.stringify({ base, source: "vision", rating: "general" }));
+    assert.equal(rating.getRating(variant), "r18",
+      "a fork of an r18 model rated general MUST still resolve r18, or forking is a gate bypass");
+    withGate(false, () => assert.equal(rating.hiddenReason(variant), "gate"));
+
+    // The owner's own STRONGER verdict still sticks.
+    fs.writeFileSync(path.join(vdir, "character.json"),
+      JSON.stringify({ base, source: "vision", rating: "r18" }));
+    assert.equal(rating.getRating(variant), "r18");
+
+    // And the variant resolves the BASE's mesh rather than owning one.
+    assert.ok(String(roster.resolveModelFile(variant)).includes(base), 'the variant resolves the BASE model file');
+    assert.deepEqual(roster.customiseOf(variant), {});
+  } finally {
+    fs.rmSync(vdir, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a base chain that names a cycle terminates instead of hanging the loader", () => {
+  const roster = require("./character-roster.cjs");
+  const a = "zz-cycle-a";
+  const b = "zz-cycle-b";
+  for (const [name, base] of [[a, b], [b, a]]) {
+    const d = path.join(ROSTER, name);
+    fs.mkdirSync(d, { recursive: true });
+    fs.writeFileSync(path.join(d, "character.json"), JSON.stringify({ base, source: "fork", rating: "general" }));
+  }
+  try {
+    assert.equal(rating.getRating(a), "general", "the walk stops at the repeat rather than looping");
+    assert.equal(roster.resolveModelFile(a), null, "no model anywhere in the cycle");
+    assert.deepEqual(roster.customiseOf(a), {});
+  } finally {
+    for (const name of [a, b]) fs.rmSync(path.join(ROSTER, name), { recursive: true, force: true });
+  }
+});
+
+test("forkCharacter refuses a missing base, a duplicate name, and an empty-name slug", () => {
+  const roster = require("./character-roster.cjs");
+  assert.equal(roster.forkCharacter("zz-no-such-base", "v", {}).ok, false);
+  assert.equal(roster.forkCharacter("", "v", {}).ok, false);
+  assert.match(roster.forkCharacter("zz-no-such-base", "v", {}).reason, /no character named/);
+});

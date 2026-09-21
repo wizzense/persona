@@ -134,20 +134,67 @@ function invalidateGate() {
   gateCache = null;
 }
 
+/** The rating record on disk, parsed. `{}` when there is none. */
+function ratingRecord(name) {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(ROSTER_DIR, name, RATING_FILE), "utf8")) || {};
+  } catch {
+    return {};
+  }
+}
+
+/** The base this character was forked from, or null. One hop only -- a variant
+ *  of a variant resolves through its own base, and the chain is walked (with a
+ *  cycle guard) by ratingOf below rather than trusted to be flat. */
+function baseOf(name) {
+  const base = ratingRecord(name).base;
+  return typeof base === "string" && base && base !== name ? base : null;
+}
+
 /** The recorded rating for a character, or "unrated" when none was written --
  *  or when the file carries the rater's "default" stamp, which records only
- *  that nothing matched the name and nobody looked at the model. */
+ *  that nothing matched the name and nobody looked at the model.
+ *
+ *  🚩 A FORK MAY NEVER BE TAMER THAN WHAT IT WAS FORKED FROM. A variant carries
+ *  `base`, and its effective rating is the STRONGEST rating in its chain: without
+ *  that, forking is a gate bypass -- fork an r18 model, rate the variant
+ *  "general", and the hidden body is on the public roster wearing a new name.
+ *  The variant may be rated HIGHER than its base (a tame model customised into
+ *  something explicit is the owner's own verdict, and it sticks). */
 function getRating(name) {
-  try {
-    const raw = fs.readFileSync(path.join(ROSTER_DIR, name, RATING_FILE), "utf8");
-    const parsed = JSON.parse(raw);
-    const rating = String(parsed.rating || "").toLowerCase();
-    if (!rating) return "unrated";
-    if (UNJUDGED_SOURCES.has(String(parsed.source || ""))) return "unrated";
+  const judgedOf = (node) => {
+    const record = ratingRecord(node);
+    const rating = String(record.rating || "").toLowerCase();
+    if (!rating) return null;
+    if (UNJUDGED_SOURCES.has(String(record.source || ""))) return null;
     return rating;
-  } catch {
-    return "unrated";
+  };
+  // A fork nobody has looked at is UNRATED, whatever its base was: the recipe
+  // can change what the body shows, so inheriting "general" unseen would be the
+  // same hole from the other side. It is hidden until judged, like any unjudged
+  // character.
+  const own = judgedOf(name);
+  if (own === null) return "unrated";
+  // Judged: it is the STRONGEST rating in its chain. A variant may be rated
+  // HIGHER than its base (the owner's own verdict sticks) and never lower.
+  let worst = own;
+  const seen = new Set([name]);
+  let node = baseOf(name);
+  while (node && !seen.has(node)) {
+    seen.add(node);
+    const rating = judgedOf(node);
+    if (rating) {
+      const rank = RATING_ORDER[rating];
+      const held = RATING_ORDER[worst];
+      // A rating outside the ranked set is honoured verbatim rather than
+      // compared -- an unknown value must not silently rank as 0 (the bug this
+      // replaces: RATING_ORDER["unrated"] is undefined and every `>` was false).
+      if (rank == null) return rating;
+      if (held == null || rank > held) worst = rating;
+    }
+    node = baseOf(node);
   }
+  return worst;
 }
 
 /** Record a rating. Returns false when it could not be written. */
@@ -298,6 +345,8 @@ function ratingReport() {
 module.exports = {
   ADULT_RATINGS,
   RATING_ORDER,
+  baseOf,
+  ratingRecord,
   contentCeiling,
   hiddenReason,
   setSafetyExplicitAllowed,

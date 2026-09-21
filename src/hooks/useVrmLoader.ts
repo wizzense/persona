@@ -273,6 +273,97 @@ export function applySpringScale(vrm: VRM, worldScale: number, tuning: DeskSprin
   }
 }
 
+/** A fork's recipe: what makes <base>-<variant> look different from <base>.
+ *  Written by character-roster.forkCharacter into the variant's character.json
+ *  and merged down the base chain, so the mesh is never copied -- the deltas are
+ *  applied here, on the shared model, at load. Same seam as the physics knobs.
+ *
+ *  `blendshapes` are three-vrm expression names (happy, angry, blink, aa, ...);
+ *  a value is clamped 0..1. `boneScale` names NORMALIZED humanoid bones
+ *  (head, hips, leftUpperArm, ...) and scales that bone's node, which moves its
+ *  children with it -- that is how a bigger head or longer legs works without
+ *  touching a vertex. `materials` carries whole-model tweaks that do not need a
+ *  per-material editor yet: a colour tint and an outline width. */
+export interface DeskCustomise {
+  blendshapes?: Record<string, number>;
+  boneScale?: Record<string, number>;
+  materials?: { tint?: string; tintStrength?: number; outlineWidth?: number };
+}
+
+const CUSTOMISE_BONE_MIN = 0.5;
+const CUSTOMISE_BONE_MAX = 2;
+
+/** Apply a fork's recipe to a freshly loaded VRM. Idempotent over the AUTHORED
+ *  values (recorded on first call) so re-applying a changed recipe does not
+ *  compound, exactly like applySpringScale -- a slider dragged twice must not
+ *  end up twice as far. Every arm fails soft: a recipe naming a bone or
+ *  expression this model does not have costs that one line, never the load. */
+export function applyCustomise(vrm: VRM, recipe: DeskCustomise | null | undefined) {
+  if (!recipe || typeof recipe !== 'object') return;
+
+  const expressions = vrm.expressionManager;
+  if (expressions && recipe.blendshapes) {
+    for (const [name, raw] of Object.entries(recipe.blendshapes)) {
+      const value = Number(raw);
+      if (!Number.isFinite(value)) continue;
+      try {
+        expressions.setValue(name, Math.min(1, Math.max(0, value)));
+      } catch {
+        /* an expression this model does not author */
+      }
+    }
+  }
+
+  if (recipe.boneScale && vrm.humanoid) {
+    for (const [bone, raw] of Object.entries(recipe.boneScale)) {
+      const value = Number(raw);
+      if (!Number.isFinite(value) || value <= 0) continue;
+      let node: THREE.Object3D | null;
+      try {
+        node = vrm.humanoid.getNormalizedBoneNode(bone as never);
+      } catch {
+        // A recipe naming a bone this model does not author.
+        continue;
+      }
+      if (!node) continue;
+      const holder = node as THREE.Object3D & { __deskAuthoredScale?: THREE.Vector3 };
+      if (!holder.__deskAuthoredScale) holder.__deskAuthoredScale = node.scale.clone();
+      const clamped = Math.min(CUSTOMISE_BONE_MAX, Math.max(CUSTOMISE_BONE_MIN, value));
+      node.scale.copy(holder.__deskAuthoredScale).multiplyScalar(clamped);
+    }
+  }
+
+  const materials = recipe.materials;
+  if (materials && (materials.tint || materials.outlineWidth != null)) {
+    const tint = materials.tint ? new THREE.Color(materials.tint) : null;
+    const strength = Number.isFinite(Number(materials.tintStrength))
+      ? Math.min(1, Math.max(0, Number(materials.tintStrength)))
+      : 1;
+    vrm.scene.traverse((object) => {
+      const mesh = object as THREE.Mesh;
+      if (!mesh.material) return;
+      const list = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      for (const material of list) {
+        const m = material as THREE.Material & {
+          color?: THREE.Color;
+          outlineWidthFactor?: number;
+          __deskAuthoredColor?: THREE.Color;
+          __deskAuthoredOutline?: number;
+        };
+        if (tint && m.color) {
+          if (!m.__deskAuthoredColor) m.__deskAuthoredColor = m.color.clone();
+          m.color.copy(m.__deskAuthoredColor).lerp(tint, strength);
+        }
+        if (materials.outlineWidth != null && typeof m.outlineWidthFactor === 'number') {
+          if (m.__deskAuthoredOutline == null) m.__deskAuthoredOutline = m.outlineWidthFactor;
+          const width = Number(materials.outlineWidth);
+          if (Number.isFinite(width)) m.outlineWidthFactor = Math.max(0, width);
+        }
+      }
+    });
+  }
+}
+
 export function useVrmLoader(url: string): VRM | null {
   const gltf = useLoader(GLTFLoader, url, (loader) => {
     loader.register((parser) => new VRMLoaderPlugin(parser));

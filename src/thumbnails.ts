@@ -16,6 +16,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
+import { applyCustomise, type DeskCustomise } from './hooks/useVrmLoader';
 
 const SIZE = 256;
 const THUMB_QUALITY = 0.86;
@@ -125,7 +126,7 @@ function getRig(): ThumbRig {
 
 /** Render one VRM into a square JPEG data URL. Resolves null on ANY failure —
  *  a character that will not load must cost its own preview, not the deck. */
-async function renderOne(name: string, url: string, frame: Frame = 'head'): Promise<string | null> {
+async function renderOne(name: string, url: string, frame: Frame = 'head', customise?: DeskCustomise): Promise<string | null> {
   const { renderer, scene, camera } = getRig();
   let added: THREE.Object3D | null = null;
   // The one rig serves both frames: size it per render (cheap; no new context).
@@ -147,6 +148,10 @@ async function renderOne(name: string, url: string, frame: Frame = 'head'): Prom
     VRMUtils.rotateVRM0(vrm);
     scene.add(vrm.scene);
     added = vrm.scene;
+    // A FORK is its base's mesh plus a recipe. Apply it BEFORE the framing
+    // maths: the content rater judges this picture, and a variant judged on its
+    // base's body is the wrong verdict on the wrong character.
+    if (customise) applyCustomise(vrm, customise);
     vrm.update(0);
     scene.updateMatrixWorld(true);
 
@@ -208,9 +213,10 @@ export function renderVrmThumbnail(name: string, url: string): Promise<string | 
   return result;
 }
 
-/** The same queue, whole model in a portrait frame (characters/<slug>/fullbody.jpg). */
-export function renderVrmFullBody(name: string, url: string): Promise<string | null> {
-  const result = queue.then(() => renderOne(name, url, 'body'));
+/** The same queue, whole model in a portrait frame (characters/<slug>/fullbody.jpg).
+ *  `customise` is a fork's recipe, applied before the shot. */
+export function renderVrmFullBody(name: string, url: string, customise?: DeskCustomise): Promise<string | null> {
+  const result = queue.then(() => renderOne(name, url, 'body', customise));
   queue = result.catch(() => undefined);
   return result;
 }

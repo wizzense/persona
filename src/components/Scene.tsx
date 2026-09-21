@@ -13,7 +13,7 @@ import { useAvatarDrag } from '../hooks/useAvatarDrag';
 import { authoredFields, freeSpot } from '../hooks/stagePlacement';
 import { anyoneAudible } from '../hooks/voiceLevels';
 import type { VRM } from '@pixiv/three-vrm';
-import { applySpringScale, sanitizeSpringTuning, DEFAULT_SPRING_TUNING, type DeskSpringTuning } from '../hooks/useVrmLoader';
+import { applySpringScale, applyCustomise, sanitizeSpringTuning, DEFAULT_SPRING_TUNING, type DeskSpringTuning, type DeskCustomise } from '../hooks/useVrmLoader';
 import type { SpeechBubble } from '../speech-bubble';
 import { SpeechBubbleView } from './SpeechBubbleView';
 
@@ -212,6 +212,10 @@ interface PlacedAvatarProps {
   /** The owner's physics knobs for THIS body (cast.json `physics`, via a
    *  `tune-avatar` event). Multipliers over the model's authored springs. */
   physics?: DeskSpringTuning;
+  /** A forked character's recipe (character.json `customise`, via a
+   *  `customise-avatar` event): this body renders its BASE's mesh with these
+   *  deltas applied. Absent for an ordinary character. */
+  customise?: DeskCustomise;
 }
 
 /** ALL avatars share ONE OrbitControls, so "disable on my drag start / enable on my drag
@@ -240,13 +244,15 @@ function resumeOrbit(orbit: { enabled?: boolean } | null) {
  *  position is committed to persisted layout state ONCE, on pointerup. All live values
  *  (y, scale) are read through refs so a re-render mid-drag can never strand the drag on
  *  a stale closure. */
-function PlacedAvatar({ slotId, transform, onDrag, onScale, onRotate, avatarProps, onReady, bubble, physics }: PlacedAvatarProps) {
+function PlacedAvatar({ slotId, transform, onDrag, onScale, onRotate, avatarProps, onReady, bubble, physics, customise }: PlacedAvatarProps) {
   const getThreeState = useThree((state) => state.get);
   const groupRef = useRef<THREE.Group>(null);
   const transformRef = useRef(transform);
   transformRef.current = transform;
   const physicsRef = useRef(physics ?? DEFAULT_SPRING_TUNING);
   physicsRef.current = physics ?? DEFAULT_SPRING_TUNING;
+  const customiseRef = useRef(customise);
+  customiseRef.current = customise;
   const draggingRef = useRef(false);
   // Where the left button went down, so pointerup can tell a CLICK (focus the
   // avatar) from a DRAG (move/rotate) — the same 5-6px band the drag hook uses.
@@ -289,6 +295,14 @@ function PlacedAvatar({ slotId, transform, onDrag, onScale, onRotate, avatarProp
     if (vrmRef.current) applySpringScale(vrmRef.current, transformRef.current.scale, physicsRef.current);
   }, [p.enabled, p.weight, p.stiffness, p.damping, p.jiggle]);
 
+  // The recipe changes on its own clock (a fork edited while the desk runs).
+  // applyCustomise is idempotent over the AUTHORED values, so re-applying a
+  // changed recipe does not compound.
+  const recipeKey = customise ? JSON.stringify(customise) : '';
+  useEffect(() => {
+    if (vrmRef.current) applyCustomise(vrmRef.current, customiseRef.current);
+  }, [recipeKey]);
+
   const { beginDrag } = useAvatarDrag(
     (nx, nz) => {
       const group = groupRef.current;
@@ -321,6 +335,9 @@ function PlacedAvatar({ slotId, transform, onDrag, onScale, onRotate, avatarProp
       // the compensation must also run here, with the scale the group already has.
       vrmRef.current = vrm ?? null;
       if (vrm) applySpringScale(vrm, transformRef.current.scale, physicsRef.current);
+      // The fork's own look, on the shared mesh. Before onReady, so nothing
+      // downstream measures the body at its un-customised proportions.
+      if (vrm) applyCustomise(vrm, customiseRef.current);
       setHeadBone(vrm?.humanoid?.getNormalizedBoneNode('head') ?? null);
       setReady(true);
       onReadyRef.current(scene);
@@ -531,6 +548,7 @@ export function Scene(props: SceneProps) {
   // too -- main sends the tune right behind the spawn -- and dropped with the
   // slot below, so a reused id never inherits the last body's feel.
   const [physicsBySlot, setPhysicsBySlot] = useState<Record<string, DeskSpringTuning>>({});
+  const [customiseBySlot, setCustomiseBySlot] = useState<Record<string, DeskCustomise>>({});
   // A removed slot's stored spot must not leak onto whatever LATER slot reuses that id
   // (nextFreeSlotId() reuses freed ids), so clear it the moment it drops out of extraSlots.
   const previousExtraIdsRef = useState(() => new Set<string>())[0];
@@ -645,6 +663,10 @@ export function Scene(props: SceneProps) {
         if (typeof id !== 'string' || !id) return;
         const tuning = sanitizeSpringTuning(event.physics);
         setPhysicsBySlot((current) => ({ ...current, [id]: tuning }));
+      } else if (event.type === 'customise-avatar') {
+        const id = event.slotId;
+        if (typeof id !== 'string' || !id) return;
+        setCustomiseBySlot((current) => ({ ...current, [id]: event.customise || {} }));
       } else if (event.type === 'place-avatar') {
         // One AUTHORED body, from the cast file via main: an exact spot for a named
         // agent, which is what the single free lane per side cannot express (see
@@ -708,6 +730,7 @@ export function Scene(props: SceneProps) {
         onReady={handleAvatarReady}
         bubble={props.bubbles?.slot0}
         physics={physicsBySlot.slot0}
+        customise={customiseBySlot.slot0}
       />
       {/* Extra slots: spawned avatars, each independently draggable/scalable — no longer
           pinned to a fixed side-by-side offset once the owner has moved one. */}
@@ -735,6 +758,7 @@ export function Scene(props: SceneProps) {
             onReady={(scene) => handleExtraReady(slot.slotId, scene)}
             bubble={props.bubbles?.[slot.slotId]}
             physics={physicsBySlot[slot.slotId]}
+            customise={customiseBySlot[slot.slotId]}
           />
         );
       })}
