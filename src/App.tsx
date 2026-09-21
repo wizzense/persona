@@ -114,13 +114,17 @@ export function App() {
   // ONE hook, then the returns: a second useState after `if (isDeck) return`
   // was itself the conditional-hook shape this comment warns about (lint
   // measured it again 2026-09-18).
-  const [mode] = useState<'deck' | 'chat' | 'avatar'>(() => {
+  const [mode] = useState<'deck' | 'characters' | 'chat' | 'avatar'>(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get('deck') === '1') return 'deck';
+    // ?characters=1 — the same bundle and the same deck-state subscription as the inbox,
+    // rendering the BODIES half (stage slots, spawn chips, installed + market roster).
+    if (params.get('characters') === '1') return 'characters';
     if (params.get('chat') === '1') return 'chat';
     return 'avatar';
   });
-  if (mode === 'deck') return <Deck />;
+  if (mode === 'deck') return <Deck view="inbox" />;
+  if (mode === 'characters') return <Deck view="characters" />;
   if (mode === 'chat') return <ChatView />;
   return <AvatarSceneApp />;
 }
