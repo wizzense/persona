@@ -235,9 +235,24 @@ test("resolveSpeech: an origin configured with ONLY a volume is configured, not 
 });
 
 test("resolveSpeech: the fail-open verdict is FULL volume, never silence", () => {
+  // Against an EMPTY cast dir, so this asserts the fail-open default and not whatever volume
+  // the person running the suite happens to have set. It used to call resolveSpeech(undefined),
+  // which resolves CAST_FILE() -- the real %APPDATA%\Desk\cast.json -- and went red on a box
+  // whose owner had chosen "volume": 0.35, while resolveSpeech was doing exactly its job.
+  const dir = tmpDir();
+  const file = castFileIn(dir);   // no cast file written: nothing is configured
+  const gate = resolveSpeech({ origin: "mcp:speak", text: "hi", file });
+  assert.equal(gate.allowed, true, "an unconfigured speaker is allowed, never muted by default");
+  assert.equal(gate.volume, 1, "and at FULL volume — the fail-open default is not a quiet one");
+});
+
+test("resolveSpeech: with no context at all it still fails OPEN on the real config", () => {
+  // The no-argument path reads whatever this box has configured, so the NUMBER is the owner's
+  // to choose and is not asserted here. What must hold on any box is that it neither throws nor
+  // silences: an agent that never speaks is the failure this guards.
   const gate = resolveSpeech(undefined);
-  assert.equal(gate.allowed, true);
-  assert.equal(gate.volume, 1);
+  assert.equal(gate.allowed, true, "no context must never resolve to muted");
+  assert.ok(typeof gate.volume === "number" && gate.volume > 0, `a positive volume: ${gate.volume}`);
 });
 
 // ─── the caption verdict rides the same gate ────────────────────────────────
