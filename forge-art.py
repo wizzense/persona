@@ -194,7 +194,22 @@ def main() -> int:
         if not ids:
             print("ERROR: nothing uploaded", file=sys.stderr)
             return 1
-        created = post(f"{FORGE}/api/characters", {
+        # REUSE, never re-create. POST /api/characters mints a fresh char-NNN
+        # every call regardless of the `id` we ask for -- measured 2026-09-20,
+        # two runs of the same slug produced char-417 and char-418. A 66-model
+        # batch would have left 66 duplicates per pass.
+        existing = None
+        try:
+            for c in get(f"{FORGE}/api/characters").get("characters", []):
+                if str(c.get("name", "")) == f"{args.slug} (desk roster)":
+                    existing = c.get("id")
+                    break
+        except (urllib.error.URLError, OSError, ValueError):
+            existing = None
+        if existing:
+            cid = existing
+            print(f"  reusing character {cid}")
+        created = None if existing else post(f"{FORGE}/api/characters", {
             "id": f"desk-{args.slug}",
             "name": f"{args.slug} (desk roster)",
             "face_refs": ids,
@@ -203,8 +218,9 @@ def main() -> int:
             "style": "anime",
             "ip_weight": 0.7,
         })
-        cid = (created.get("character") or {}).get("id")
-        print(f"  character {cid} with {len(ids)} face ref(s)")
+        if created:
+            cid = (created.get("character") or {}).get("id")
+            print(f"  character {cid} with {len(ids)} face ref(s)")
 
         if args.dataset or args.train:
             ds = post(f"{FORGE}/api/characters/{cid}/dataset",
