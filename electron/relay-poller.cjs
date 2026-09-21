@@ -75,7 +75,13 @@ function pickWorkOrders(rows, { channel, seen, policy = CHANNELS[channel] || "ad
     // channel talking about itself.
     if (row.type && row.type !== "message" && row.type !== "action") continue;
     // The desk's own mirror (and any awrelay ack/finding/alert) — never re-run.
-    if (ENVELOPE_RE.test(row.text)) continue;
+    // Test the WIRE text: shapeRows splits the envelope off into `kind` for
+    // display, so for an `[ack] ...` row `text` is the body alone and this guard
+    // saw nothing to skip -- the desk then executed an envelope-prefixed probe as
+    // an owner command and spawned a headless session (RBD004, measured
+    // 2026-09-20/21). `raw` is the row as the relay sent it; a caller that hands
+    // over unshaped rows still gets `text` tested.
+    if (ENVELOPE_RE.test(String(row.raw ?? row.text))) continue;
     // A thread reply is a conversation under a message, not a new order.
     if (row.threadId) continue;
     let text = String(row.text);

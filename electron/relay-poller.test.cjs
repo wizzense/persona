@@ -6,6 +6,7 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 const { RelayPoller, ackText, pickWorkOrders } = require("./relay-poller.cjs");
+const { shapeRows } = require("./relay-feed.cjs");
 
 const row = (id, text, extra = {}) => ({ id, text, author: "david", at: 100 + Number(String(id).replace(/\D/g, "") || 0), channel: "#command", threadId: null, replyCount: 0, agent: false, ...extra });
 
@@ -146,4 +147,36 @@ test("RelayPoller: start/stop schedule on the injected timer and a poll in fligh
   poller.polling = false;
   poller.stop();
   assert.equal(cleared, 1);
+});
+
+test("RBD004: a relay row that ARRIVED with an envelope is never a work order, even after shapeRows strips the envelope for display", () => {
+  // Measured 2026-09-20/21: the RBD gate posts `[ack] [check_relay_broadcast_deliverable] probe`
+  // so the desk SKIPS it (ENVELOPE_RE, above), and the desk executed it anyway --
+  // 5 rows in the last 50 of #command carry its own `[ack] ...` thread receipt,
+  // each one a headless session spawned by a message addressed to no one. The
+  // seam is the bug: shapeRows() splits the envelope off into `kind` (right for
+  // the panel) and the poller was handed THAT text, so this guard tested a body
+  // whose envelope was already gone. Asserted here because neither module alone
+  // shows it -- this is the test that would have caught it.
+  const wire = [{
+    id: "p1",
+    channel: "#command",
+    nick: "awrun",
+    content: "[ack] [check_relay_broadcast_deliverable] probe",
+    timestamp: "2026-09-21T18:15:10Z",
+  }];
+  const shaped = shapeRows(wire, "#command", 50);
+  assert.equal(shaped.length, 1);
+  assert.equal(shaped[0].text, "[check_relay_broadcast_deliverable] probe", "the panel keeps the human body");
+  assert.equal(shaped[0].kind, "ack", "the envelope is a chip, not text");
+  assert.equal(shaped[0].raw, wire[0].content, "the wire text survives shaping");
+  assert.deepEqual(pickWorkOrders(shaped, { channel: "#command", seen: new Set() }), []);
+});
+
+test("RBD004: an UNKNOWN bracket is not an envelope -- the guard did not widen", () => {
+  // The tempting one-line fix is to skip any `[bracketed]` row. That would
+  // silently stop the desk executing a legitimate order that opens with one.
+  const rows = [row("o1", "[fleet] status"), row("o2", "plain order")];
+  const orders = pickWorkOrders(rows, { channel: "#command", seen: new Set() });
+  assert.deepEqual(orders.map((o) => o.id), ["o1", "o2"]);
 });
