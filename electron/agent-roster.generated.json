@@ -1,20 +1,33 @@
 {
-  "_generated_from": "awdk/adk/harnesses/agents.py:AGENT_ROSTER + gen_persona_agent_roster.py:EXTRA_AGENTS",
-  "_generator": "AitherOS/dev/tools/gen_persona_agent_roster.py",
+  "_generated_from": "awdk/adk/harnesses/agents.py:AGENT_ROSTER (itself generated from config/identities by gen_sovereign_roster.py)",
+  "_generator": "AitherOS/dev/tools/gen_desk_agent_roster.py",
   "_note": "DERIVED FILE - do not hand-edit; regenerate after editing AGENT_ROSTER",
   "agents": [
     "aeon",
+    "aeros",
     "aither",
     "athena",
     "atlas",
+    "automation",
     "demiurge",
+    "gargbot",
     "hera",
     "hydra",
+    "ignis",
     "iris",
+    "jgames",
+    "lust",
     "lyra",
+    "morgana",
+    "mrrobot",
     "plutus",
     "prometheus",
+    "reasoner",
+    "saga",
+    "terra",
     "themis",
-    "viviane"
+    "vera",
+    "viviane",
+    "wrath"
   ]
 }
