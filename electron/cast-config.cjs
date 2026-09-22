@@ -1413,7 +1413,7 @@ function resolveDesk(snapshot, { env = process.env } = {}) {
  * resolveInput / resolveHotkeys -- companions to resolveVoice for the input
  * half of Plan: configurable voice + hotkeys.
  */
-function resolveInput(snapshot, { env = process.env } = {}) {
+function resolveInput(snapshot) {
   const cfg = normaliseSnapshot(snapshot);
   const problems = [];
   const out = {};

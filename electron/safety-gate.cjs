@@ -330,7 +330,7 @@ async function setAdultContent(enabled, { requestFn = safetyRequest, timeoutMs }
   let res;
   try {
     res = await requestFn("PUT", ADULT_PATH, { enabled: true }, { timeoutMs });
-  } catch (error) {
+  } catch {
     res = null;
   }
   if (!res || res.status == null) {

@@ -1219,7 +1219,7 @@ function micMuted() {
   try {
     const { load, resolveInput } = require("./cast-config.cjs");
     return !!resolveInput(load().snapshot).micMuted;
-  } catch (_e) {
+  } catch {
     return false; // unreadable settings must not silently disable the mic
   }
 }
@@ -2448,7 +2448,7 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
     try {
       const { load, resolveHotkeys } = require("./cast-config.cjs");
       return resolveHotkeys(load().snapshot);
-    } catch (_e) {
+    } catch {
       return {}; // unreadable cast.json -> every command keeps its DEFAULT accel
     }
   }
@@ -2481,7 +2481,7 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
       const grantMic = (p) => p === "media" || p === "audioCapture" || p === "microphone";
       session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) => cb(grantMic(permission)));
       session.defaultSession.setPermissionCheckHandler((_wc, permission) => grantMic(permission));
-    } catch (_e) { /* permission API absent: capture would fail, not silently pass */ }
+    } catch { /* permission API absent: capture would fail, not silently pass */ }
     // Ahead of batch work on a saturated host (process-priority.cjs). The first
     // sweep runs once the GPU process and the windows exist; the timer catches later ones.
     setTimeout(() => require("./process-priority.cjs").keepDeskResponsive(app), 5000);
@@ -2777,7 +2777,7 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
         } else if (next.startsWith("error:")) {
           void speakAloud("Voice error: " + next.slice(6).trim().slice(0, 200), undefined, undefined, "slot0", "service:awdesk-voice");
         }
-      } catch (_e) { /* speech is best-effort */ }
+      } catch { /* speech is best-effort */ }
     });
     ipcMain.handle("desk:voice-transcribe", async (_event, audioB64, format) => {
       try {
@@ -2819,7 +2819,7 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
             fs.unlink(wav, () => {});
             return "ERROR: no audio captured - the microphone produced no sound. Check your input device in Windows Sound settings.";
           }
-        } catch (_e) { /* stat failed: let the lanes below report */ }
+        } catch { /* stat failed: let the lanes below report */ }
         // Host STT shim first: reads the HOST wav directly (no Library-bind hop)
         // and answers the perception /voice/transcribe/base64 contract even when
         // the gateway/perception voice service is down.
@@ -2827,7 +2827,7 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
           const { transcribeHostFile } = require("./voice-client.cjs");
           const shimText = await transcribeHostFile(wav);
           if (shimText && shimText.trim()) { fs.unlink(wav, () => {}); return shimText.trim(); }
-        } catch (_e) { /* fall through to the gateway lane */ }
+        } catch { /* fall through to the gateway lane */ }
         const staged = stagePath(wav);
         let out;
         try {
@@ -3446,7 +3446,7 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
           : (n === 1
               ? `A decision needs you: ${title}.`
               : `${n} decisions need you. The latest is: ${title}.`);
-        try { void speakAloud(phrase, "nova", undefined, "slot0", "service:awdesk-decisions"); } catch (_e) {}
+        try { void speakAloud(phrase, "nova", undefined, "slot0", "service:awdesk-decisions"); } catch { /* best-effort */ }
         try {
           if (isBacklog) {
             openInbox();                          // backlog: ONE console, no 30-popup storm
@@ -3459,11 +3459,11 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
                   detached: true, stdio: "ignore",
                   env: { ...process.env, AITHER_DECISIONS_POPUP: "1" },
                 }).unref();
-              } catch (_e) {}
+              } catch { /* best-effort */ }
             }
           }
-        } catch (_e) {}
-      } catch (_e) { /* a prompt must never crash the poll */ }
+        } catch { /* best-effort */ }
+      } catch { /* a prompt must never crash the poll */ }
     };
     let decisionsAnnounced = null; // null until the first poll seeds the backlog
     decisionWatchStop = decisionCards.watch({
@@ -3479,7 +3479,7 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
         let actionable;
         try {
           actionable = cards.filter((c) => decisionCards.triageCard(c) === "decision");
-        } catch (_e) {
+        } catch {
           return; // triage threw: keep the badge, never crash the poll
         }
         const ids = new Set(actionable.map((c) => c && c.id).filter(Boolean));

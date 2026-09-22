@@ -233,7 +233,7 @@ function createGameStageSubscriber(deps = {}) {
         state.connected = true;
         state.attempts = 0;
         const parser = createSseParser();
-        res.setEncoding && res.setEncoding("utf8");
+        if (res.setEncoding) res.setEncoding("utf8");
         res.on("data", (chunk) => {
           for (const frame of parser.feed(chunk)) {
             if (frame.id !== null && frame.id !== undefined) state.lastEventId = frame.id;

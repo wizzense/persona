@@ -1117,7 +1117,6 @@ function SystemSection() {
  * the deck-state push, and two copies of it would drift or double-subscribe.
  */
 export function Deck({ view = 'inbox' }: { view?: 'inbox' | 'characters' } = {}) {
-  const isInbox = view === 'inbox';
   const isCharacters = view === 'characters';
   const [state, setState] = useState<DeckState>(EMPTY_DECK_STATE);
   const [nowMs, setNowMs] = useState(() => Date.now());

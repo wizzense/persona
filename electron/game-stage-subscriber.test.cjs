@@ -121,7 +121,7 @@ test("no animate/transform dep = undeliverable, counted, no throw", () => {
 test("start(): connects with the bearer + Accept, delivers streamed frames, remembers Last-Event-ID for the reconnect", async () => {
   const spoken = [];
   const fake = fakeRequest({
-    onOpen(res, options) {
+    onOpen(res) {
       if (fake.calls.length === 1) {
         res.write(frame({ type: "speak", persona_id: "guide", text: "one", rating: "pg" }, 41));
         res.write(frame({ type: "speak", persona_id: "guide", text: "adult", rating: "explicit" }, 42));

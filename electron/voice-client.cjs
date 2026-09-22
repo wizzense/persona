@@ -33,9 +33,9 @@ const STT_SHIM_URL = process.env.AWDESK_STT_SHIM_URL || "http://127.0.0.1:8195/v
 function transcribeHostFile(hostPath) {
   return new Promise((resolve) => {
     let b64;
-    try { b64 = _fs.readFileSync(hostPath).toString("base64"); } catch (_e) { return resolve(null); }
+    try { b64 = _fs.readFileSync(hostPath).toString("base64"); } catch { return resolve(null); }
     let u;
-    try { u = new URL(STT_SHIM_URL); } catch (_e) { return resolve(null); }
+    try { u = new URL(STT_SHIM_URL); } catch { return resolve(null); }
     const body = JSON.stringify({ audio_base64: b64, format: String(hostPath).split(".").pop() || "wav" });
     const req = _http.request({
       host: u.hostname, port: u.port, path: u.pathname, method: "POST",
@@ -44,7 +44,7 @@ function transcribeHostFile(hostPath) {
     }, (res) => {
       let t = ""; res.setEncoding("utf8");
       res.on("data", (c) => { t += c; });
-      res.on("end", () => { try { const j = JSON.parse(t); resolve(j && j.success ? String(j.text || "") : null); } catch (_e) { resolve(null); } });
+      res.on("end", () => { try { const j = JSON.parse(t); resolve(j && j.success ? String(j.text || "") : null); } catch { resolve(null); } });
     });
     req.on("error", () => resolve(null));
     req.on("timeout", () => { req.destroy(); resolve(null); });
