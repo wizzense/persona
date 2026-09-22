@@ -1035,7 +1035,16 @@ function watch(onChange, { file = CAST_FILE(), debounceMs = 250 } = {}) {
 
   try {
     fs.mkdirSync(dir, { recursive: true });
-    watcher = fs.watch(dir, (_event, name) => {
+    // Watch the LONG path. libuv asserts (fs-event.c:72) and kills the process
+    // when a watched Windows dir is an 8.3 short name (C:/Users/RUNNER~1/...,
+    // GitHub's Windows runner temp dir) and the event names come back long.
+    let watchDir = dir;
+    try {
+      watchDir = fs.realpathSync.native(dir);
+    } catch {
+      /* unresolvable: watch what we were given */
+    }
+    watcher = fs.watch(watchDir, (_event, name) => {
       if (name && path.basename(String(name)) !== base) return; // ignore the .tmp siblings
       if (timer) clearTimeout(timer);
       timer = setTimeout(fire, debounceMs);

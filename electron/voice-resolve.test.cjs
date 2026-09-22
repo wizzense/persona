@@ -293,6 +293,23 @@ test("effectiveVoice: an authored voice beats the caller's; a hash-derived one y
   assert.equal(effectiveVoice("shimmer", null), "shimmer");
 });
 
+test("cache: two writes in ONE mtime tick still re-read (size is in the stamp)", () => {
+  // Measured 2026-09-22 on a Windows CI runner: the second write of a test
+  // shared the first's mtime and the resolver served the stale snapshot.
+  // Pin the mtime to force that tick deterministically.
+  const dir = tmpDir();
+  const file = castFileIn(dir);
+  const tick = 1700000000; // one whole second, so mtimeMs is exactly equal
+  writeCast(file, { version: 1 });
+  fs.utimesSync(file, tick, tick);
+  const first = resolveSpeech({ origin: "bridge:/speak", slotId: "slot0", text: "hi", file });
+  assert.equal(first.provenance.voiceFrom, "hash");
+  writeCast(file, { version: 1, actors: { "bridge:/speak": { voice: "en-US-AnaNeural" } } });
+  fs.utimesSync(file, tick, tick);
+  const second = resolveSpeech({ origin: "bridge:/speak", slotId: "slot0", text: "hi", file });
+  assert.equal(second.voice, "en-US-AnaNeural", "a same-tick edit was served from the stale cache");
+});
+
 test("effectiveVoice: end to end -- an unconfigured origin no longer re-voices an explicit POST /speak voice", () => {
   const { effectiveVoice } = require("./voice-resolve.cjs");
   const dir = tmpDir();
