@@ -1009,7 +1009,18 @@ function watch(onChange, { file = CAST_FILE(), debounceMs = 250 } = {}) {
   let timer = null;
   let watcher = null;
   let closed = false;
-  let lastMtimeMs = statMtime(resolved);
+  // Stamp = mtime AND size: two writes in one timestamp tick share an mtime,
+  // and an mtime-only guard dropped the real edit as "a touch that changed
+  // nothing" (measured 2026-09-22 on the Windows CI runner).
+  const statStamp = (f) => {
+    try {
+      const st = fs.statSync(f);
+      return `${st.mtimeMs}:${st.size}`;
+    } catch {
+      return null;
+    }
+  };
+  let lastStamp = statStamp(resolved);
 
   const fire = () => {
     timer = null;
@@ -1018,8 +1029,9 @@ function watch(onChange, { file = CAST_FILE(), debounceMs = 250 } = {}) {
     const self = selfWrites.get(resolved);
     if (self && mtimeMs !== null && self.mtimeMs === mtimeMs) return; // our own renameSync
     if (self && Date.now() - self.at < SELF_WRITE_GUARD_MS && mtimeMs !== null && mtimeMs <= self.mtimeMs) return;
-    if (mtimeMs !== null && mtimeMs === lastMtimeMs) return; // a touch that changed nothing
-    lastMtimeMs = mtimeMs;
+    const stamp = statStamp(resolved);
+    if (stamp !== null && stamp === lastStamp) return; // a touch that changed nothing
+    lastStamp = stamp;
     let result;
     try {
       result = load({ file: resolved });
