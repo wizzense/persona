@@ -3473,7 +3473,7 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
             for (const c of list.slice(0, 3)) {                // bypassing the deck router
               if (!c || !c.id) continue;
               try {
-                _cp.spawn("C:/Users/wzns/AppData/Local/Programs/Python/Python312/python.exe", ["-m", "awask.popup", String(c.id)], {
+                _cp.spawn(require("./command-agent.cjs").resolveBin("python", "AWDESK_PYTHON_BIN"), ["-m", "awask.popup", String(c.id)], {
                   detached: true, stdio: "ignore",
                   env: { ...process.env, AITHER_DECISIONS_POPUP: "1" },
                 }).unref();

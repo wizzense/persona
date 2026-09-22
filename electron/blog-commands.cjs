@@ -23,7 +23,7 @@ const { callTool: gatewayCallTool, parseMaybeJson } = require("./gateway-mcp.cjs
 
 /** Where the Veil editor lives. Measured 2026-09-19 with curl: the apex serves
  *  the editor (`https://aitherium.com/blog/editor/?slug=x` -> 200; the bare
- *  path 301s to that trailing-slash form), while `api.aitherium.com/blog/editor`
+ *  path 301s to that trailing-slash form), while the `api.` host's /blog/editor
  *  answered 503 / timed out. So the default is the host that answered, and the
  *  URL is emitted in the trailing-slash form so no redirect sits between the
  *  click and the editor. Overridable for a tenant Veil via AWDESK_VEIL_URL. */
