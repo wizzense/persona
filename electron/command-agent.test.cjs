@@ -272,6 +272,30 @@ test("CommandAgent: claude stderr streams as progress; non-zero exit is a failur
   assert.match(result.reply, /error: oops/);
 });
 
+test("CommandAgent: harness auth/backend warnings stay out of the chat and out of the failure text", async () => {
+  // Owner screenshots 2026-09-22: every reply was preceded by these two lines.
+  const progress = [];
+  const { agent } = agentWith({
+    claude: () => fakeChild({
+      stdout: "",
+      stderrLines: [
+        "\u26a0 claude.ai connectors are disabled because ANTHROPIC_API_KEY or another auth source is set",
+        '[claude-code:unrecognized_model] {"model":"deepseek-v4-flash[1m]","query_source":"sdk"}',
+        "error: the real problem",
+      ],
+      code: 1,
+      delay: 10,
+    }),
+  });
+  agent.on("progress", (p) => progress.push(p));
+  const result = await agent.run("test", { source: "test" });
+  const shown = progress.map((p) => p.text || "").join("\n");
+  assert.doesNotMatch(shown, /connectors are disabled|unrecognized_model/);
+  assert.match(shown, /\[stderr\] error: the real problem/, "real stderr is still shown");
+  assert.doesNotMatch(result.reply, /connectors are disabled|unrecognized_model/);
+  assert.match(result.reply, /the real problem/);
+});
+
 test("CommandAgent: a relay that throws or dies never fails the command", async () => {
   const { agent } = agentWith({
     relay: () => { throw new Error("awrelay ENOENT"); },

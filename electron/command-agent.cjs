@@ -96,6 +96,21 @@ function transcriptPath() {
  *  memoise, env override first. Falls back to the bare name so a later PATH fix
  *  still works. */
 const _binCache = new Map();
+/** Harness warnings that describe the host's auth/backend setup, not the answer.
+ *  Owner screenshots 2026-09-22: every Aither Command reply was preceded by
+ *  "[stderr] claude.ai connectors are disabled ..." and
+ *  "[claude-code:unrecognized_model] {...}". They print on EVERY non-Anthropic
+ *  backend and cannot be prevented from here, only kept out of the chat and out
+ *  of the failure text. Anything not matched is still shown as [stderr]. */
+const CLI_NOISE = Object.freeze([
+  /claude\.ai connectors are disabled/i,
+  /\[claude-code:unrecognized_model\]/i,
+]);
+
+function isCliNoise(line) {
+  return CLI_NOISE.some((re) => re.test(String(line || "")));
+}
+
 function resolveBin(name, envVar) {
   const override = envVar && process.env[envVar];
   if (override) return override;
@@ -530,7 +545,7 @@ class CommandAgent extends EventEmitter {
         const lines = stderrBuf.split(/\r?\n/);
         stderrBuf = lines.pop() ?? "";
         for (const line of lines) {
-          if (!line.trim()) continue;
+          if (!line.trim() || isCliNoise(line)) continue;
           stderrTail = (stderrTail + "\n" + line).slice(-2000);
           this.emit("progress", { id, text: `[stderr] ${line}`, phase: "run" });
         }
@@ -545,7 +560,7 @@ class CommandAgent extends EventEmitter {
       child.on("close", (code) => {
         clearTimeout(timer);
         this.children.delete(id);
-        if (stderrBuf.trim()) {
+        if (stderrBuf.trim() && !isCliNoise(stderrBuf)) {
           stderrTail = (stderrTail + "\n" + stderrBuf).slice(-2000);
         }
 
@@ -736,6 +751,7 @@ class CommandAgent extends EventEmitter {
 
 module.exports = {
   classifyCommand,
+  isCliNoise,
   CommandAgent,
   FLEET_VERBS,
   resolveBin,
