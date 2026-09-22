@@ -2732,6 +2732,24 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
         return { ok: false, error: String((error && error.message) || error) };
       }
     });
+    // Plan: Aither World bricks -- the Updates section of Settings. adk bricks
+    // (awdk) owns every decision; the desk only runs it (bricks-client.cjs).
+    ipcMain.handle("desk:bricks-list", async () => {
+      const { listBricks } = require("./bricks-client.cjs");
+      return listBricks();
+    });
+    ipcMain.handle("desk:bricks-act", async (_event, verb, name) => {
+      const { actOnBrick } = require("./bricks-client.cjs");
+      const res = await actOnBrick(String(verb || ""), String(name || ""));
+      if (verb === "upgrade" || verb === "rollback") {
+        const d = res.data || {};
+        const said = res.ok
+          ? `${d.id || name} is now ${d.to || "updated"}.`
+          : (d.rolled_back ? `${d.id || name} failed its test and was rolled back.` : `${name}: ${res.error}`);
+        try { void speakAloud(said, undefined, undefined, "slot0", "service:awdesk-voice"); } catch { /* best-effort */ }
+      }
+      return res;
+    });
     ipcMain.handle("desk:settings-list-mic-devices", async () => {
       // Devices are enumerated in the RENDERER (Web API, needs a getUserMedia
       // grant for labels) -- this handler exists only so a non-React pane
