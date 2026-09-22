@@ -495,13 +495,13 @@ const endpointKey = (e) => `${e.host}:${e.port}`;
  *
  *  🪤 WHY A SECOND HOST EXISTS AT ALL. The fleet runs in a WSL2 distro and
  *  publishes 8084 on the host loopback, so 127.0.0.1 is normally right. But the
- *  tailnet advertises 10.89.0.0/24 -- the fleet's OWN podman bridge -- from a
+ *  tailnet advertises the fleet's OWN podman bridge subnet -- from a
  *  route row whose router has been offline for weeks, and when that lands in
  *  table 52 every REPLY to a container goes into the tailnet. Measured
  *  2026-09-20: Windows -> 127.0.0.1:8084 accepted the SYN and then timed out
  *  (000 after 12-20s, never refused) while the distro itself answered in 9ms and
  *  every netavark DNAT rule was present and correct. tailscale-autoup.service
- *  installs `ip rule ... to 10.89.0.0/16 lookup main priority 5200` to prevent
+ *  installs `ip rule ... to <bridge subnet> lookup main priority 5200` to prevent
  *  exactly this, but a rule that is not currently applied is not a rule, and the
  *  desk going mute is how the owner finds out.
  *

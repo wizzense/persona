@@ -32,7 +32,7 @@ function reply(status, body) {
 function snapshotBody(overrides = {}) {
   return {
     installed: true,
-    home: "C:\\Users\\wzns\\.aither\\awrise",
+    home: "C:\\Users\\someone\\.aither\\awrise",
     schema: 2,
     migration: null,
     count: 2,
