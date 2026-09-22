@@ -25,13 +25,18 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
-const GATEWAY_URL = "http://127.0.0.1:8182";
+// AWDESK_GATEWAY_URL exists for the test harness (a fake gateway on an
+// ephemeral port) and for a box whose gateway is not on :8182. It is never
+// `localhost` by default -- see the trap above.
+const GATEWAY_URL = String(process.env.AWDESK_GATEWAY_URL || "http://127.0.0.1:8182").replace(/\/+$/, "");
 const MCP_ACCEPT = "application/json, text/event-stream";
 const SESSION_TTL_MS = 10 * 60 * 1000;
+const BEARER_FILE = process.env.AWDESK_SESSION_BEARER_FILE
+  || path.join(os.homedir(), ".aither", "session-bearer");
 
 function bearer() {
   try {
-    return fs.readFileSync(path.join(os.homedir(), ".aither", "session-bearer"), "utf8").trim();
+    return fs.readFileSync(BEARER_FILE, "utf8").trim();
   } catch {
     return "";
   }
@@ -39,6 +44,13 @@ function bearer() {
 
 let _session = null; // {id} — the MCP session, reused across calls
 let _sessionAt = 0;
+
+/** Forget the MCP session (tests; a gateway that restarted answers 404 on the
+ *  old id, and the next ensureSession re-initializes). */
+function resetSession() {
+  _session = null;
+  _sessionAt = 0;
+}
 
 async function mcpCall(method, params) {
   const headers = {
@@ -64,6 +76,19 @@ async function mcpCall(method, params) {
             _session = { id: sid };
             _sessionAt = Date.now();
           }
+          // A non-2xx is the gateway's OWN verdict (503 billing_unavailable
+          // {"error":"identity_unreachable",...} when Identity is down, 401/403
+          // on a bad bearer), not a JSON-RPC envelope: its `error` is a STRING,
+          // so reading `.error.message` off it printed "initialize failed:
+          // undefined" to the palette (measured 2026-09-19). Reject with the
+          // status and the sentence the gateway gave, so an outage reads as
+          // UNREACHABLE (exit 1), never as MODULE BROKEN (exit 2).
+          if (res.statusCode < 200 || res.statusCode >= 300) {
+            const j = parseMaybeJson(text) || {};
+            const why = j.message || j.reason || j.error || text.slice(0, 120) || res.statusMessage;
+            const retry = res.headers["retry-after"] ? ` (retry-after ${res.headers["retry-after"]})` : "";
+            return reject(new Error(`HTTP ${res.statusCode}: ${why}${retry}`));
+          }
           try {
             if (text.trim().startsWith("event:")) {
               const dataLine = text.split("\n").find((l) => l.startsWith("data:"));
@@ -85,6 +110,14 @@ async function mcpCall(method, params) {
   });
 }
 
+/** A JSON-RPC error is `{code,message}`; a gateway verdict is a plain string
+ *  or `{error,reason,message}`. One reader for both, never "undefined". */
+function errorText(e) {
+  if (e == null) return "unknown error";
+  if (typeof e === "string") return e;
+  return e.message || e.reason || e.error || JSON.stringify(e);
+}
+
 async function ensureSession() {
   if (!bearer()) throw new Error("no session bearer");
   if (_session && Date.now() - _sessionAt < SESSION_TTL_MS) return;
@@ -93,7 +126,7 @@ async function ensureSession() {
     capabilities: {},
     clientInfo: { name: "desk", version: "1" },
   });
-  if (init.error) throw new Error(`initialize failed: ${init.error.message}`);
+  if (init.error) throw new Error(`initialize failed: ${errorText(init.error)}`);
   await mcpCall("notifications/initialized", {}).catch(() => {});
 }
 
@@ -104,7 +137,7 @@ async function ensureSession() {
 async function callTool(name, args = {}) {
   await ensureSession();
   const res = await mcpCall("tools/call", { name, arguments: args });
-  if (res?.error) throw new Error(`${name}: ${res.error.message}`);
+  if (res?.error) throw new Error(`${name}: ${errorText(res.error)}`);
   const content = res?.result?.content;
   if (!content) throw new Error(`${name}: no content`);
   return content.map((c) => c.text ?? "").join("\n");
@@ -119,7 +152,7 @@ function parseMaybeJson(text) {
   }
 }
 
-module.exports = { bearer, callTool, parseMaybeJson, GATEWAY_URL };
+module.exports = { bearer, callTool, errorText, parseMaybeJson, resetSession, GATEWAY_URL };
 
 if (require.main === module) {
   // Self-test: one live round-trip through a cheap, side-effect-free tool.
@@ -132,7 +165,7 @@ if (require.main === module) {
       process.exit(0);
     } catch (error) {
       const msg = String(error?.message || error);
-      if (/bearer|ECONNREFUSED|timeout|ETIMEDOUT/i.test(msg)) {
+      if (/bearer|ECONNREFUSED|timeout|ETIMEDOUT|HTTP 5\d\d|HTTP 40[13]|unreachable/i.test(msg)) {
         console.error(`GATEWAY UNREACHABLE: ${msg.slice(0, 200)}`);
         process.exit(1);
       }

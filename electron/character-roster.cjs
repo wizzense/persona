@@ -22,6 +22,174 @@ const ASSET_DIRS = [
   path.join(ROOT, "dist", "assets"),
 ];
 
+/**
+ * resolveModelFile — the .vrm bytes for a character, following `base`.
+ *
+ * A forked character (character.json `base` + `customise`) has no model.vrm of
+ * its own; the mesh is its base's and the differences are applied at LOAD time
+ * by the renderer. Walks the chain with a cycle guard and a depth cap, because
+ * a hand-edited character.json can name a loop and a loop here is a hang in
+ * front of the avatar window.
+ */
+function resolveModelFile(name, { depth = 8 } = {}) {
+  const seen = new Set();
+  let node = name;
+  for (let hop = 0; node && hop < depth && !seen.has(node); hop += 1) {
+    seen.add(node);
+    const own = path.join(ROSTER_DIR, node, "model.vrm");
+    if (fs.existsSync(own)) return own;
+    node = contentRating().baseOf ? contentRating().baseOf(node) : null;
+  }
+  return null;
+}
+
+/** The customise recipe for a character, MERGED down its base chain (a
+ *  variant's own values win). `{}` when nothing is customised. */
+function customiseOf(name, { depth = 8 } = {}) {
+  const chain = [];
+  const seen = new Set();
+  let node = name;
+  for (let hop = 0; node && hop < depth && !seen.has(node); hop += 1) {
+    seen.add(node);
+    const record = contentRating().ratingRecord(node);
+    if (record && typeof record.customise === "object" && record.customise) chain.push(record.customise);
+    node = contentRating().baseOf(node);
+  }
+  // Furthest base first, so a nearer variant overrides it section by section.
+  const out = {};
+  for (const layer of chain.reverse()) {
+    for (const [section, value] of Object.entries(layer)) {
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        out[section] = { ...(out[section] || {}), ...value };
+      } else {
+        out[section] = value;
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * forkCharacter — a new roster entry that is a RECIPE over an existing one.
+ *
+ * Owner, 2026-09-20: "can we fork and customise all of the characters we've
+ * downloaded". This is the cheap half of that: no mesh is copied, so a variant
+ * is a few hundred bytes and the original is never touched. The renderer
+ * applies `customise` (blendshapes, bone scales, material colours) at load,
+ * through the same seam the spring-physics knobs use.
+ *
+ * Refuses when: the base does not exist, the base is not licensed for
+ * modification (the .vrm says so -- see vrm-license), the variant name is not a
+ * slug, or the name is taken. The rating is NOT chosen here: content-rating's
+ * getRating walks `base`, so a fork can never be tamer than what it forked.
+ *
+ * @returns {{ok: boolean, name: string|null, reason: string|null}}
+ */
+function forkCharacter(base, variant, customise = {}, options = {}) {
+  const rating = contentRating();
+  if (!isValidSlug(base) || !isValidSlug(variant)) {
+    return { ok: false, name: null, reason: "base and variant must be slugs" };
+  }
+  if (!fs.existsSync(path.join(ROSTER_DIR, base))) {
+    return { ok: false, name: null, reason: `no character named ${base}` };
+  }
+  if (!resolveModelFile(base)) {
+    return { ok: false, name: null, reason: `${base} resolves to no model.vrm` };
+  }
+  const name = `${base}-${variant}`;
+  const dir = path.join(ROSTER_DIR, name);
+  if (fs.existsSync(dir)) return { ok: false, name: null, reason: `${name} already exists` };
+  const licence = options.licence || modificationAllowed(base);
+  if (licence.allowed === false) {
+    // The .vrm's own meta says no. That is the author's term, not our policy.
+    return { ok: false, name: null, reason: `${base} is not licensed for modification (${licence.detail})` };
+  }
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "character.json"),
+      JSON.stringify({
+        base,
+        customise: customise && typeof customise === "object" ? customise : {},
+        // Its OWN rating is deliberately absent: getRating inherits the base's,
+        // and writing one here would be the laundering this design refuses.
+        source: "fork",
+        forkedAt: new Date().toISOString(),
+        licence: licence.detail || null,
+      }, null, 2),
+    );
+  } catch (error) {
+    return { ok: false, name: null, reason: `could not write the variant: ${error && error.message}` };
+  }
+  return { ok: true, name, reason: null, rating: rating.getRating(name) };
+}
+
+function isValidSlug(value) {
+  return typeof value === "string" && value.length > 0 && value.length <= 80
+    && !value.includes("/") && !value.includes("\\") && !value.includes("\0")
+    && value !== "." && value !== "..";
+}
+
+/**
+ * modificationAllowed — what the MODEL's own embedded licence says.
+ *
+ * Measured across this roster on 2026-09-20: every one of the 66 permits it (48
+ * VRM 0.x `modification=allow`, 1 `allowModification`, 17
+ * `allowModificationRedistribution`), so this gate costs nothing today and is
+ * the thing that stops it costing everything the day a model that forbids it
+ * arrives. Unreadable meta is NOT a yes: it returns null (unknown), and the
+ * caller decides -- forkCharacter proceeds on unknown and records what it saw,
+ * because refusing every model whose meta we cannot parse would make the
+ * feature useless on VRM 0.x models that simply omit the field.
+ */
+function modificationAllowed(name) {
+  const file = resolveModelFile(name);
+  if (!file) return { allowed: null, detail: "no model.vrm to read" };
+  let doc;
+  try {
+    const fd = fs.openSync(file, "r");
+    try {
+      const header = Buffer.alloc(20);
+      fs.readSync(fd, header, 0, 20, 0);
+      if (header.toString("utf8", 0, 4) !== "glTF") return { allowed: null, detail: "not a GLB" };
+      const chunkLength = header.readUInt32LE(12);
+      const body = Buffer.alloc(Math.min(chunkLength, 8 * 1024 * 1024));
+      fs.readSync(fd, body, 0, body.length, 20);
+      doc = JSON.parse(body.toString("utf8"));
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch (error) {
+    return { allowed: null, detail: `unreadable meta: ${error && error.message}` };
+  }
+  const ext = (doc && doc.extensions) || {};
+  if (ext.VRMC_vrm) {
+    const mod = String((ext.VRMC_vrm.meta || {}).modification || "");
+    if (mod === "prohibited") return { allowed: false, detail: "VRM 1.0 modification=prohibited" };
+    if (mod.startsWith("allowModification")) return { allowed: true, detail: `VRM 1.0 ${mod}` };
+    return { allowed: null, detail: `VRM 1.0 modification=${mod || "absent"}` };
+  }
+  if (ext.VRM) {
+    const meta = ext.VRM.meta || {};
+    const url = String(meta.otherPermissionUrl || meta.otherLicenseUrl || "");
+    const hit = /[?&]modification=([^&]+)/.exec(url);
+    const lic = String(meta.licenseName || "");
+    if (hit) {
+      const value = decodeURIComponent(hit[1]);
+      if (value === "disallow") return { allowed: false, detail: "VRM 0.x modification=disallow" };
+      return { allowed: true, detail: `VRM 0.x modification=${value}` };
+    }
+    if (/_ND$/.test(lic)) return { allowed: false, detail: `VRM 0.x ${lic} (NoDerivatives)` };
+    return { allowed: null, detail: `VRM 0.x licenseName=${lic || "absent"}` };
+  }
+  return { allowed: null, detail: "no VRM extension" };
+}
+
+/** Lazy, so content-rating and this module can require each other. */
+function contentRating() {
+  return require("./content-rating.cjs");
+}
+
 /** Every character on disk, ratings ignored. Internal — callers that show a
  *  character to a human must use listCharacters() instead. */
 function listAllCharacters() {
@@ -29,11 +197,14 @@ function listAllCharacters() {
   try {
     const entries = fs.readdirSync(ROSTER_DIR, { withFileTypes: true });
     devCharacters = entries
-      .filter(
-        (entry) =>
-          entry.isDirectory() &&
-          fs.existsSync(path.join(ROSTER_DIR, entry.name, "model.vrm")),
-      )
+      .filter((entry) => {
+        if (!entry.isDirectory()) return false;
+        if (fs.existsSync(path.join(ROSTER_DIR, entry.name, "model.vrm"))) return true;
+        // A FORK owns no mesh -- it is a recipe over a base (forkCharacter). It
+        // is a real roster entry and must be listed, or it is invisible to the
+        // menus, to the rating gate and to the full-body capture that judges it.
+        return resolveModelFile(entry.name) !== null;
+      })
       .map((entry) => entry.name);
   } catch {
     devCharacters = [];
@@ -218,7 +389,57 @@ async function enrollNewestDownloadChecked(preferredName = null, options = {}) {
   const perform = options.perform || performEnrollment;
   const name = perform(plan);
   if (!name) return { ok: false, name: null, reason: "the copy into the roster failed", verdict };
-  return { ok: true, name, reason: null, verdict };
+  // A hand-enrolled model arrives with NO character.json, and since 2026-09-20 an
+  // unjudged character is hidden with the adult ones -- so without this the owner
+  // drops a .vrm in and it silently never appears. Judge it now. Fire-and-forget:
+  // the enroll already succeeded and a rater that cannot run must not undo it.
+  const rating = rateOnEnroll(name, options);
+  return { ok: true, name, reason: null, verdict, rating };
+}
+
+/**
+ * rateOnEnroll — judge ONE freshly enrolled character, in the background.
+ *
+ * Runs `rate-characters.py --only <name> --apply --vision --capture`: the desk
+ * renders a full-body frame of the model (bridge POST /roster/capture) and a
+ * vision model rates it. Returns what the caller should TELL the owner, never a
+ * promise -- the menu click that triggered the enroll has already returned.
+ *
+ * 🚩 It writes a PENDING marker first. Until the rater answers, the character is
+ * `unrated` and therefore hidden, and "hidden" with no explanation is exactly
+ * the failure this function exists to avoid: the marker makes the state legible
+ * to `rate-characters.py --report` and to the Cast pane's hidden list. If python
+ * or the rater is missing the marker stays, and the owner gets the one command
+ * that fixes it rather than a model that vanished.
+ */
+function rateOnEnroll(name, options = {}) {
+  const spawn = options.spawn || require("node:child_process").spawn;
+  const dir = path.join(ROSTER_DIR, name);
+  try {
+    const file = path.join(dir, "character.json");
+    if (!fs.existsSync(file)) {
+      fs.writeFileSync(file, JSON.stringify({ rating: "unrated", source: "pending" }, null, 2));
+    }
+  } catch {
+    /* the rater below is what decides; a marker we could not write is not fatal */
+  }
+  const python = options.python || process.env.DESK_PYTHON || "python";
+  try {
+    const child = spawn(
+      python,
+      [path.join(ROOT, "rate-characters.py"), "--only", name, "--apply", "--vision", "--capture"],
+      { cwd: ROOT, detached: true, stdio: "ignore", windowsHide: true },
+    );
+    if (child && typeof child.unref === "function") child.unref();
+    return { started: true, hint: `rating ${name} now (full-body look); it appears once judged` };
+  } catch (error) {
+    return {
+      started: false,
+      hint: `${name} is enrolled but UNJUDGED, so it stays hidden. Rate it: `
+        + `python rate-characters.py --only ${name} --apply --vision --capture`,
+      error: String((error && error.message) || error),
+    };
+  }
 }
 
 /** Guarded require, the same shape main.cjs uses for voice-resolve: a missing or broken
@@ -253,9 +474,12 @@ function planSlotInstall(name, slotId) {
   // (content-rating.cjs) stays, because VRoid Hub models arrive with r15/r18
   // flags and honouring them is what keeps a downloaded roster safe.
   const source = path.join(ROSTER_DIR, name);
-  const model = path.join(source, "model.vrm");
+  // A VARIANT owns no model.vrm: it is a recipe over a base (see forkCharacter).
+  // Resolve the bytes from the base and let the renderer apply the deltas, so a
+  // fork costs a few hundred bytes instead of another 60 MB of mesh.
+  const model = resolveModelFile(name);
 
-  if (!fs.existsSync(model)) return null;
+  if (!model || !fs.existsSync(model)) return null;
 
   const modelFilename = `model-${slotId}.vrm`;
   const animations = path.join(source, "animations");
@@ -301,6 +525,11 @@ function queueInstall(copies, fsp = fs.promises) {
 }
 
 module.exports = {
+  rateOnEnroll,
+  forkCharacter,
+  customiseOf,
+  modificationAllowed,
+  resolveModelFile,
   ROSTER_DIR,
   getRecentCharacters,
   enrollNewestDownload,

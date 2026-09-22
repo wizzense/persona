@@ -53,7 +53,8 @@
     "dist:pg-linux": "npm run build:pg-only && electron-builder --linux AppImage --publish never",
     "dist:pg-mac": "npm run build:pg-only && electron-builder --mac dmg zip --publish never",
     "test:console": "electron electron/console-smoke.cjs",
-    "native:fetch": "node scripts/fetch-native-helper.cjs"
+    "native:fetch": "node scripts/fetch-native-helper.cjs",
+    "game-stage": "node electron/game-stage-runner.cjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

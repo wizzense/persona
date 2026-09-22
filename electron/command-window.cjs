@@ -13,6 +13,7 @@
 const path = require("node:path");
 const { BrowserWindow, ipcMain } = require("electron");
 const { CommandAgent } = require("./command-agent.cjs");
+const { installHarnessBackend } = require("./command-harness.cjs");
 
 let commandWindow = null;
 let agent = null;
@@ -21,6 +22,10 @@ let ipcWired = false;
 function getAgent(fleetControl) {
   if (!agent) {
     agent = new CommandAgent({ fleetControl });
+    // AWDESK_COMMAND_BACKEND=harness: the agent lane runs as ONE session on the
+    // awdk harness daemon (@agent /skill addressing) instead of `claude -p`.
+    // Opt-in until the parity test is green (daily-driver plan, decision 5).
+    if (process.env.AWDESK_COMMAND_BACKEND === "harness") installHarnessBackend(agent);
     agent.on("progress", (payload) => {
       if (commandWindow && !commandWindow.isDestroyed()) {
         commandWindow.webContents.send("desk:command-progress", payload);

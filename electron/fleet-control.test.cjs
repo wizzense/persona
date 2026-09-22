@@ -4,7 +4,8 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
 
-const { ACTIONS, FleetControl, buildCommand, classify, parseVerdict, summarize, toDistroPath, ARC_ACTIONS, DESTRUCTIVE } = require("./fleet-control.cjs");
+const { ACTIONS, FleetControl, buildCommand, classify, parseVerdict, summarize, toDistroPath, ARC_ACTIONS,
+  SERVICE_ACTIONS, DESTRUCTIVE } = require("./fleet-control.cjs");
 
 test("toDistroPath maps a Windows path to the distro's /mnt view", () => {
   assert.equal(toDistroPath("C:\\AitherOS-Fresh\\.DEPLOYMENT\\scripts\\x.py"),
@@ -15,13 +16,15 @@ test("toDistroPath maps a Windows path to the distro's /mnt view", () => {
 
 test("buildCommand crosses the WSL hop as ONE sh -c string and knows every action", () => {
   for (const action of Object.keys(ACTIONS)) {
-    const cmd = buildCommand(action, { script: "C:\\x\\q.py", arcScript: "C:\\x\\arc.py", distro: "Debian" });
+    const cmd = buildCommand(action, { script: "C:\\x\\q.py", arcScript: "C:\\x\\arc.py", servicesScript: "C:\\x\\svc.py", distro: "Debian" });
     assert.equal(cmd.file, "wsl.exe");
     assert.deepEqual(cmd.args.slice(0, 6), ["-d", "Debian", "-u", "root", "sh", "-c"]);
     assert.equal(cmd.args.length, 7, "the whole invocation is the single sh -c argument");
     // ARC verbs run the ARC script; everything else the fleet script. One verb,
     // one script -- a desk button and an awsh command execute the same file.
-    const expectScript = ARC_ACTIONS.has(action) ? /^python3 '\/mnt\/c\/x\/arc\.py' / : /^python3 '\/mnt\/c\/x\/q\.py' /;
+    const expectScript = ARC_ACTIONS.has(action) ? /^python3 '\/mnt\/c\/x\/arc\.py' /
+      : SERVICE_ACTIONS.has(action) ? /^python3 '\/mnt\/c\/x\/svc\.py' /
+      : /^python3 '\/mnt\/c\/x\/q\.py' /;
     assert.match(cmd.args[6], expectScript);
     assert.match(cmd.args[6], / --json$/);
   }
@@ -33,6 +36,42 @@ test("buildCommand crosses the WSL hop as ONE sh -c string and knows every actio
   assert.match(buildCommand("up", { script: "C:\\x\\q.py" }).args[6], / resume --json$/);
   assert.match(buildCommand("gaming", { script: "C:\\x\\q.py" }).args[6], / quiesce --deep --json$/);
   assert.throws(() => buildCommand("nuke"), /unknown fleet action/);
+});
+
+test("parseVerdict keeps the ROWS of a list verb, and rc 1 there is an answer", () => {
+  // A list verb answers with a top-level ARRAY. Seeking "{" found the first row's brace
+  // inside it and threw on the trailing "]", so the rc fallback returned
+  // {ok:false,error:"exit 1"} and every row was lost in silence. rc 1 from
+  // `list --unhealthy` means "found some", which is the answer, not a failure.
+  const rows = '[\n  {"name": "aitheros-room", "status": "running", "health": "unhealthy"},\n'
+    + '  {"name": "aither-llamacpp-bonsai", "status": "stopped", "health": "-"}\n]';
+  const verdict = parseVerdict(rows, 1, "");
+  assert.equal(verdict.ok, true, "rc 1 on a list is 'found some', not a failure");
+  assert.equal(verdict.count, 2);
+  assert.equal(verdict.rc, 1);
+  assert.equal(verdict.rows[0].name, "aitheros-room");
+  assert.equal(verdict.rows[1].status, "stopped");
+  // An empty list is still a valid answer, not a cannot-judge.
+  const none = parseVerdict("[]", 0, "");
+  assert.equal(none.ok, true);
+  assert.equal(none.count, 0);
+});
+
+test("parseVerdict: a wsl.exe failure is CANNOT JUDGE in plain words, never a bare exit code", () => {
+  // wsl.exe exits -1 (4294967295 unsigned) when the distro cannot be started.
+  const v = parseVerdict("", 4294967295, "");
+  assert.equal(v.ok, false);
+  assert.equal(v.cannotJudge, true);
+  assert.equal(v.wslDown, true);
+  assert.match(v.error, /Debian WSL distro did not answer/);
+  assert.doesNotMatch(v.error, /4294967295/);
+  const named = parseVerdict("", 1, "Error code: Wsl/Service/CreateInstance/0x800705b4");
+  assert.equal(named.cannotJudge, true);
+  assert.match(named.error, /CreateInstance\/0x800705b4/);
+  // An ordinary script failure is still an ordinary failure.
+  const plain = parseVerdict("", 1, "podman: no such container");
+  assert.equal(plain.cannotJudge, undefined);
+  assert.equal(plain.error, "podman: no such container");
 });
 
 test("parseVerdict: JSON wins, rc 2 is CANNOT_JUDGE never ok, garbage is a refusal", () => {

@@ -41,6 +41,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const http = require("node:http");
+const https = require("node:https");
 
 const { callTool, parseMaybeJson } = require("./gateway-mcp.cjs");
 
@@ -485,6 +486,66 @@ function pickDurationMs(serviceSeconds, audioBase64, sniffedFormat) {
   return derivedMs;
 }
 
+/** Which scheme answered last, per host:port. Process-lifetime only: this is a
+ *  cache, never configuration -- the truth is whatever the socket does today. */
+const SCHEME_MEMO = new Map();
+const endpointKey = (e) => `${e.host}:${e.port}`;
+
+/** The WSL distro's own address, discovered once per process.
+ *
+ *  🪤 WHY A SECOND HOST EXISTS AT ALL. The fleet runs in a WSL2 distro and
+ *  publishes 8084 on the host loopback, so 127.0.0.1 is normally right. But the
+ *  tailnet advertises 10.89.0.0/24 -- the fleet's OWN podman bridge -- from a
+ *  route row whose router has been offline for weeks, and when that lands in
+ *  table 52 every REPLY to a container goes into the tailnet. Measured
+ *  2026-09-20: Windows -> 127.0.0.1:8084 accepted the SYN and then timed out
+ *  (000 after 12-20s, never refused) while the distro itself answered in 9ms and
+ *  every netavark DNAT rule was present and correct. tailscale-autoup.service
+ *  installs `ip rule ... to 10.89.0.0/16 lookup main priority 5200` to prevent
+ *  exactly this, but a rule that is not currently applied is not a rule, and the
+ *  desk going mute is how the owner finds out.
+ *
+ *  The distro's eth0 address bypasses the hijacked loopback path entirely
+ *  (measured: 200 in 19ms while loopback hung). It MOVES on every WSL restart,
+ *  which is why it is discovered at runtime and never written to cast.json --
+ *  a pinned IP in config is a splint that silently rots. */
+let WSL_HOST = undefined;
+function wslHost() {
+  if (WSL_HOST !== undefined) return WSL_HOST;
+  WSL_HOST = null;
+  try {
+    const out = execFileSync("wsl", ["-d", "Debian", "-u", "root", "hostname", "-I"], {
+      encoding: "utf8", timeout: 15000, windowsHide: true,
+    });
+    const hit = String(out).trim().split(/\s+/).find((a) => /^\d+\.\d+\.\d+\.\d+$/.test(a));
+    if (hit) WSL_HOST = hit;
+  } catch {
+    // No WSL, not Windows, or the distro is busy: the loopback attempts stand
+    // on their own. This is a FALLBACK, never a requirement.
+  }
+  return WSL_HOST;
+}
+
+/** Every (host, scheme) worth trying, best first. A remembered pair short-
+ *  circuits to one attempt, so the steady state costs exactly one request. */
+function attemptsFor(endpoint) {
+  const remembered = SCHEME_MEMO.get(endpointKey(endpoint));
+  const mod = (s) => (s === "http" ? http : https);
+  const pinned = endpoint.scheme === "http" || endpoint.scheme === "https" ? endpoint.scheme : null;
+  const out = [];
+  const add = (host, scheme) => {
+    if (host && !out.some((a) => a.host === host && a.scheme === scheme)) {
+      out.push({ host, scheme, mod: mod(scheme) });
+    }
+  };
+  if (remembered) add(endpoint.host, remembered);
+  // HTTPS first: every fleet service runs AITHER_INTERSERVICE_TLS=true.
+  if (pinned) add(endpoint.host, pinned);
+  add(endpoint.host, "https");
+  add(endpoint.host, "http");
+  return out;
+}
+
 async function synthesizeVerdict(text, voice = "nova", opts = {}) {
   const { speed, endpoint: explicitEndpoint } = opts;
   const voiceConfig = loadVoiceConfig();
@@ -499,16 +560,71 @@ async function synthesizeVerdict(text, voice = "nova", opts = {}) {
     path: (explicitEndpoint && explicitEndpoint.path) || (voiceConfig && voiceConfig.endpoint.path) || DEFAULT_ENDPOINT.path,
   };
   const resolvedSpeed = voiceSpeed(speed, { config: voiceConfig });
-  return await new Promise((resolve) => {
-    const body = JSON.stringify({ text: short, voice, speed: resolvedSpeed, return_base64: true });
-    const req = http.request(
+  const body = JSON.stringify({ text: short, voice, speed: resolvedSpeed, return_base64: true });
+
+  // Try each (host, scheme) in turn. Only a CONNECTION failure moves on: a
+  // service that answered -- even with an error -- has had its say, and trying
+  // the next candidate would hide a real refusal behind a second failure.
+  const attempts = attemptsFor(endpoint);
+  let lastReason = "no voice endpoint to try";
+  let sawSilence = false;
+  let triedAlt = false;
+  for (let i = 0; i < attempts.length; i += 1) {
+    const attempt = attempts[i];
+    const outcome = await attemptSynthesis(attempt, endpoint, body);
+    if (outcome.answered) {
+      if (outcome.result.ok) SCHEME_MEMO.set(`${attempt.host}:${endpoint.port}`, attempt.scheme);
+      return outcome.result;
+    }
+    lastReason = outcome.reason;
+    // 🪤 REFUSED IS NOT SILENT, and the difference is the whole cost model.
+    // ECONNREFUSED means nothing is listening on that host:port at all, so the
+    // other scheme on the SAME address cannot help -- stop trying it. A reset or
+    // a TLS handshake error means something IS there and answered wrongly (a
+    // scheme flip), and a TIMEOUT means the SYN was accepted and the reply never
+    // came (the hijacked-route signature). Only that last case justifies paying
+    // for the distro-address fallback, which costs a subprocess.
+    // Without this split a dead endpoint took four attempts plus a `wsl` call
+    // instead of failing at once -- caught by drop-router.test.cjs, which pins
+    // "a refused connection resolves immediately, not after the 90s timeout".
+    const refused = /ECONNREFUSED/i.test(lastReason);
+    const silent = /timeout/i.test(lastReason);  // connect OR synthesis
+    if (silent) sawSilence = true;
+    if (refused) {
+      // Drop any remaining attempt against this same host: it is not listening.
+      while (i + 1 < attempts.length && attempts[i + 1].host === attempt.host) attempts.splice(i + 1, 1);
+    }
+    const last = i === attempts.length - 1;
+    if (last && sawSilence && !triedAlt && !opts._noWslFallback) {
+      triedAlt = true;
+      const alt = wslHost();
+      if (alt && alt !== endpoint.host) {
+        attempts.push({ host: alt, scheme: "https", mod: https });
+        attempts.push({ host: alt, scheme: "http", mod: http });
+      }
+    }
+  }
+  return { ok: false, reason: String(lastReason).slice(0, 200) };
+}
+
+/** One request. Resolves {answered:true, result} when the service replied at
+ *  all, or {answered:false, reason} when the connection itself failed. */
+function attemptSynthesis(attempt, endpoint, body) {
+  return new Promise((resolve) => {
+    const req = attempt.mod.request(
       {
-        host: endpoint.host,
+        host: attempt.host,
         port: endpoint.port,
         path: endpoint.path,
         method: "POST",
         headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) },
         timeout: 90000,
+        // The fleet issues its own CA and Electron does not carry it. This is a
+        // LOOPBACK call to a service on this machine, so the transport is not
+        // the trust boundary -- cast.json's gate is (see cast-config's
+        // "not as authentication" note). Verifying here would only mean the
+        // desk goes permanently silent the next time a rebuild turns TLS on.
+        rejectUnauthorized: false,
       },
       (res) => {
         let text = "";
@@ -521,20 +637,58 @@ async function synthesizeVerdict(text, voice = "nova", opts = {}) {
             if (parsed.success && audio) {
               const sniffed = sniffAudioFormat(audio);
               return resolve({
-                ok: true,
-                audioBase64: audio,
-                durationMs: pickDurationMs(Number(parsed.duration_seconds), audio, sniffed),
+                answered: true,
+                result: {
+                  ok: true,
+                  audioBase64: audio,
+                  durationMs: pickDurationMs(Number(parsed.duration_seconds), audio, sniffed),
+                },
               });
             }
-            resolve({ ok: false, reason: String(parsed.error || parsed.detail || "synthesis failed").slice(0, 200) });
+            resolve({
+              answered: true,
+              result: { ok: false, reason: String(parsed.error || parsed.detail || "synthesis failed").slice(0, 200) },
+            });
           } catch {
-            resolve({ ok: false, reason: `synthesis answered non-JSON (${text.slice(0, 60)})` });
+            resolve({
+              answered: true,
+              result: { ok: false, reason: `synthesis answered non-JSON (${text.slice(0, 60)})` },
+            });
           }
         });
       },
     );
+    // 🪤 TWO deadlines, because they answer different questions. The 90s one is
+    // for the BODY: synthesis legitimately takes ~7s warm and has been measured
+    // over 60s while the host was building images, so it must stay generous. But
+    // a hijacked route fails at CONNECT -- the SYN-ACK never comes back -- and
+    // waiting 90s to learn that makes every utterance a 90-second mute. A
+    // healthy loopback connects in under a millisecond, so 6s is enormous for
+    // the question actually being asked and turns the hijack into a blip.
+    // 🪤 The deadline that matters is FIRST BYTE, not connect. Measured: with
+    // the route hijacked, WSL's own localhost proxy still completes the TCP
+    // handshake on the Windows side -- so `connect` fires, looks healthy, and
+    // the reply that never comes back is indistinguishable from a slow
+    // synthesis. A connect deadline sails straight past it (tried; it did).
+    // Warm synthesis answers in ~7s, so 25s is generous for "is anything coming
+    // at all" while keeping a hijacked path to one blip instead of 90 seconds
+    // of silence per utterance. The 90s request timeout below still guards the
+    // BODY, which under heavy build load has legitimately taken over a minute.
+    let responded = false;
+    const firstByte = setTimeout(() => {
+      if (!responded) req.destroy(new Error("first-byte timeout"));
+    }, 25000);
+    req.on("response", () => { responded = true; clearTimeout(firstByte); });
+    req.on("close", () => clearTimeout(firstByte));
     req.on("timeout", () => { req.destroy(new Error("synthesis timeout")); });
-    req.on("error", (error) => resolve({ ok: false, reason: String(error?.message || error).slice(0, 200) }));
+    // A scheme mismatch and a hijacked route do not announce themselves: plain
+    // HTTP into a TLS socket is simply closed, TLS into a plain one fails the
+    // handshake, and a reply lost to the tailnet just never arrives. All three
+    // land here, and `speakAloud` renders any of them as "a dead voice service"
+    // and a MUTED caption -- so the caller moves to the next candidate instead.
+    req.on("error", (error) => {
+      resolve({ answered: false, reason: String(error?.message || error) });
+    });
     req.write(body);
     req.end();
   });

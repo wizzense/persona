@@ -598,3 +598,23 @@ test("the ventriloquised wrapper names the speaker's work when known", () => {
   assert.equal(texts[1], "AitherOS-Fresh#77db6255 says: also done",
     "an absent topic must not render as \"()\" or \"undefined\"");
 });
+
+// Owner screenshot 2026-09-21: a bubble recited the harness envelope --
+// "(Another Claude session sent a message: <agent-message from="a8424fef..."> says: ...".
+test("the steering envelope is stripped from bubble text; plain text passes through", () => {
+  const { stripSteeringEnvelope } = require("./room-stage.cjs");
+  assert.equal(
+    stripSteeringEnvelope('(Another Claude session sent a message: <agent-message from="a8424fef0b5b" kind="finding">Re-checking the route logic.</agent-message>)'),
+    "Re-checking the route logic.");
+  assert.equal(stripSteeringEnvelope("just words"), "just words");
+  assert.equal(stripSteeringEnvelope("<agent-message from=x></agent-message>"), "<agent-message from=x></agent-message>",
+    "an envelope with nothing inside is left alone rather than voiced as silence");
+  const stage = new RoomStage({
+    io: { spawn: () => false, speak: () => true,
+      resolve: () => ({ character: "x", voiced: true, body: true, cooldownSeconds: 0 }) },
+    now: () => 1000,
+  });
+  stage.enqueue({ seq: 1, author: "peer", title: "", kind: "agent_message", actorId: "p", actorKind: "claude_code",
+    text: '(Another Claude session sent a message: <agent-message from="p">done</agent-message>)' });
+  assert.equal(stage.queue[0].text, "peer says: done");
+});

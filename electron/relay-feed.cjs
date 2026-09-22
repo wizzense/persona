@@ -453,6 +453,47 @@ function runAwrelay(args, execFn = spawn) {
 }
 
 /**
+ * Split an awrelay message into what a HUMAN reads and what a machine reads.
+ *
+ * `awrelay send` appends its routing envelope to the body as a fenced block:
+ *
+ *   [request] ITD006 probe: reply check ```awrelay {"kind":"request","payload":{"to":[...]},...} ```
+ *
+ * The inbox printed all of it, so every message in the owner's 2026-09-20
+ * screenshots ends in a line of JSON and the leading "[request]" is the only
+ * thing telling him what kind of message it is. The envelope is DATA: `kind`
+ * becomes a chip, `to` becomes "to <nick>", and the body is the sentence.
+ *
+ * Never throws and never loses text: an envelope that does not parse (or was cut
+ * mid-JSON by a length cap upstream) is still removed from the body, and the
+ * kind falls back to the "[kind]" prefix the CLI also writes.
+ */
+function splitEnvelope(raw) {
+  let text = String(raw || "");
+  let kind = "";
+  let to = [];
+  const fence = text.lastIndexOf("```awrelay");
+  if (fence >= 0) {
+    const tail = text.slice(fence + "```awrelay".length).replace(/```\s*$/, "").trim();
+    text = text.slice(0, fence).trimEnd();
+    try {
+      const envelope = JSON.parse(tail);
+      if (envelope && typeof envelope.kind === "string") kind = envelope.kind;
+      const addressed = envelope && envelope.payload && envelope.payload.to;
+      if (Array.isArray(addressed)) to = addressed.filter((nick) => typeof nick === "string" && nick);
+    } catch {
+      /* truncated or malformed: the body is still clean, the prefix names the kind */
+    }
+  }
+  const prefix = text.match(/^\[(request|finding|alert|ack|note|answer|status)\]\s*/i);
+  if (prefix) {
+    if (!kind) kind = prefix[1].toLowerCase();
+    text = text.slice(prefix[0].length);
+  }
+  return { text, kind, to };
+}
+
+/**
  * Shape raw relay envelopes into deck rows. The relay's REAL envelope is
  * {id, channel, nick, content, timestamp, agent, thread_id, reply_count} —
  * measured live 2026-08-25; a parser built on a guessed shape (text/author/at)
@@ -468,8 +509,11 @@ function shapeRows(parsed, channel, limit) {
   const out = [];
   for (const row of rows) {
     if (!row || typeof row !== "object") continue;
-    const text = typeof row.content === "string" ? row.content
+    const whole = typeof row.content === "string" ? row.content
       : typeof row.text === "string" ? row.text : "";
+    // Split BEFORE the length cap: capping first cuts the envelope mid-JSON and
+    // leaves half a fenced block in the body.
+    const { text, kind, to } = splitEnvelope(whole);
     const author = typeof row.nick === "string" && row.nick ? row.nick
       : typeof row.author === "string" ? row.author : "";
     // Text is required: a reaction/presence event with no body is noise in a
@@ -485,6 +529,16 @@ function shapeRows(parsed, channel, limit) {
       channel: typeof row.channel === "string" ? row.channel : channel,
       author,
       text: text.slice(0, 500),
+      // The row as it came off the wire, envelope INCLUDED. `text` is what the
+      // panel shows a human (the envelope is a chip, not a sentence); anything
+      // that DECIDES about the message must read THIS one. relay-poller's
+      // pickWorkOrders skips an `[ack]` row by testing the wire text, so handing
+      // it only the display text made that guard blind and the desk executed a
+      // gated probe as an owner command, spawning a headless session per gate
+      // run (RBD004, measured 2026-09-20/21).
+      raw: whole.slice(0, 500),
+      kind,
+      to,
       at,
       id: typeof row.id === "string" ? row.id : null,
       threadId: typeof row.thread_id === "string" ? row.thread_id : null,
@@ -676,6 +730,8 @@ function _setBearerSourceForTests(fn) {
 
 module.exports = {
   fetchChannels,
+  splitEnvelope,
+  shapeRows,
   fetchHistory,
   fetchThread,
   post,

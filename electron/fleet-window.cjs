@@ -58,6 +58,7 @@ function wireIpc() {
   ipcMain.handle("desk:fleet-status", (_event, opts) =>
     getControl().status(opts && typeof opts === "object" ? opts : {}));
   ipcMain.handle("desk:fleet-run", (_event, action) => getControl().run(String(action)));
+  ipcMain.handle("desk:fleet-doors", () => require("./surfaces.cjs").probeSurfaces().catch(() => []));
   ipcMain.on("desk:fleet-close", () => {
     if (fleetWindow && !fleetWindow.isDestroyed()) { fleetWindow.close(); return; }
     // No standalone window means the sender is the console's Fleet PANE, whose

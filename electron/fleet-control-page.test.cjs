@@ -146,7 +146,13 @@ test("first probe in flight: pill PROBING (BUSY's family), every counter says pr
   await tick();
   assert.equal(page.pill.dataset.state, "PROBING");
   assert.equal(page.pill.textContent, "PROBING");
-  assert.match(HTML, /#pill\[data-state="PROBING"\]\s*\{[^}]*#3b82f6/, "PROBING is styled in BUSY's blue");
+  // The point is that PROBING reads as BUSY's sibling, so assert they share a
+  // background -- not which blue. The blue is the family's token now (it was a
+  // literal #3b82f6 until the panes stopped carrying private palettes).
+  const pillBg = (state) => (HTML.match(new RegExp(`#pill\\[data-state="${state}"\\]\\s*\\{[^}]*background:\\s*([^;]+);`)) || [])[1];
+  assert.ok(pillBg("BUSY"), "BUSY has no background");
+  assert.equal(pillBg("PROBING"), pillBg("BUSY"), "PROBING is styled in BUSY's blue");
+  assert.notEqual(pillBg("PROBING"), "var(--unknown)", "a grey PROBING pill reads as broken");
   for (const id of ["s-running", "s-masked", "s-vram", "s-hold"]) {
     assert.equal(page.text(id), "probing…", `${id} while the first probe runs`);
     assert.ok(page.ids[id].classList.contains("probing"), `${id} carries the probing class`);

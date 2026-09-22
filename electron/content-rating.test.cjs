@@ -126,11 +126,35 @@ test("an r18 character is absent from the roster while locked, present when open
   });
 });
 
-test("an unrated character stays visible — the gate hides adult, not everything", () => {
+test("an unrated character is HIDDEN while the gate is closed, listed once it opens (owner, 2026-09-20)", () => {
+  // Browsing an unjudged roster is how a lewd model gets found: no file, or the
+  // rater's "default" stamp (nothing matched the name, nobody looked), both
+  // read as unrated and sit in the hidden set beside r15/r18.
   withCharacter("zz-gate-fixture-plain", null, () => {
     withGate(false, () => {
       assert.equal(rating.getRating("zz-gate-fixture-plain"), "unrated");
+      assert.equal(roster.listCharacters().includes("zz-gate-fixture-plain"), false);
+      const why = rating.refusalFor("zz-gate-fixture-plain");
+      assert.equal(why && why.code, "rating-hidden");
+      assert.match(why.reason, /not been rated/);
+    });
+    withGate(true, () => {
       assert.equal(roster.listCharacters().includes("zz-gate-fixture-plain"), true);
+      assert.equal(rating.refusalFor("zz-gate-fixture-plain"), null);
+    });
+  });
+  // The rater's step-5 stamp is not a verdict.
+  withCharacter("zz-gate-fixture-default", "general", () => {
+    rating.setRating("zz-gate-fixture-default", "general", "default");
+    withGate(false, () => {
+      assert.equal(rating.getRating("zz-gate-fixture-default"), "unrated");
+      assert.equal(roster.listCharacters().includes("zz-gate-fixture-default"), false);
+    });
+    // A real verdict -- any source that is not "default" -- is.
+    rating.setRating("zz-gate-fixture-default", "general", "vision-thumb");
+    withGate(false, () => {
+      assert.equal(rating.getRating("zz-gate-fixture-default"), "general");
+      assert.equal(roster.listCharacters().includes("zz-gate-fixture-default"), true);
     });
   });
 });
@@ -213,4 +237,173 @@ test("the MCP refusal text is the rating one, not the missing-file one", () => {
   const source = fs.readFileSync(path.join(__dirname, "mcp-server.cjs"), "utf8");
   assert.match(source, /refusalText\(/, "set_character/spawn_avatar must consult the gate");
   assert.match(source, /require\("\.\/content-rating\.cjs"\)/);
+});
+
+// ─── the three limits (owner, 2026-09-20) ──────────────────────────────────
+
+test("the desk's ceiling hides above itself even with the gate OPEN, and can only tighten", () => {
+  withCharacter("zz-ceiling-r15", "r15", () => {
+    withCharacter("zz-ceiling-general", "general", () => {
+      const castFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "cast-ceiling-")), "cast.json");
+      const priorCast = process.env.DESK_CAST_FILE;
+      process.env.DESK_CAST_FILE = castFile;
+      try {
+        // Gate open, ceiling general: the r15 body is hidden by the CEILING,
+        // which is the limit the platform gate cannot express.
+        fs.writeFileSync(castFile, JSON.stringify({ version: 1, content: { maxRating: "general" } }));
+        withGate(true, () => {
+          assert.equal(rating.hiddenReason("zz-ceiling-r15"), "ceiling");
+          assert.equal(rating.hiddenReason("zz-ceiling-general"), null);
+          assert.match(rating.refusalFor("zz-ceiling-r15").reason, /ceiling/);
+        });
+        // Raising the ceiling never OPENS the gate: closed is closed.
+        fs.writeFileSync(castFile, JSON.stringify({ version: 1, content: { maxRating: "r18" } }));
+        withGate(false, () => {
+          assert.equal(rating.hiddenReason("zz-ceiling-r15"), "gate");
+          assert.equal(rating.hiddenReason("zz-ceiling-general"), null);
+        });
+        withGate(true, () => assert.equal(rating.hiddenReason("zz-ceiling-r15"), null));
+      } finally {
+        if (priorCast === undefined) delete process.env.DESK_CAST_FILE;
+        else process.env.DESK_CAST_FILE = priorCast;
+      }
+    });
+  });
+});
+
+test("the live safety plane can only TIGHTEN: false closes an open gate, null and true change nothing", () => {
+  withCharacter("zz-safety-r18", "r18", () => {
+    try {
+      withGate(true, () => {
+        rating.setSafetyExplicitAllowed(null);
+        assert.equal(rating.hiddenReason("zz-safety-r18"), null, "no answer must not hide the roster");
+        rating.setSafetyExplicitAllowed(true);
+        assert.equal(rating.hiddenReason("zz-safety-r18"), null);
+        rating.setSafetyExplicitAllowed(false);
+        assert.equal(rating.hiddenReason("zz-safety-r18"), "gate", "a plane forbidding explicit closes the gate");
+      });
+      // And it can never OPEN one: true against a closed gate is still closed.
+      withGate(false, () => {
+        rating.setSafetyExplicitAllowed(true);
+        assert.equal(rating.hiddenReason("zz-safety-r18"), "gate");
+      });
+    } finally {
+      rating.setSafetyExplicitAllowed(null);
+    }
+  });
+});
+
+// ─── enrolling a model must not make it vanish (owner, 2026-09-20) ──────────
+
+test("a hand-enrolled character is marked pending and handed to the rater, never left silently hidden", () => {
+  const roster = require("./character-roster.cjs");
+  const name = "zz-enroll-fixture";
+  const dir = path.join(ROSTER, name);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "model.vrm"), "not-a-real-vrm");
+  const spawned = [];
+  try {
+    const result = roster.rateOnEnroll(name, {
+      spawn: (bin, args) => {
+        spawned.push({ bin, args });
+        return { unref() {} };
+      },
+    });
+    // The marker exists, and it reads as UNRATED (source "pending" is not a verdict),
+    // so the character is hidden until the rater answers -- but legibly so.
+    const written = JSON.parse(fs.readFileSync(path.join(dir, "character.json"), "utf8"));
+    assert.equal(written.source, "pending");
+    assert.equal(rating.getRating(name), "unrated");
+    withGate(false, () => assert.equal(rating.hiddenReason(name), "unjudged"));
+    // And the rater was actually asked about THIS character.
+    assert.equal(spawned.length, 1);
+    assert.ok(spawned[0].args.includes("--only"), "the rater is scoped to one character");
+    assert.ok(spawned[0].args.includes(name));
+    assert.ok(spawned[0].args.includes("--vision") && spawned[0].args.includes("--capture"));
+    assert.equal(result.started, true);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("rateOnEnroll never throws when the rater cannot be started -- the enroll still stands", () => {
+  const roster = require("./character-roster.cjs");
+  const name = "zz-enroll-norater";
+  const dir = path.join(ROSTER, name);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "model.vrm"), "not-a-real-vrm");
+  try {
+    const result = roster.rateOnEnroll(name, {
+      spawn: () => { throw new Error("python is not installed"); },
+    });
+    assert.equal(result.started, false);
+    assert.match(result.hint, /--only zz-enroll-norater/, "the hint is the command that fixes it");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ─── forking must never launder a rating (owner, 2026-09-20) ───────────────
+
+test("a fork inherits the STRONGEST rating in its chain -- rating the variant tamer cannot free it", () => {
+  const roster = require("./character-roster.cjs");
+  const base = "zz-fork-base";
+  const dir = path.join(ROSTER, base);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "model.vrm"), "not-a-real-vrm");
+  fs.writeFileSync(path.join(dir, "character.json"), JSON.stringify({ rating: "r18", source: "vision" }));
+  const variant = `${base}-tame`;
+  const vdir = path.join(ROSTER, variant);
+  try {
+    // An unjudged fork is hidden like any unjudged character, whatever its base.
+    fs.mkdirSync(vdir, { recursive: true });
+    fs.writeFileSync(path.join(vdir, "character.json"),
+      JSON.stringify({ base, source: "fork", customise: { boneScale: { head: 1.1 } } }));
+    assert.equal(rating.getRating(variant), "unrated");
+    withGate(false, () => assert.equal(rating.hiddenReason(variant), "unjudged"));
+
+    // THE LAUNDERING ATTEMPT: judge the fork of an r18 model as "general".
+    fs.writeFileSync(path.join(vdir, "character.json"),
+      JSON.stringify({ base, source: "vision", rating: "general" }));
+    assert.equal(rating.getRating(variant), "r18",
+      "a fork of an r18 model rated general MUST still resolve r18, or forking is a gate bypass");
+    withGate(false, () => assert.equal(rating.hiddenReason(variant), "gate"));
+
+    // The owner's own STRONGER verdict still sticks.
+    fs.writeFileSync(path.join(vdir, "character.json"),
+      JSON.stringify({ base, source: "vision", rating: "r18" }));
+    assert.equal(rating.getRating(variant), "r18");
+
+    // And the variant resolves the BASE's mesh rather than owning one.
+    assert.ok(String(roster.resolveModelFile(variant)).includes(base), 'the variant resolves the BASE model file');
+    assert.deepEqual(roster.customiseOf(variant), {});
+  } finally {
+    fs.rmSync(vdir, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a base chain that names a cycle terminates instead of hanging the loader", () => {
+  const roster = require("./character-roster.cjs");
+  const a = "zz-cycle-a";
+  const b = "zz-cycle-b";
+  for (const [name, base] of [[a, b], [b, a]]) {
+    const d = path.join(ROSTER, name);
+    fs.mkdirSync(d, { recursive: true });
+    fs.writeFileSync(path.join(d, "character.json"), JSON.stringify({ base, source: "fork", rating: "general" }));
+  }
+  try {
+    assert.equal(rating.getRating(a), "general", "the walk stops at the repeat rather than looping");
+    assert.equal(roster.resolveModelFile(a), null, "no model anywhere in the cycle");
+    assert.deepEqual(roster.customiseOf(a), {});
+  } finally {
+    for (const name of [a, b]) fs.rmSync(path.join(ROSTER, name), { recursive: true, force: true });
+  }
+});
+
+test("forkCharacter refuses a missing base, a duplicate name, and an empty-name slug", () => {
+  const roster = require("./character-roster.cjs");
+  assert.equal(roster.forkCharacter("zz-no-such-base", "v", {}).ok, false);
+  assert.equal(roster.forkCharacter("", "v", {}).ok, false);
+  assert.match(roster.forkCharacter("zz-no-such-base", "v", {}).reason, /no character named/);
 });

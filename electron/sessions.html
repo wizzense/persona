@@ -3,19 +3,29 @@
 <head>
 <meta charset="utf-8" />
 <title>Sessions</title>
+<link rel="stylesheet" href="aither-tokens.css" />
 <style>
+  /* Colours, type and scrollbars come from aither-tokens.css -- GENERATED from Veil's
+     tokens by AitherOS/dev/tools/gen_desk_tokens.py. This pane used to re-declare its
+     own --bg/--panel/--line/--fg palette by hand; five panes did, none matched the
+     family. What stays here is only what this pane MEANS by a colour. */
   :root {
-    --bg: #0f1218; --panel: #171b24; --line: #262c3a; --fg: #e6e9f0; --muted: #8a93a6;
-    --btn: #222838; --btn-hi: #2c3447; --accent: #9ec1ff; --amber: #f5a524;
-    --red: #ff8b8f; --green: #7ee2a8;
+    --amber: var(--warning);
+    --red: var(--destructive);
+    --green: var(--success);
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
-    font: 13px/1.45 system-ui, "Segoe UI", sans-serif; }
+    font: 13px/1.45 var(--font-sans); }
   body { display: grid; grid-template-rows: 44px 1fr; height: 100vh; }
 
   .bar { display: flex; align-items: center; gap: 10px; padding: 0 14px;
     border-bottom: 1px solid var(--line); }
+  /* ONE chrome. Inside the console the shell's bar already names this pane, so the
+     pane's own title is the double header from the owner's 2026-09-20 screenshots.
+     console-preload.cjs sets .embedded per frame; detached into its own window the
+     page is not embedded and keeps its title, because there it is the only one. */
+  .embedded .bar .title { display: none; }
   .bar .title { font-weight: 600; }
   .bar .state { color: var(--muted); font-size: 12px; flex: 1; min-width: 0;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -23,25 +33,35 @@
     color: var(--muted); border-radius: 6px; padding: 5px 10px; cursor: pointer; }
   .chip:hover { background: var(--btn-hi); color: var(--fg); }
 
-  main { display: grid; grid-template-columns: 340px 1fr; min-height: 0; }
-  #list { border-right: 1px solid var(--line); overflow-y: auto; min-height: 0; }
-  .row { padding: 9px 12px; border-bottom: 1px solid #1c212c; cursor: pointer;
+  main { display: grid; grid-template-columns: minmax(320px, 34%) 1fr; min-height: 0; }
+  #list { border-right: 1px solid var(--line); overflow-y: auto; overflow-x: hidden; min-height: 0; }
+  /* Sessions are grouped by what they need from YOU, because that is the question
+     the pane exists to answer. It used to be one flat list in directory order. */
+  .group { position: sticky; top: 0; z-index: 1; background: var(--bg-deep); color: var(--surface-400);
+    font-size: 10px; font-weight: 650; letter-spacing: .09em; text-transform: uppercase;
+    padding: 8px 12px 6px; border-bottom: 1px solid var(--line); display: flex; gap: 8px; }
+  .group .n { color: var(--muted); font-weight: 500; }
+  .group.needs { color: var(--warn); }
+  .row { padding: 9px 12px; border-bottom: 1px solid var(--btn); cursor: pointer;
     display: grid; gap: 3px; }
   .row:hover { background: var(--btn); }
-  .row.sel { background: var(--panel); border-left: 2px solid var(--accent); padding-left: 10px; }
+  .row.sel { background: var(--panel); border-left: 2px solid var(--brand); padding-left: 10px; }
   .row .top { display: flex; align-items: baseline; gap: 8px; }
-  .row .name { font-weight: 600; flex: 1; min-width: 0; overflow: hidden;
-    text-overflow: ellipsis; white-space: nowrap; }
+  /* The name is WHAT the session is about, and it wraps. Every row used to open with
+     the same "AitherOS-Fresh develop 07:34 - waiting for you - " and then cut off --
+     eighteen rows that read identically, behind a horizontal scrollbar. */
+  .row .name { font-weight: 600; flex: 1; min-width: 0; overflow: hidden; line-height: 1.35;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
   .row .age { color: var(--muted); font-size: 11px; }
   .row .sum { color: var(--muted); font-size: 11px; overflow: hidden;
     text-overflow: ellipsis; white-space: nowrap; }
   .pill { font-size: 10px; border-radius: 999px; padding: 1px 7px; border: 1px solid var(--line);
     color: var(--muted); white-space: nowrap; }
-  .pill.working { color: var(--accent); border-color: #2c4a7c; }
-  .pill.waiting { color: var(--amber); border-color: #6b4d14; }
+  .pill.working { color: var(--brand); border-color: color-mix(in oklch, var(--brand), var(--background) 60%); }
+  .pill.waiting { color: var(--amber); border-color: color-mix(in oklch, var(--warn), var(--background) 60%); }
   .pill.exited { opacity: .55; }
-  .pill.steer { color: var(--green); border-color: #2c5a44; }
-  .pill.steer.turn { color: var(--amber); border-color: #6b4d14; }
+  .pill.steer { color: var(--green); border-color: color-mix(in oklch, var(--ok), var(--background) 62%); }
+  .pill.steer.turn { color: var(--amber); border-color: color-mix(in oklch, var(--warn), var(--background) 60%); }
   .pill.steer.none { color: var(--muted); opacity: .7; }
 
   #side { display: grid; grid-template-rows: 34px 1fr; min-height: 0; }
@@ -49,8 +69,8 @@
     border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12px; }
   #tailBar .grow { flex: 1; }
   #tail { margin: 0; padding: 10px 14px; overflow: auto; min-height: 0; white-space: pre-wrap;
-    word-break: break-word; font: 12px/1.5 ui-monospace, "Cascadia Mono", Consolas, monospace; }
-  #tail .role { color: var(--accent); }
+    word-break: break-word; font: 12px/1.5 var(--font-mono); }
+  #tail .role { color: var(--brand); }
   #tail .tool { color: var(--amber); }
   #tail .dim { color: var(--muted); }
   .placeholder { color: var(--muted); padding: 24px; text-align: center; }
@@ -125,6 +145,30 @@ function steerPill(cap) {
   return pill("watch only", "steer none");
 }
 
+/**
+ * A session title is "<repo> <branch> <HH:MM> - <needs-you?> - <last human prompt>"
+ * (room-actor naming). The repo/branch/time is the SAME on nearly every row, so as a
+ * heading it made eighteen rows indistinguishable. Split it: `about` is the prompt
+ * (what tells sessions apart), `where` is the rest, shown small.
+ */
+function splitTitle(title) {
+  const parts = String(title || "").split(" - ");
+  if (parts.length < 2) return { about: String(title || ""), where: "" };
+  const where = parts.shift();
+  const rest = parts.filter((part) => !/^(waiting for you|maybe blocked|working|idle)$/i.test(part.trim()));
+  return { about: (rest.length ? rest : parts).join(" - "), where };
+}
+
+/** needs-you first, then working, then the rest: the order of who is waiting on whom. */
+function groupOf(session) {
+  const status = String(session.status || "");
+  const title = String(session.title || "");
+  if (status.startsWith("waiting") || /waiting for you|maybe blocked/i.test(title)) return "needs";
+  if (status === "working") return "working";
+  return "quiet";
+}
+const GROUP_LABELS = { needs: "Needs you", working: "Working", quiet: "Quiet" };
+
 function renderList() {
   listEl.textContent = "";
   if (!sessions.length) {
@@ -134,14 +178,31 @@ function renderList() {
     listEl.appendChild(ph);
     return;
   }
-  for (const s of sessions) {
+  const ordered = ["needs", "working", "quiet"].flatMap((group) =>
+    sessions.filter((session) => groupOf(session) === group).map((session) => ({ group, session })));
+  let lastGroup = null;
+  for (const { group, session: s } of ordered) {
+    if (group !== lastGroup) {
+      lastGroup = group;
+      const heading = document.createElement("div");
+      heading.className = "group" + (group === "needs" ? " needs" : "");
+      const count = ordered.filter((entry) => entry.group === group).length;
+      heading.innerHTML = "";
+      heading.append(document.createTextNode(GROUP_LABELS[group]));
+      const n = document.createElement("span");
+      n.className = "n";
+      n.textContent = String(count);
+      heading.appendChild(n);
+      listEl.appendChild(heading);
+    }
     const row = document.createElement("div");
     row.className = "row" + (selected && selected.id === s.id ? " sel" : "");
     const top = document.createElement("div");
     top.className = "top";
     const name = document.createElement("span");
     name.className = "name";
-    name.textContent = s.title || String(s.id || "").slice(0, 8);
+    const split = splitTitle(s.title);
+    name.textContent = split.about || String(s.id || "").slice(0, 8);
     name.title = (s.cwd || "") + (s.harness_label ? " · " + s.harness_label : "") + (s.origin ? " · " + s.origin : "");
     const age = document.createElement("span");
     age.className = "age";
@@ -149,7 +210,7 @@ function renderList() {
     top.append(name, pill(String(s.status || "?"), statusClass(s.status)), age);
     const sum = document.createElement("div");
     sum.className = "sum";
-    sum.textContent = s.last_activity_summary || s.cwd || "";
+    sum.textContent = [split.where, s.last_activity_summary || s.cwd || ""].filter(Boolean).join("  ·  ");
     row.append(top, sum);
     const badges = document.createElement("div");
     badges.className = "top";
@@ -234,6 +295,11 @@ async function refreshList() {
     }
     sessions = result.sessions || [];
     say(result.note + " — " + new Date().toLocaleTimeString());
+    if (!selected && sessions.length) {
+      // Land on the session most likely to be the reason the pane was opened.
+      const first = ["needs", "working", "quiet"].map((g) => sessions.find((x) => groupOf(x) === g)).find(Boolean);
+      if (first) { select(first); return; }
+    }
     if (selected) {
       const fresh = sessions.find((s) => s.id === selected.id);
       if (fresh) selected = fresh; // keep the tail open across refreshes

@@ -403,6 +403,33 @@ test("noteSeen: never throws, even when it cannot write (best-effort by construc
 
 // ─── watch: our own write must not re-enter the loader ─────────────────────
 
+test("watch: an external edit in the SAME mtime tick still fires (size is in the stamp)", async () => {
+  // Measured 2026-09-22 on the Windows CI runner: a write landing in the same
+  // timestamp tick as the one the watcher started on was dropped as "a touch
+  // that changed nothing". Pin both writes to one whole second to force it.
+  const dir = tmpDir();
+  const file = castFileIn(dir);
+  const tick = 1700000000;
+  fs.writeFileSync(file, `${JSON.stringify({ version: 1 })}
+`, "utf8");
+  fs.utimesSync(file, tick, tick);
+  const events = [];
+  const unwatch = cast.watch((result) => events.push(result), { file, debounceMs: 50 });
+  try {
+    // macOS FSEvents arms the stream asynchronously: an edit in the first
+    // milliseconds after fs.watch() is not delivered at all (CI, 2026-09-22).
+    await sleep(250);
+    fs.writeFileSync(file, `${JSON.stringify({ version: 1, defaults: { voice: "nova" } })}
+`, "utf8");
+    fs.utimesSync(file, tick, tick);
+    await sleep(500);
+    assert.ok(events.length >= 1, "a same-tick external edit was dropped by the change guard");
+    assert.equal(events[events.length - 1].snapshot.defaults.voice, "nova");
+  } finally {
+    unwatch();
+  }
+});
+
 test("watch: a write through write() does not fire onChange; an external edit does", async () => {
   const dir = tmpDir();
   const file = castFileIn(dir);
@@ -575,4 +602,54 @@ test("resolveActor: captions switch off for the whole stage, or for one speaker,
 
   const { problems } = cast.validateCast({ version: 1, stage: { bubbles: false }, defaults: { bubble: true } });
   assert.deepEqual(problems, []);
+});
+
+// ─── physics: per-sub-key tiers, whole-block validation ─────────────────────
+
+test("resolveActor: physics resolves PER SUB-KEY across tiers, each knob with its own provenance", () => {
+  const snapshot = {
+    version: 1,
+    defaults: { physics: { weight: 0.5, damping: 1.5, jiggle: 0.8 } },
+    authors: { "agent-a": { physics: { stiffness: 2 } } },
+    actors: { "claude_code:one": { physics: { jiggle: 0.2 } } },
+  };
+  const one = cast.resolveActor(snapshot, { kind: "claude_code", id: "one", author: "agent-a", roster: null });
+  assert.deepEqual(one.physics, { enabled: true, weight: 0.5, stiffness: 2, damping: 1.5, jiggle: 0.2 });
+  assert.equal(one.physicsFrom.jiggle, 'actors["claude_code:one"].physics.jiggle');
+  assert.equal(one.physicsFrom.stiffness, "authors.agent-a.physics.stiffness");
+  assert.equal(one.physicsFrom.weight, "defaults.physics.weight");
+  assert.equal(one.physicsFrom.enabled, "builtin");
+
+  // Nothing authored anywhere: the built-in is a full set of 1s -- "as the
+  // model's author meant it" -- never a 0 that would read as "physics off".
+  const bare = cast.resolveActor({ version: 1 }, { kind: "claude_code", id: "two", roster: null });
+  assert.deepEqual(bare.physics, cast.BUILTIN_PHYSICS);
+  for (const from of Object.values(bare.physicsFrom)) assert.equal(from, "builtin");
+});
+
+test("resolveActor: the resident's physics resolve under service:awdesk, the same key its voice uses", () => {
+  const snapshot = { version: 1, actors: { "service:awdesk": { physics: { weight: 0.3 } } } };
+  const origin = cast.originOf({ key: cast.ORIGIN_LITERALS.SERVICE_AWDESK });
+  const resident = cast.resolveActor(snapshot, { actorKind: origin.kind, actorId: origin.id, origin, roster: null });
+  assert.equal(resident.physics.weight, 0.3);
+  assert.equal(resident.physicsFrom.weight, 'actors["service:awdesk"].physics.weight');
+});
+
+test("validateCast + resolveActor: a physics block with one bad knob is DROPPED for that tier (reported with the sub-path) and the tier below answers", () => {
+  const raw = {
+    version: 1,
+    defaults: { physics: { weight: 0.7 } },
+    actors: { "claude_code:x": { physics: { weight: 9, jiggle: 0.5 } } }, // 9 > PHYSICS_MULTIPLIER_MAX
+  };
+  const { problems } = cast.validateCast(raw);
+  const hit = problems.find((p) => p.path.includes("physics"));
+  assert.ok(hit, "the bad block is reported");
+  assert.match(hit.path, /physics\.weight$/);
+
+  const x = cast.resolveActor(raw, { kind: "claude_code", id: "x", roster: null });
+  assert.equal(x.physics.weight, 0.7, "the tier below answers the dropped block");
+  assert.equal(x.physics.jiggle, 1, "a sibling in the SAME dropped block is not honoured (whole-block, like place)");
+
+  const unknown = cast.validateCast({ version: 1, defaults: { physics: { bounce: 2 } } });
+  assert.ok(unknown.problems.some((p) => /unknown key/.test(p.reason)), "an unknown knob is reported, never silently kept");
 });

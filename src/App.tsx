@@ -16,6 +16,7 @@ import { bubbleDurationMs, bubbleText, type SpeechBubble } from './speech-bubble
 import { Deck } from './components/Deck';
 import { ChatView } from './components/ChatView';
 import { Beads } from './components/Beads';
+import { renderVrmFullBody, renderVrmTurntable } from './thumbnails';
 import type { AnimationType } from './animation-catalog';
 import {
   bridgeAnimationOverride,
@@ -113,13 +114,17 @@ export function App() {
   // ONE hook, then the returns: a second useState after `if (isDeck) return`
   // was itself the conditional-hook shape this comment warns about (lint
   // measured it again 2026-09-18).
-  const [mode] = useState<'deck' | 'chat' | 'avatar'>(() => {
+  const [mode] = useState<'deck' | 'characters' | 'chat' | 'avatar'>(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get('deck') === '1') return 'deck';
+    // ?characters=1 — the same bundle and the same deck-state subscription as the inbox,
+    // rendering the BODIES half (stage slots, spawn chips, installed + market roster).
+    if (params.get('characters') === '1') return 'characters';
     if (params.get('chat') === '1') return 'chat';
     return 'avatar';
   });
-  if (mode === 'deck') return <Deck />;
+  if (mode === 'deck') return <Deck view="inbox" />;
+  if (mode === 'characters') return <Deck view="characters" />;
   if (mode === 'chat') return <ChatView />;
   return <AvatarSceneApp />;
 }
@@ -161,7 +166,26 @@ function AvatarSceneApp() {
   const talkRef = useRef<ReturnType<typeof createPushToTalk> | null>(null);
   if (!talkRef.current && typeof window !== 'undefined') {
     talkRef.current = createPushToTalk({
-      getStream: () => navigator.mediaDevices.getUserMedia({ audio: true }),
+      getStream: async () => {
+        // Plan: honour the Settings pane's device pick, read fresh each call
+        // so a change there takes effect on the NEXT talk, no app restart.
+        // Falls back to the system default on any failure -- an unreadable
+        // setting or a device that no longer exists must never silence the
+        // mic outright.
+        let deviceId = '';
+        try { deviceId = (await window.deskBridge?.getMicDeviceId?.()) || ''; } catch { /* default */ }
+        const constraints: MediaStreamConstraints = deviceId
+          ? { audio: { deviceId: { exact: deviceId } } }
+          : { audio: true };
+        try {
+          return await navigator.mediaDevices.getUserMedia(constraints);
+        } catch {
+          // The saved device may be gone (unplugged, driver change) -- retry
+          // the default rather than fail the whole talk gesture.
+          if (deviceId) return navigator.mediaDevices.getUserMedia({ audio: true });
+          throw new Error('microphone unavailable');
+        }
+      },
       makeRecorder: (stream, mime) => new MediaRecorder(stream, { mimeType: mime }),
       encode: async (blob) => {
         const bytes = new Uint8Array(await blob.arrayBuffer());
@@ -233,6 +257,40 @@ function AvatarSceneApp() {
           delete next[gone];
           return next;
         });
+      } else if (event.type === 'capture-roster') {
+        // The content rater asked main for a full-body frame of each model
+        // (POST /roster/capture). Rendered offscreen on thumbnails.ts's one
+        // serialized rig and handed back file by file; a model that will not
+        // load costs its own frame, never the batch. Fire-and-forget: main
+        // counts the saves (GET /roster/capture) and the rater polls it.
+        const api = (window.deskBridge as unknown as {
+          deck?: {
+            saveCharacterFullBody?: (name: string, dataUrl: string) => Promise<boolean>;
+            saveCharacterTurntable?: (name: string, shot: number, dataUrl: string) => Promise<boolean>;
+          };
+        }).deck;
+        const list = Array.isArray(event.characters) ? event.characters : [];
+        // `angles > 1` asks for a TURNTABLE: the dataset a per-character LoRA
+        // needs. One front shot trains a vibe; a ring of them trains the
+        // character. Angle 0 is the same front frame the rater reads, so a
+        // turntable run also refreshes fullbody.jpg rather than duplicating it.
+        const angles = Number.isFinite(Number(event.angles)) ? Math.max(1, Math.min(24, Number(event.angles))) : 1;
+        for (const item of list) {
+          if (!item || typeof item.name !== 'string' || typeof item.modelUrl !== 'string') continue;
+          const recipe = item.customise ?? undefined;
+          for (let i = 0; i < angles; i += 1) {
+            const yaw = (i / angles) * Math.PI * 2;
+            const shot = i;
+            const render = angles === 1
+              ? renderVrmFullBody(item.name, item.modelUrl, recipe)
+              : renderVrmTurntable(item.name, item.modelUrl, yaw, recipe);
+            void render.then((dataUrl) => {
+              if (!dataUrl) return;
+              if (shot === 0) void api?.saveCharacterFullBody?.(item.name, dataUrl);
+              if (angles > 1) void api?.saveCharacterTurntable?.(item.name, shot, dataUrl);
+            });
+          }
+        }
       } else if (event.type === 'listen') {
         // Slice C. The recorder lives outside React (src/voice/pushToTalk.ts) so
         // the mic is released on every exit path, including a throw from the

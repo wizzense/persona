@@ -61,15 +61,15 @@ const PANES = Object.freeze([
   // the taskbar overlay and the bell all open. Same renderer as the old "Desk
   // panel" (?deck=1), so a detached inbox is that window.
   Object.freeze({
-    id: "cards", label: "Inbox", hint: "Decisions and messages",
+    id: "cards", label: "Inbox", hint: "Decisions and messages", section: "Now", icon: "bell",
     kind: "view", query: "deck=1",
   }),
   Object.freeze({
-    id: "command", label: "Command", hint: "Say it in a sentence",
+    id: "command", label: "Command", hint: "Say it in a sentence", section: "Control", icon: "terminal",
     kind: "file", file: "command.html",
   }),
   Object.freeze({
-    id: "fleet", label: "Fleet", hint: "Containers, VRAM, doors",
+    id: "fleet", label: "Fleet", hint: "Containers, VRAM, doors", section: "Control", icon: "server",
     kind: "file", file: "fleet-control.html",
   }),
   // Slice 1 of COCKPIT-DESIGN: the unified session directory (daemon-owned
@@ -78,11 +78,11 @@ const PANES = Object.freeze([
   // yet also must not offer a Detach button that does nothing (callWindow
   // answers "no open target" and the rail stays honest).
   Object.freeze({
-    id: "sessions", label: "Sessions", hint: "Every Claude session, live",
+    id: "sessions", label: "Sessions", hint: "Every Claude session, live", section: "Agents", icon: "layers",
     kind: "file", file: "sessions.html",
   }),
   Object.freeze({
-    id: "chat", label: "Chat", hint: "The company room",
+    id: "chat", label: "Chat", hint: "The company room", section: "Agents", icon: "chat",
     kind: "view", query: "chat=1",
   }),
   // Plan 40 slice G, the surface half: who is standing on the stage and the
@@ -91,7 +91,7 @@ const PANES = Object.freeze([
   // hidden, tiny or behind a window, which is how the owner lost control of the
   // stage in the first place.
   Object.freeze({
-    id: "stage", label: "Stage", hint: "Who is standing, and where",
+    id: "stage", label: "Stage", hint: "Who is standing, and where", section: "Presence", icon: "users",
     kind: "file", file: "stage.html",
   }),
   // Plan 40 cast pane: who appears and how they sound, authored in cast.json
@@ -99,8 +99,23 @@ const PANES = Object.freeze([
   // it needs no vite build, and src/** is the peer's territory this unit does
   // not touch.
   Object.freeze({
-    id: "cast", label: "Cast", hint: "Who appears, and how they sound",
+    id: "cast", label: "Cast", hint: "Who appears, and how they sound", section: "Presence", icon: "mic",
     kind: "file", file: "cast.html",
+  }),
+  // Plan: the ONE shared settings page (owner 2026-09-22: "there still isnt
+  // just a shared settings page"). kind:"file" -- no vite build.
+  Object.freeze({
+    id: "settings", label: "Settings", hint: "Voice, hotkeys, devices", section: "Control", icon: "settings",
+    kind: "file", file: "settings.html",
+  }),
+  // Owner, 2026-09-20: the Inbox pane was rendering decision cards, wakes, relay messages,
+  // the stage slots, the spawn chips AND the whole Models & Market grid in one scroll
+  // ("mixes notifications and decisions and avatars"). Bodies belong under PRESENCE, beside
+  // Stage and Cast. Same bundle and the SAME deck-state subscription as the inbox — it is one
+  // component with a view prop, so the two panes cannot drift.
+  Object.freeze({
+    id: "characters", label: "Characters", hint: "Bodies, spawns and the market", section: "Presence", icon: "users",
+    kind: "view", query: "characters=1",
   }),
   // 🚩 HOSTED, not framed, and the difference is the login. The AitherDesktop
   // shell keeps its session in the persist:living-desktop partition -- that is
@@ -110,7 +125,7 @@ const PANES = Object.freeze([
   // "the desktop is broken". A WebContentsView carries the partition, so the
   // pane and the window are one profile.
   Object.freeze({
-    id: "desktop", label: "Desktop", hint: "The aitherium.com shell",
+    id: "desktop", label: "AitherOS Online", hint: "The living desktop, signed in", section: "Online", icon: "desktop",
     kind: "hosted", partition: "persist:living-desktop",
   }),
 ]);
@@ -124,6 +139,28 @@ let rendererUrlImpl = null;
  *  The palette lives HERE rather than in main so the console can be verified
  *  without loading main.cjs (which would take the running Desk's instance lock). */
 let commandsImpl = null;
+
+/** The desk's appearance + the themes it may choose from (generated from Veil's). */
+function appearanceNow() {
+  const castConfig = require("./cast-config.cjs");
+  let themes = [];
+  try {
+    themes = JSON.parse(require("node:fs").readFileSync(path.join(__dirname, "aither-themes.json"), "utf8")).themes || [];
+  } catch {
+    /* a missing generated file leaves the picker empty, never the window unstyled */
+  }
+  const loaded = castConfig.load();
+  const appearance = (loaded && loaded.appearance) || castConfig.BUILTIN_APPEARANCE;
+  return { theme: appearance.theme, uiScale: appearance.uiScale, themes };
+}
+
+/** Every frame of the console, not just the shell: a pane is its own document. */
+function broadcastAppearance(appearance) {
+  if (!consoleWindow || consoleWindow.isDestroyed()) return;
+  for (const frame of consoleWindow.webContents.mainFrame.framesInSubtree) {
+    try { frame.send("desk:appearance-changed", appearance); } catch { /* a frame mid-navigation */ }
+  }
+}
 
 /**
  * Resolve each pane's content URL.
@@ -264,6 +301,41 @@ async function callWindow(paneId, verb) {
 /** { <paneId>: WebContentsView } — built on first show, kept across pane switches. */
 const hostedViews = new Map();
 let hostedUrls = {};
+/** { <paneId>: async () => boolean } -- main's "make this partition signed in" hook.
+ *  Injected (like hostedUrls) so the console stays verifiable without main.cjs. */
+let hostedPrepare = {};
+/** { <paneId>: () => string } -- where to send a pane that could not be signed in. */
+let hostedSignIn = {};
+
+/**
+ * Load a hosted pane: prepare its session FIRST, then decide what to show.
+ *
+ * Signed in -> the desktop. Not signed in -> the sign-in page in the SAME
+ * partition, so one login here signs in the pane, the overlay and the standalone
+ * window together. Never the apex signed-out: that is a marketing page, and a
+ * marketing page inside the owner's own console reads as "the desktop is gone".
+ */
+async function loadHosted(paneId, view, url) {
+  let signedIn = true;
+  const prepare = hostedPrepare[paneId];
+  if (typeof prepare === "function") {
+    try { signedIn = Boolean(await prepare()); } catch { signedIn = false; }
+  }
+  if (view.webContents.isDestroyed()) return;
+  const signIn = typeof hostedSignIn[paneId] === "function" ? hostedSignIn[paneId]() : "";
+  const target = signedIn || !signIn ? url : signIn;
+  if (!signedIn && signIn) {
+    // Once the login lands (the cookie appears), go to the desktop on our own:
+    // portal's open-redirect guard strips foreign returnUrls, so nothing bounces back.
+    const poll = setInterval(async () => {
+      if (view.webContents.isDestroyed()) return clearInterval(poll);
+      const ok = await Promise.resolve().then(prepare).then(Boolean, () => false);
+      if (ok) { clearInterval(poll); void view.webContents.loadURL(url); }
+    }, 3000);
+    view.webContents.once("destroyed", () => clearInterval(poll));
+  }
+  void view.webContents.loadURL(target);
+}
 
 /**
  * Attach or detach a hosted pane's view, and size it to the stage.
@@ -296,7 +368,7 @@ function placeHosted(paneId, rect) {
     // The same fence the shell carries: a hosted surface may not spawn windows.
     view.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
     hostedViews.set(paneId, view);
-    void view.webContents.loadURL(url);
+    void loadHosted(paneId, view, url);
   }
   consoleWindow.contentView.addChildView(view);
   view.setBounds({
@@ -334,6 +406,27 @@ function wireIpc() {
   ipcMain.handle("desk:console-detach", (_event, paneId) => callWindow(paneId, "open"));
   ipcMain.handle("desk:console-reattach", (_event, paneId) => callWindow(paneId, "close"));
   ipcMain.handle("desk:console-detached", () => detachedIds());
+  // Appearance: which of the family's eleven themes the desk wears. Read from and
+  // written to cast.json (the desk's one synced settings file), and BROADCAST to
+  // every frame -- each pane is its own document, so a theme set on the shell
+  // alone re-skins the rail and leaves eight panes in the old one.
+  ipcMain.handle("desk:appearance-get", () => appearanceNow());
+  ipcMain.handle("desk:appearance-set", (_event, patch) => {
+    const castConfig = require("./cast-config.cjs");
+    const wanted = {};
+    if (patch && typeof patch.theme === "string") wanted.theme = patch.theme;
+    if (patch && Number.isFinite(Number(patch.uiScale))) wanted.uiScale = Number(patch.uiScale);
+    const result = castConfig.write((draft) => {
+      draft.appearance = { ...(draft.appearance || {}), ...wanted };
+    });
+    const bad = (result.problems || []).filter((p) => String(p.path).startsWith("appearance"));
+    if (!result.ok || bad.length) {
+      return { ok: false, error: result.error || bad.map((p) => `${p.path}: ${p.reason}`).join("; ") };
+    }
+    const next = appearanceNow();
+    broadcastAppearance(next);
+    return { ok: true, ...next };
+  });
   // The palette: one list of everything Desk can do, and one way to run it.
   // Rows come from the command registry via main; the shell renders what it is
   // handed and knows no capability of its own.
@@ -345,13 +438,19 @@ function wireIpc() {
       return [];
     }
   });
-  ipcMain.handle("desk:console-command-run", (_event, id) => {
+  // `arg` is the typed argument of a row that declared `prompt` (a title, a
+  // slug); undefined otherwise. A runner that answers a promise is AWAITED so
+  // its verdict ({ok, message}) reaches the palette instead of a bare "ran".
+  ipcMain.handle("desk:console-command-run", async (_event, id, arg) => {
     const command = String(id || "");
     if (!commandsImpl || typeof commandsImpl.run !== "function") {
       return { ok: false, error: "no command runner wired" };
     }
     try {
-      commandsImpl.run(command);
+      const out = await commandsImpl.run(command, arg == null ? undefined : String(arg));
+      if (out && typeof out === "object") {
+        return { ok: out.ok !== false, id: command, ...out, error: out.ok === false ? (out.message || out.error) : undefined };
+      }
       return { ok: true, id: command };
     } catch (error) {
       // A palette that dies on one bad command is worse than one that says so.
@@ -374,10 +473,13 @@ function wireIpc() {
  */
 function showConsole({
   windows = {}, rendererUrl = null, urls = {}, autoShow = true, commands = null,
+  prepare = {}, signIn = {},
 } = {}) {
   windowsImpl = windows || {};
   rendererUrlImpl = rendererUrl;
   hostedUrls = urls || {};
+  hostedPrepare = prepare || {};
+  hostedSignIn = signIn || {};
   commandsImpl = commands;
   wireIpc();
 
@@ -396,8 +498,14 @@ function showConsole({
     minHeight: 600,
     show: false,
     title: "Aither Console",
-    backgroundColor: "#0f1218",
+    // Veil's --background for dark-glass. The title bar is drawn by WINDOWS in the
+    // same colour (titleBarOverlay), so the window has one skin from the OS's
+    // caption buttons down -- it used to be a grey system bar over a dark page.
+    backgroundColor: "#07080d",
     autoHideMenuBar: true,
+    ...(process.platform === "win32"
+      ? { titleBarStyle: "hidden", titleBarOverlay: { color: "#05060a", symbolColor: "#e4e4ef", height: 34 } }
+      : {}),
     webPreferences: {
       preload: path.join(__dirname, "console-preload.cjs"),
       contextIsolation: true,

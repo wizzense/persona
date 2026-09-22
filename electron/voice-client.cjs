@@ -23,6 +23,35 @@
 
 const { callTool, parseMaybeJson } = require("./gateway-mcp.cjs");
 
+const _http = require("node:http");
+const _fs = require("node:fs");
+const STT_SHIM_URL = process.env.AWDESK_STT_SHIM_URL || "http://127.0.0.1:8195/voice/transcribe/base64";
+
+/** Host STT shim (perception :8084 down; desk_stt_shim.py mirrors its contract
+ *  on the host and reads the HOST file directly). Resolves the transcript
+ *  string, or null on any failure so the caller falls back to the gateway. */
+function transcribeHostFile(hostPath) {
+  return new Promise((resolve) => {
+    let b64;
+    try { b64 = _fs.readFileSync(hostPath).toString("base64"); } catch { return resolve(null); }
+    let u;
+    try { u = new URL(STT_SHIM_URL); } catch { return resolve(null); }
+    const body = JSON.stringify({ audio_base64: b64, format: String(hostPath).split(".").pop() || "wav" });
+    const req = _http.request({
+      host: u.hostname, port: u.port, path: u.pathname, method: "POST",
+      headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) },
+      timeout: 120000,
+    }, (res) => {
+      let t = ""; res.setEncoding("utf8");
+      res.on("data", (c) => { t += c; });
+      res.on("end", () => { try { const j = JSON.parse(t); resolve(j && j.success ? String(j.text || "") : null); } catch { resolve(null); } });
+    });
+    req.on("error", () => resolve(null));
+    req.on("timeout", () => { req.destroy(); resolve(null); });
+    req.write(body); req.end();
+  });
+}
+
 async function voiceStatus(call = callTool) {
   const text = await call("get_voice_status", {});
   return parseMaybeJson(text) ?? { note: text.slice(0, 300) };
@@ -68,7 +97,7 @@ async function voiceSnapshot(call = callTool) {
   }
 }
 
-module.exports = { voiceStatus, listVoices, synthesize, transcribe, voiceSnapshot };
+module.exports = { voiceStatus, listVoices, synthesize, transcribe, transcribeHostFile, voiceSnapshot };
 
 if (require.main === module) {
   // Self-test: read-only. Exit 0 = service up, 1 = service down/unreachable

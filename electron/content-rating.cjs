@@ -18,10 +18,19 @@
  *     {"rating": "general" | "r15" | "r18", "source": "vroid" | "manual" | "heuristic"}
  *
  * Written at enroll time from VRoid Hub's own age_limit flags (authoritative),
- * or by rate-characters.py for models that predate this file. `general` is the
- * default for an unrated character, because hiding the whole roster the moment
- * metadata is missing would make the avatar unusable — see ratingReport() for
- * how to find the unrated ones.
+ * or by rate-characters.py for models that predate this file.
+ *
+ * 🚩 A CHARACTER NOBODY JUDGED IS HIDDEN LIKE AN ADULT ONE (owner, 2026-09-20:
+ * "make the lewd avatars hard to find unless you've checked a box"). Until that
+ * day an unrated character -- no file, or the rater's step-5 stamp `source:
+ * "default"`, which means "nothing matched, nobody looked" -- read as `general`
+ * and was listed to everyone; measured that morning, 62 of 66 installed
+ * characters were exactly that. Browsing an unjudged roster IS how a lewd
+ * model gets found, so `unrated` now sits in the hidden set while the gate is
+ * closed, next to r15/r18. The cost the old comment feared (hiding the whole
+ * roster) is paid ONCE by judging it: `python rate-characters.py --apply
+ * --vision` looks at every model and writes a verdict with a source that is
+ * not "default". See ratingReport() for what is still unjudged.
  */
 
 const fs = require("node:fs");
@@ -52,8 +61,56 @@ const AUDIT_LOG =
   path.join(os.homedir(), ".aither", "adult_content.log");
 const AUDIT_STATE = `${AUDIT_LOG}.state`;
 
-/** Ratings that are hidden while the gate is closed. */
-const ADULT_RATINGS = new Set(["r18", "r15"]);
+/** Ratings that are hidden while the gate is closed. `unrated` is what
+ *  getRating() answers for a missing file AND for a rater stamp nobody judged. */
+const ADULT_RATINGS = new Set(["r18", "r15", "unrated"]);
+/** Rating-file sources that mean "nobody looked": treated as unrated. */
+const UNJUDGED_SOURCES = new Set(["", "default"]);
+
+/** How restrictive each rating is, for the ceiling below. */
+const RATING_ORDER = { general: 0, r15: 1, r18: 2 };
+
+/**
+ * THE THREE LIMITS, and which of them this app may change.
+ *
+ *   1. THE PLATFORM GATE (mirror) -- an explicit opt-in AND age verification,
+ *      decided by UserPersonaConfig and mirrored to this file. The desk READS
+ *      it and can never open it. Fails closed.
+ *   2. THE LIVE SAFETY PLANE -- AitherSafety's own level, pushed in by main
+ *      (safety-gate.cjs). It may only TIGHTEN: a plane saying "no explicit"
+ *      closes what the mirror opened, and a plane that never answers changes
+ *      nothing, because failing closed on an unreachable fleet service would
+ *      hide the owner's whole roster every time a container restarts.
+ *   3. THE DESK'S OWN CEILING -- cast.json `content.maxRating` /
+ *      `content.hideUnrated`, the owner's per-machine "even when it is
+ *      unlocked, not above this". Also tightening-only, which is why it is
+ *      safe for awsettings to sync it between machines.
+ *
+ * All three AND together, and every one of them can only hide more.
+ */
+let safetyExplicitAllowed = null; // null = the plane has not answered
+
+/** main pushes AitherSafety's verdict here; null forgets it (tests, a restart). */
+function setSafetyExplicitAllowed(value) {
+  safetyExplicitAllowed = value === null || value === undefined ? null : value === true;
+}
+
+function getSafetyExplicitAllowed() {
+  return safetyExplicitAllowed;
+}
+
+/** The desk's own ceiling, from cast.json. Fails SOFT to the built-in (r18 +
+ *  hideUnrated), because this file must never be the reason a roster empties. */
+function contentCeiling() {
+  try {
+    const cast = require("./cast-config.cjs");
+    const loaded = cast.load({});
+    const resolved = cast.resolveContent(loaded.snapshot);
+    return { maxRating: resolved.maxRating, hideUnrated: resolved.hideUnrated };
+  } catch {
+    return { maxRating: "r18", hideUnrated: true };
+  }
+}
 
 let gateCache = null;
 const GATE_CACHE_MS = 5000;
@@ -77,15 +134,67 @@ function invalidateGate() {
   gateCache = null;
 }
 
-/** The recorded rating for a character, or "unrated" when none was written. */
-function getRating(name) {
+/** The rating record on disk, parsed. `{}` when there is none. */
+function ratingRecord(name) {
   try {
-    const raw = fs.readFileSync(path.join(ROSTER_DIR, name, RATING_FILE), "utf8");
-    const rating = String(JSON.parse(raw).rating || "").toLowerCase();
-    return rating || "unrated";
+    return JSON.parse(fs.readFileSync(path.join(ROSTER_DIR, name, RATING_FILE), "utf8")) || {};
   } catch {
-    return "unrated";
+    return {};
   }
+}
+
+/** The base this character was forked from, or null. One hop only -- a variant
+ *  of a variant resolves through its own base, and the chain is walked (with a
+ *  cycle guard) by ratingOf below rather than trusted to be flat. */
+function baseOf(name) {
+  const base = ratingRecord(name).base;
+  return typeof base === "string" && base && base !== name ? base : null;
+}
+
+/** The recorded rating for a character, or "unrated" when none was written --
+ *  or when the file carries the rater's "default" stamp, which records only
+ *  that nothing matched the name and nobody looked at the model.
+ *
+ *  🚩 A FORK MAY NEVER BE TAMER THAN WHAT IT WAS FORKED FROM. A variant carries
+ *  `base`, and its effective rating is the STRONGEST rating in its chain: without
+ *  that, forking is a gate bypass -- fork an r18 model, rate the variant
+ *  "general", and the hidden body is on the public roster wearing a new name.
+ *  The variant may be rated HIGHER than its base (a tame model customised into
+ *  something explicit is the owner's own verdict, and it sticks). */
+function getRating(name) {
+  const judgedOf = (node) => {
+    const record = ratingRecord(node);
+    const rating = String(record.rating || "").toLowerCase();
+    if (!rating) return null;
+    if (UNJUDGED_SOURCES.has(String(record.source || ""))) return null;
+    return rating;
+  };
+  // A fork nobody has looked at is UNRATED, whatever its base was: the recipe
+  // can change what the body shows, so inheriting "general" unseen would be the
+  // same hole from the other side. It is hidden until judged, like any unjudged
+  // character.
+  const own = judgedOf(name);
+  if (own === null) return "unrated";
+  // Judged: it is the STRONGEST rating in its chain. A variant may be rated
+  // HIGHER than its base (the owner's own verdict sticks) and never lower.
+  let worst = own;
+  const seen = new Set([name]);
+  let node = baseOf(name);
+  while (node && !seen.has(node)) {
+    seen.add(node);
+    const rating = judgedOf(node);
+    if (rating) {
+      const rank = RATING_ORDER[rating];
+      const held = RATING_ORDER[worst];
+      // A rating outside the ranked set is honoured verbatim rather than
+      // compared -- an unknown value must not silently rank as 0 (the bug this
+      // replaces: RATING_ORDER["unrated"] is undefined and every `>` was false).
+      if (rank == null) return rating;
+      if (held == null || rank > held) worst = rating;
+    }
+    node = baseOf(node);
+  }
+  return worst;
 }
 
 /** Record a rating. Returns false when it could not be written. */
@@ -109,16 +218,38 @@ function setRating(name, rating, source = "manual") {
   }
 }
 
-/** True when this character must be hidden right now. */
-function isHidden(name) {
-  if (isAdultContentVisible()) return false;
-  return ADULT_RATINGS.has(getRating(name));
+/** Why this character is hidden right now, or null when it is not. */
+function hiddenReason(name, ceiling = contentCeiling()) {
+  const rating = getRating(name);
+  const gateOpen = isAdultContentVisible() && safetyExplicitAllowed !== false;
+  if (!gateOpen) {
+    // Below the gate, an unjudged character is hidden WITH the adult ones: a
+    // roster nobody has rated is exactly how a lewd model gets found by
+    // browsing. `content.hideUnrated: false` is the owner's opt-out for a
+    // roster being rated.
+    if (rating === "unrated") return ceiling.hideUnrated === false ? null : "unjudged";
+    if (ADULT_RATINGS.has(rating)) return "gate";
+    return null;
+  }
+  // The gate is OPEN: the owner has said they are an adult, so an unjudged
+  // character is their call, not ours -- `hideUnrated` is about being FOUND by
+  // accident, which is only possible below the gate. The ceiling still applies.
+  if (rating === "unrated") return null;
+  const rank = RATING_ORDER[rating];
+  const cap = RATING_ORDER[ceiling.maxRating];
+  if (rank != null && cap != null && rank > cap) return "ceiling";
+  return null;
 }
 
-/** Drop every adult-rated character from a list while the gate is closed. */
+/** True when this character must be hidden right now. */
+function isHidden(name) {
+  return hiddenReason(name) !== null;
+}
+
+/** Drop every character the three limits hide. One ceiling read per list. */
 function filterCharacters(names) {
-  if (isAdultContentVisible()) return names;
-  return names.filter((name) => !ADULT_RATINGS.has(getRating(name)));
+  const ceiling = contentCeiling();
+  return names.filter((name) => hiddenReason(name, ceiling) === null);
 }
 
 /**
@@ -133,16 +264,25 @@ function filterCharacters(names) {
  * avoid. Plan 40 slice F: the setting is enforced everywhere, and it SAYS SO.
  */
 function refusalFor(name) {
+  // An ABSENT character is the caller's message ("no such character"), never a
+  // rating excuse -- `unrated` is also what getRating answers for a missing dir.
+  if (!fs.existsSync(path.join(ROSTER_DIR, name))) return null;
+  const ceiling = contentCeiling();
+  const why = hiddenReason(name, ceiling);
+  if (!why) return null;
   const rating = getRating(name);
-  if (ADULT_RATINGS.has(rating) && !isAdultContentVisible()) {
-    return {
-      code: "rating-hidden",
-      rating,
-      reason: `${name} is rated ${rating} and mature content is currently hidden. `
-        + "Turn it on in the platform's safety setting (the desk only reads it).",
-    };
-  }
-  return null;
+  const reason = {
+    unjudged: `${name} has not been rated yet, and an unjudged character stays hidden. `
+      + "Rate the roster (python rate-characters.py --apply --vision --capture), "
+      + "or set content.hideUnrated false in cast.json to browse it anyway.",
+    ceiling: `${name} is rated ${rating}, above this desk's own ceiling `
+      + `(content.maxRating = ${ceiling.maxRating}). Raise it with `
+      + "awsettings --domain desk set content.maxRating r18.",
+    gate: `${name} is rated ${rating} and mature content is currently hidden. `
+      + "Turn it on in the platform's safety setting (the desk only reads it; it needs "
+      + "an adult opt-in AND age verification).",
+  }[why];
+  return { code: "rating-hidden", rating, why, reason };
 }
 
 /**
@@ -204,6 +344,13 @@ function ratingReport() {
 
 module.exports = {
   ADULT_RATINGS,
+  RATING_ORDER,
+  baseOf,
+  ratingRecord,
+  contentCeiling,
+  hiddenReason,
+  setSafetyExplicitAllowed,
+  getSafetyExplicitAllowed,
   AUDIT_LOG,
   filterCharacters,
   noteGateState,

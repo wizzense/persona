@@ -4,12 +4,26 @@ import { renderVrmThumbnail } from '../thumbnails';
 import {
   EMPTY_DECK_STATE,
   cardWhere,
+  clockLabel,
+  clockTone,
   formatAge,
+  normalizeWakes,
+  cardLabel,
+  dueLabel,
+  sharedCause,
+  transportNote,
+  otherChoices,
   primaryChoice,
-  secondaryChoice,
+  reasonLabel,
+  staleLabel,
+  wakeActionMessage,
+  wakeAgeLabel,
+  wakeBadge,
   type DeckDecision,
   type DeckState,
   type RelayRow,
+  type WakeActionResult,
+  type WakeRow,
 } from '../deck/deck-types';
 
 /**
@@ -104,7 +118,9 @@ interface BridgeDeck {
   open(): void;
   close(): void;
   answer(id: string, choice: string): Promise<boolean>;
-  action(name: string, arg?: string): Promise<boolean>;
+  /** Most verbs answer a boolean; the wake verbs answer the daemon's
+   *  {ok, detail, exitCode, started, pid} so the row can say what happened. */
+  action(name: string, arg?: string): Promise<boolean | WakeActionResult>;
   /** The thread under a relay message — the per-agent direct chat read path. */
   relayThread(messageId: string): Promise<RelayRow[]>;
 }
@@ -153,6 +169,150 @@ function urgencyTone(urgency: string): string {
   return URGENCY_TONE[urgency] ?? URGENCY_TONE.normal;
 }
 
+/** WAKES — awrise's scheduled jobs.
+ *
+ * Order matters here, and it is the point of the section: the CLOCK line comes
+ * before any job row. A list of enabled jobs with a silent clock looks healthy
+ * and is not, and that is the failure this pane exists to catch. The staleness
+ * chip comes first of all, because rows from a snapshot taken an hour ago must
+ * never be read as live.
+ *
+ * Every action goes to main -> the harness daemon. The pane spawns nothing and
+ * parses no scheduler state: one reader, one semantics, every surface.
+ */
+function WakesSection({
+  wakes,
+  nowMs,
+  notes,
+  pending,
+  onAction,
+}: {
+  wakes: DeckState['wakes'];
+  nowMs: number;
+  notes: Record<string, string>;
+  pending: Set<string>;
+  onAction: (verb: 'enable' | 'disable' | 'run', name: string) => void;
+}) {
+  const stale = wakes.source === 'stale';
+  const live = wakes.source === 'daemon' && wakes.installed === true;
+  const notice = stale
+    ? staleLabel(wakes, nowMs)
+    : wakes.installed === false
+      ? 'awrise not installed — no scheduled jobs on this host.'
+      : wakes.error
+        ? wakes.error
+        : wakes.source === 'none'
+          ? 'Reading the scheduler…'
+          : '';
+  return (
+    <section className="deck-section" aria-label="Wakes">
+      <h2 className="deck-section-head">
+        <span className="deck-section-icon"><ChipIcon /></span>
+        Wakes
+        {wakes.failing > 0 ? <span className="deck-section-count">{wakes.failing}</span> : null}
+      </h2>
+      {notice ? <p className="deck-empty">{notice}</p> : null}
+      {/* The clock, BEFORE any row. */}
+      {wakes.installed !== false && wakes.source !== 'none' ? (
+        <p className={`deck-wake-clock deck-wake-clock-${clockTone(wakes)}`}>
+          {clockLabel(wakes, nowMs)}
+        </p>
+      ) : null}
+      {wakes.schema === 1 ? (
+        <p className="deck-empty">
+          {wakes.migration || 'the awrise job file is v1 — run `awrise list` on this host to migrate it'}
+        </p>
+      ) : null}
+      {wakes.wakes.length === 0 ? (
+        live ? <p className="deck-empty">No wakes scheduled.</p> : null
+      ) : (
+        wakes.wakes.map((wake: WakeRow) => {
+          const badge = wakeBadge(wake);
+          return (
+            <div className="deck-wake-row" key={wake.name}>
+              <span className={`deck-wake-badge deck-wake-${badge}`}>{badge}</span>
+              <span className="deck-wake-text">
+                <strong title={wake.run || wake.name}>{wake.name}</strong>
+                <span className="deck-wake-meta">
+                  {wake.every || (wake.at ? `at ${wake.at}` : 'no schedule')}
+                  {' · '}
+                  {wakeAgeLabel(wake, nowMs)}
+                  {` · ${dueLabel(wake.nextDueAt, nowMs)}`}
+                  {wake.consecutiveFailures > 0 ? ` · ${wake.consecutiveFailures}x failed` : ''}
+                  {/* awrise raises the failing-streak card through the awask
+                      ladder; naming its id ties this row to the card already
+                      sitting in the Decisions section above. No card code here. */}
+                  {wake.cardId ? ` · ${cardLabel(wake.cardId)}` : ''}
+                </span>
+                {/* The REASON, never truncated away entirely: the full text is
+                    the title, so "failure" is always one hover from "why". */}
+                {wake.lastReason ? (
+                  <span className="deck-wake-reason" title={wake.lastReason}>
+                    {wake.lastState ? `${wake.lastState} — ` : ''}
+                    {reasonLabel(wake.lastReason).length > 60 ? `${reasonLabel(wake.lastReason).slice(0, 60)}…` : reasonLabel(wake.lastReason)}
+                  </span>
+                ) : null}
+                {notes[wake.name] ? (
+                  <span className="deck-wake-note">{notes[wake.name]}</span>
+                ) : null}
+              </span>
+              <span className="deck-wake-actions">
+                <button
+                  className="deck-btn"
+                  disabled={!live || pending.has(wake.name)}
+                  title={wake.enabled ? 'Stop scheduling this wake' : 'Schedule this wake again'}
+                  onClick={() => onAction(wake.enabled ? 'disable' : 'enable', wake.name)}
+                >
+                  {wake.enabled ? 'Disable' : 'Enable'}
+                </button>
+                <button
+                  className="deck-btn deck-btn-primary"
+                  disabled={!live || wake.running || pending.has(wake.name)}
+                  title="Fire this wake once now — the schedule and the streak are unchanged"
+                  onClick={() => onAction('run', wake.name)}
+                >
+                  Run now
+                </button>
+              </span>
+            </div>
+          );
+        })
+      )}
+    </section>
+  );
+}
+
+/**
+ * One relay message. The KIND is a chip and the addressee a quiet "to ..." -- both
+ * came out of the awrelay envelope main strips from the body (relay-feed.cjs
+ * splitEnvelope); they used to be a line of raw JSON after every message. The body
+ * is clamped to two lines for scanning and OPENS on click: a finding cut off at
+ * "Ladder that answers this in 10 min: Stopping line = systemctl; n" with no way to
+ * read the rest was a message the owner could not actually receive.
+ */
+function RelayRowView({ row, nowMs }: { row: RelayRow; nowMs: number }) {
+  const [open, setOpen] = useState(false);
+  const kind = (row.kind || '').toLowerCase();
+  return (
+    <div
+      className={`deck-relay-row ${open ? 'deck-relay-row-open' : ''}`}
+      role="button"
+      tabIndex={0}
+      title={open ? 'Click to collapse' : 'Click to read the whole message'}
+      onClick={() => setOpen((value) => !value)}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setOpen((value) => !value); }
+      }}
+    >
+      <span className="deck-relay-author">{row.author || 'unknown'}</span>
+      {kind ? <span className={`deck-relay-kind deck-relay-kind-${kind}`}>{kind}</span> : null}
+      {row.to && row.to.length ? <span className="deck-relay-to">to {row.to.join(', ')}</span> : null}
+      <span className="deck-relay-age">{formatAge(row.at, nowMs)}</span>
+      <p className="deck-relay-text">{row.text}</p>
+    </div>
+  );
+}
+
 function RelaySection({
   relay,
   channel,
@@ -193,11 +353,7 @@ function RelaySection({
         <p className="deck-empty">Relay unavailable or quiet — nothing recent in {channel}.</p>
       ) : (
         relay.map((row, index) => (
-          <div className="deck-relay-row" key={`${row.at}-${index}`}>
-            <span className="deck-relay-author">{row.author || 'unknown'}</span>
-            <span className="deck-relay-age">{formatAge(row.at, nowMs)}</span>
-            <p className="deck-relay-text">{row.text}</p>
-          </div>
+          <RelayRowView key={`${row.id ?? row.at}-${index}`} row={row} nowMs={nowMs} />
         ))
       )}
     </section>
@@ -312,11 +468,7 @@ function AgentChatPane({
         </p>
       ) : (
         rows.map((row, index) => (
-          <div className="deck-relay-row" key={`${row.id ?? 'chat'}-${index}`}>
-            <span className="deck-relay-author">{row.author}</span>
-            <span className="deck-relay-age">{formatAge(row.at, nowMs)}</span>
-            <p className="deck-relay-text">{row.text}</p>
-          </div>
+          <RelayRowView key={`${row.id ?? 'chat'}-${index}`} row={row} nowMs={nowMs} />
         ))
       )}
       <div className="deck-relay-compose">
@@ -346,6 +498,30 @@ function AgentChatPane({
       </div>
     </section>
   );
+}
+
+/**
+ * A failure reason the owner can actually read. `reason` is typed string, but main hands back
+ * whatever failed, and an object in a template literal renders as "[object Object]" — which is
+ * what the market row showed on a 404. A string stays itself; an Error or a
+ * {message|error|reason} object yields its text; anything else becomes JSON. Capped, so a wall
+ * of JSON cannot take the pane over.
+ */
+export function reasonText(reason: unknown, fallback = 'unreachable'): string {
+  const cap = (s: string) => (s.length > 160 ? `${s.slice(0, 157)}…` : s);
+  if (reason == null) return fallback;
+  if (typeof reason === 'string') return cap(reason.trim() || fallback);
+  if (typeof reason === 'number' || typeof reason === 'boolean') return String(reason);
+  if (reason instanceof Error) return cap(reason.message || fallback);
+  if (typeof reason === 'object') {
+    const o = reason as Record<string, unknown>;
+    for (const key of ['message', 'error', 'reason', 'detail', 'statusText']) {
+      const v = o[key];
+      if (typeof v === 'string' && v.trim()) return cap(v.trim());
+    }
+    try { return cap(JSON.stringify(reason)); } catch { return fallback; }
+  }
+  return fallback;
 }
 
 /** One listing from the Aitherium marketplace (the subset the desk renders). */
@@ -406,8 +582,11 @@ function ModelsMarketSection({
     } | undefined;
     if (!deck?.deck?.marketBrowse) return;
     setMarketBusy(true);
-    void deck.deck.marketBrowse(q).then((res) => {
+    void deck.deck.marketBrowse(q).catch((err: unknown) => (
+      { ok: false, listings: [], reason: reasonText(err) }
+    )).then((res) => {
       setMarket(res ?? { ok: false, listings: [], reason: 'unreachable' });
+      // a rejected bridge call is a reason too, not a silent empty grid
       setMarketBusy(false);
     });
   }, []);
@@ -534,7 +713,7 @@ function ModelsMarketSection({
         </div>
       )}
       <p className="deck-empty">
-        Aitherium market {marketBusy ? '— searching…' : market.ok ? `— ${(market.listings ?? []).length} packs` : `— ${market.reason ?? 'unreachable'}`}
+        Aitherium market {marketBusy ? '— searching…' : market.ok ? `— ${(market.listings ?? []).length} packs` : `— ${reasonText(market.reason)}`}
       </p>
       {(market.listings ?? []).slice(0, 10).map((l) => (
         <div className="deck-row deck-row-static" key={l.id}>
@@ -638,7 +817,7 @@ function DecisionRow({
   onAnswer: (id: string, choice: string) => void;
 }) {
   const primary = primaryChoice(card);
-  const secondary = secondaryChoice(card);
+  const others = otherChoices(card);
   const where = cardWhere(card);
   return (
     <article className="deck-card">
@@ -667,15 +846,16 @@ function DecisionRow({
             Open answer window
           </button>
         )}
-        {secondary ? (
+        {others.map((option) => (
           <button
+            key={option.key}
             className="deck-btn"
-            title={`Answer "${secondary.label}" instead`}
-            onClick={() => onAnswer(card.id, secondary.key)}
+            title={`Answer "${option.label}" instead`}
+            onClick={() => onAnswer(card.id, option.key)}
           >
-            {secondary.label}
+            {option.label}
           </button>
-        ) : null}
+        ))}
       </footer>
       <SteerBox card={card} />
     </article>
@@ -864,6 +1044,13 @@ function SystemSection() {
     return `${profile} · ${tt} terminal session(s)${ttNote ? ` — ${ttNote}` : ''}`;
   })();
 
+  // One sentence per source, in words -- and when every source failed for the SAME
+  // reason, that reason ONCE instead of once per row.
+  const lines = [voiceLine, visionLine, desktopLine, connectLine].map((line) =>
+    transportNote(line.replace(/^(unreachable|down|unavailable) — /, '')));
+  const cause = sharedCause(lines);
+  const [voiceText, visionText, desktopText, connectText] = lines;
+
   return (
     <section className="deck-section" aria-label="System awareness">
       <h2 className="deck-section-head">
@@ -880,29 +1067,57 @@ function SystemSection() {
       </h2>
       <div className="deck-row deck-row-static">
         <span className="deck-row-label">System</span>
-        <span className="deck-row-label">{serviceCount} service key(s) · {agentsCount} agent activity key(s)</span>
+        <span className="deck-row-label">
+          {serviceCount === '?' && agentsCount === '?'
+            ? 'unknown — the platform did not answer'
+            : `${serviceCount} service key(s) · ${agentsCount} agent activity key(s)`}
+        </span>
       </div>
-      <div className="deck-row deck-row-static">
-        <span className="deck-row-label">Voice</span>
-        <span className="deck-row-label">{voiceLine}</span>
-      </div>
-      <div className="deck-row deck-row-static">
-        <span className="deck-row-label">Vision</span>
-        <span className="deck-row-label">{visionLine}</span>
-      </div>
-      <div className="deck-row deck-row-static">
-        <span className="deck-row-label">Desktop</span>
-        <span className="deck-row-label">{desktopLine}</span>
-      </div>
+      {cause ? (
+        <div className="deck-row deck-row-static deck-row-cause">
+          <span className="deck-row-label">Voice · Vision · Desktop · Workspace</span>
+          <span className="deck-row-label">all read through one door, and {cause}. Nothing here is broken on its own.</span>
+        </div>
+      ) : null}
+      {cause ? null : (
+        <div className="deck-row deck-row-static">
+          <span className="deck-row-label">Voice</span>
+          <span className="deck-row-label">{voiceText}</span>
+        </div>
+      )}
+      {cause ? null : (
+        <div className="deck-row deck-row-static">
+          <span className="deck-row-label">Vision</span>
+          <span className="deck-row-label">{visionText}</span>
+        </div>
+      )}
+      {cause ? null : (
+        <div className="deck-row deck-row-static">
+          <span className="deck-row-label">Desktop</span>
+          <span className="deck-row-label">{desktopText}</span>
+        </div>
+      )}
       <div className="deck-row deck-row-static">
         <span className="deck-row-label">Workspace</span>
-        <span className="deck-row-label">{connectLine}</span>
+        <span className="deck-row-label">{cause ? 'see above' : connectText}</span>
       </div>
     </section>
   );
 }
 
-export function Deck() {
+/**
+ * The Console's two content panes, sharing ONE deck-state subscription.
+ *
+ * `inbox` is decisions, wakes and the agents' messages — what the bell, the tray badge and
+ * the taskbar overlay open. `characters` is bodies: who is on the stage, the spawn chips and
+ * the installed/market roster. They were one scroll until 2026-09-20; the owner's word for it
+ * was "mixed", and the rail already separates NOW from PRESENCE.
+ *
+ * A view PROP, not a second component: the subscription below is ~80 lines of getState plus
+ * the deck-state push, and two copies of it would drift or double-subscribe.
+ */
+export function Deck({ view = 'inbox' }: { view?: 'inbox' | 'characters' } = {}) {
+  const isCharacters = view === 'characters';
   const [state, setState] = useState<DeckState>(EMPTY_DECK_STATE);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const answering = useRef<Set<string>>(new Set());
@@ -915,6 +1130,11 @@ export function Deck() {
   // Drop-to-avatar (2026-08-29): the drag state + the verdict list. The
   // verdicts are LOCAL to this panel (the relay feed is where the agent
   // conversation continues — main posts the notice there itself).
+  // Wake actions: the daemon's answer per job (an inline line under the row)
+  // and the names with a mutation in flight, so a second click is ignored here
+  // rather than relying on the daemon's 409 as the first line of defence.
+  const [wakeNotes, setWakeNotes] = useState<Record<string, string>>({});
+  const [wakePending, setWakePending] = useState<Set<string>>(() => new Set());
   const [dragOver, setDragOver] = useState(false);
   const [drops, setDrops] = useState<DropVerdict[]>([]);
   const [dropBusy, setDropBusy] = useState(false);
@@ -942,7 +1162,10 @@ export function Deck() {
     if (!deck) return;
     let alive = true;
     void deck.getState().then((next) => {
-      if (alive && next) setState(next);
+      // Same normalisation as the push path — the initial PULL carries main's
+      // raw feed too, and skipping it here made the section render once with
+      // undefined clock fields.
+      if (alive && next) setState({ ...next, wakes: normalizeWakes(next.wakes) });
     });
     const unsubscribe = bridgeSubscribe((event) => {
       if (event.type === 'deck-state') {
@@ -960,6 +1183,9 @@ export function Deck() {
           relayChannel: (event.relayChannel as string) ?? '#agents',
           room: (event.room as DeckState['room']) ?? [],
           roomStatus: (event.roomStatus as string) ?? 'not started',
+          // A field missing from THIS copy is dropped on the first push after
+          // the initial pull — the section would render once and then empty.
+          wakes: normalizeWakes(event.wakes),
         });
       }
     });
@@ -1004,6 +1230,33 @@ export function Deck() {
 
   const runAction = useCallback((name: string, arg?: string) => {
     void bridgeDeck()?.action(name, arg);
+  }, []);
+
+  /** Fire one wake verb and SAY what came back. `run` answers 202 with a pid
+   *  long before the wake finishes — reporting that as plain success would be
+   *  the lie this line exists to prevent. */
+  const handleWakeAction = useCallback((verb: 'enable' | 'disable' | 'run', name: string) => {
+    setWakePending((current) => {
+      if (current.has(name)) return current;
+      const next = new Set(current);
+      next.add(name);
+      return next;
+    });
+    void bridgeDeck()
+      ?.action(`wake-${verb}`, name)
+      .then((result) => {
+        setWakeNotes((current) => ({ ...current, [name]: wakeActionMessage(verb, result) }));
+      })
+      .catch(() => {
+        setWakeNotes((current) => ({ ...current, [name]: `${verb} failed: the desk did not answer` }));
+      })
+      .finally(() => {
+        setWakePending((current) => {
+          const next = new Set(current);
+          next.delete(name);
+          return next;
+        });
+      });
   }, []);
 
   /** Open the per-agent DIRECT chat: the relay thread under the agent's most
@@ -1091,6 +1344,7 @@ export function Deck() {
         <h1 className="deck-title">Inbox</h1>
         <span className={`deck-count ${state.openCount > 0 ? 'deck-count-live' : ''}`}>
           {state.openCount > 0 ? `${state.openCount} waiting` : 'all clear'}
+          {(state.totalCount ?? 0) > state.openCount ? ` · ${(state.totalCount ?? 0) - state.openCount} FYI` : ''}
         </span>
         <button
           className="deck-close"
@@ -1155,6 +1409,14 @@ export function Deck() {
           ) : null}
         </section>
 
+        <WakesSection
+          wakes={state.wakes}
+          nowMs={nowMs}
+          notes={wakeNotes}
+          pending={wakePending}
+          onAction={handleWakeAction}
+        />
+
         <RelaySection
           relay={state.relay}
           channel={state.relayChannel}
@@ -1164,7 +1426,7 @@ export function Deck() {
 
         <SystemSection />
 
-        <section className="deck-section" aria-label="Avatars">
+        <section className="deck-section" aria-label="Avatars" hidden={!isCharacters}>
           <h2 className="deck-section-head">
             <span className="deck-section-icon"><DeskIcon /></span>
             Avatars
@@ -1243,13 +1505,15 @@ export function Deck() {
           />
         ) : null}
 
-        <ModelsMarketSection
-          characters={state.characters}
-          characterModels={state.characterModels ?? {}}
-          activeCharacter={state.activeCharacter}
-          agentCharacters={state.agentCharacters}
-          onAction={runAction}
-        />
+        {isCharacters ? (
+          <ModelsMarketSection
+            characters={state.characters}
+            characterModels={state.characterModels ?? {}}
+            activeCharacter={state.activeCharacter}
+            agentCharacters={state.agentCharacters}
+            onAction={runAction}
+          />
+        ) : null}
 
       </div>
 

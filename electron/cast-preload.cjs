@@ -5,7 +5,7 @@
  * because the pane is an iframe under nodeIntegrationInSubFrames -- same
  * wiring stage-preload.cjs uses for stage.html.
  *
- * Nine verbs over cast-config.cjs's (U01) write surface and
+ * Twelve verbs over cast-config.cjs's (U01) write surface and
  * room-stage-host.cjs's castPaneImpl (U07) read surface. See cast-window.cjs
  * for the desk:cast-* channel names this mirrors 1:1, and its `call()` for
  * why every one of these resolves to `{ok, ...}` rather than ever rejecting.
@@ -27,10 +27,17 @@ contextBridge.exposeInMainWorld("aitherCast", {
   setStage: (patch) => ipcRenderer.invoke("desk:cast-set-stage", patch || {}),
   /** Merge `patch` into `voice` (defaultVoice, defaultSpeed, maxChars, endpoint, speechFilter, affectIntensity). */
   setVoice: (patch) => ipcRenderer.invoke("desk:cast-set-voice", patch || {}),
+  /** Merge `patch` into `defaults` -- the ActorConfig every actor inherits from
+   *  (physics faders for everyone at once). */
+  setDefaults: (patch) => ipcRenderer.invoke("desk:cast-set-defaults", patch || {}),
   /** models / prompts / vision / sync -- the list is enforced in main, not here. */
   setSection: (section, patch) => ipcRenderer.invoke("desk:cast-set-section", String(section || ""), patch || {}),
   /** Merge `patch` into `channels[channel]` (voiced, presence). */
   setChannel: (channel, patch) => ipcRenderer.invoke("desk:cast-set-channel", String(channel || ""), patch || {}),
+  /** Turn mature content on or off. Opening goes through the platform (it is the only
+   *  thing that can attest age verification) and RESOLVES {ok:false} when it cannot be
+   *  reached; closing always works offline. */
+  setAdultContent: (enabled) => ipcRenderer.invoke("desk:cast-set-adult-content", enabled === true),
   /** Pin every on-stage actor's CURRENT resolved place into `actors[key].place`. */
   captureStage: () => ipcRenderer.invoke("desk:cast-capture-stage"),
   /** Hard mute: speak:false beats presence and keeps the body ("be here, say nothing"). */

@@ -286,3 +286,46 @@ test("an empty card id is refused before the router is asked", () => {
     cards.setWindowRouter(null);
   }
 });
+
+test("listOpen carries what an answer will DO — consequence, recipe, deadline", () => {
+  // A card recipe (awask.card_recipes) turns the answer into an ACTION: picking
+  // "Disable this wake" runs `awrise disable --name <job>`. The raiser writes
+  // that sentence into the option's `consequence`, and Desk used to drop it —
+  // so every desk surface offered a button whose effect was invisible until
+  // after it was pressed. `recipe` is how a surface knows the answer ACTS at
+  // all, and `deadline` is the card answering itself if nobody does.
+  const dir = tmpStore();
+  writeCard(dir, "d-rcp", {
+    card_recipe: "wake-failed",
+    dedupe_key: "awrise:wake-failed:nightly-sync:2026-09-18T05:00:01+00:00",
+    deadline: 1790000000,
+    default_key: "keep",
+    options: [
+      { key: "disable", label: "Disable this wake",
+        consequence: "awrise disable --name nightly-sync; nothing runs until you re-enable" },
+      { key: "keep", label: "Keep it scheduled", consequence: "no change", recommended: true },
+    ],
+  });
+  const [card] = listOpen(dir);
+  assert.equal(card.recipe, "wake-failed");
+  assert.equal(card.dedupeKey, "awrise:wake-failed:nightly-sync:2026-09-18T05:00:01+00:00");
+  assert.equal(card.deadline, 1790000000);
+  assert.match(card.options[0].consequence, /awrise disable --name nightly-sync/);
+  assert.equal(card.options[1].recommended, true);
+
+  // A hand-raised card has none of it, and must read as "" / 0 rather than
+  // undefined: every surface concatenates these straight into text.
+  writeCard(dir, "d-plain", { options: [{ key: "ok", label: "OK" }] });
+  const plain = listOpen(dir).find((c) => c.id === "d-plain");
+  assert.equal(plain.recipe, "");
+  assert.equal(plain.dedupeKey, "");
+  assert.equal(plain.deadline, 0);
+  assert.equal(plain.options[0].consequence, "");
+
+  // Bounded: a desk button is not a place to render an unbounded string.
+  writeCard(dir, "d-long", {
+    options: [{ key: "ok", label: "OK", consequence: "x".repeat(900) }],
+  });
+  const long = listOpen(dir).find((c) => c.id === "d-long");
+  assert.equal(long.options[0].consequence.length, 200);
+});

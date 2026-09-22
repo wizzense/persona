@@ -21,7 +21,9 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 const href = String(globalThis.location?.href || "");
 
-if (href.includes("command.html")) {
+if (href.includes("settings.html")) {
+  require("./settings-preload.cjs");
+} else if (href.includes("command.html")) {
   require("./command-preload.cjs");
 } else if (href.includes("fleet-control.html")) {
   require("./fleet-preload.cjs");
@@ -39,7 +41,43 @@ if (href.includes("command.html")) {
   require("./preload.cjs");
 }
 
+// ── one skin, one chrome, in every frame ─────────────────────────────────────────
+// Each pane is its own document, so both facts have to be applied per frame:
+//   data-theme  the family theme the owner picked (aither-tokens.css keys off it)
+//   .embedded   this document is a PANE inside the console. The shell's bar already
+//               says "Fleet -- Containers, VRAM, doors"; a pane that repeats its
+//               own title under it is the double header in the owner's screenshots.
+//               The same page detached into its own window is NOT embedded and
+//               keeps its title, because there it is the only one.
+// A preload runs in the page's world; `globalThis` is how this file already reaches
+// it (see `href` above), and it keeps the node-flavoured lint config honest.
+const doc = globalThis.document;
+
+function applyAppearance(appearance) {
+  const root = doc.documentElement;
+  if (!root || !appearance) return;
+  if (appearance.theme && appearance.theme !== "dark-glass") root.dataset.theme = appearance.theme;
+  else delete root.dataset.theme;
+  if (Number.isFinite(appearance.uiScale)) root.style.setProperty("--ui-scale", String(appearance.uiScale));
+}
+function markFrame() {
+  const root = doc.documentElement;
+  if (!root) return;
+  // A cross-origin parent throws on access -- which itself means "I am framed".
+  const framed = () => { try { return globalThis.top !== globalThis.self; } catch { return true; } };
+  root.classList.toggle("embedded", framed());
+}
+let lastAppearance = null;
+const paint = () => { markFrame(); applyAppearance(lastAppearance); };
+ipcRenderer.invoke("desk:appearance-get").then((a) => { lastAppearance = a; paint(); }).catch(() => {});
+ipcRenderer.on("desk:appearance-changed", (_event, a) => { lastAppearance = a; paint(); });
+if (doc.readyState === "loading") doc.addEventListener("DOMContentLoaded", paint);
+else paint();
+
 contextBridge.exposeInMainWorld("aitherConsole", {
+  /** { theme, uiScale, themes[] } -- the family's eleven, generated from Veil's. */
+  appearance: () => ipcRenderer.invoke("desk:appearance-get"),
+  setAppearance: (patch) => ipcRenderer.invoke("desk:appearance-set", patch || {}),
   /** The rail, with each pane's resolved src. Main decides, never the page. */
   panes: () => ipcRenderer.invoke("desk:console-panes"),
   /** Hand a pane to its standalone window. */
@@ -75,7 +113,8 @@ contextBridge.exposeInMainWorld("aitherConsole", {
   },
   /** Everything Desk can do, for the palette (Ctrl+K). Resolved labels, no logic. */
   commands: () => ipcRenderer.invoke("desk:console-commands"),
-  /** Run one of them by id. */
-  runCommand: (id) => ipcRenderer.invoke("desk:console-command-run", String(id)),
+  /** Run one of them by id; `arg` is the typed text for a row with `prompt`. */
+  runCommand: (id, arg) => ipcRenderer.invoke(
+    "desk:console-command-run", String(id), arg == null ? undefined : String(arg)),
   close: () => ipcRenderer.send("desk:console-close"),
 });

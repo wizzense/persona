@@ -35,6 +35,11 @@ const DEFAULT_SCRIPT = "C:\\AitherOS-Fresh\\.DEPLOYMENT\\scripts\\llm-quiesce-di
 // verb means one thing everywhere (owner, 2026-09-19: "i need controls in awdesk
 // and awsh"). It runs in-distro here; from a Windows shell it hops itself.
 const DEFAULT_ARC_SCRIPT = "C:\\AitherOS-Fresh\\.DEPLOYMENT\\scripts\\arc-control.py";
+// The per-service half (owner, 2026-09-21: "a real way to see and manage running services
+// ... like an iDRAC"). The fleet script speaks only whole-fleet verbs; this one speaks
+// list/show/restart/stop/start/boot for ONE service, and refuses to touch a container no
+// quadlet owns rather than bouncing it into a state nothing supervises.
+const DEFAULT_SERVICES_SCRIPT = "C:\\AitherOS-Fresh\\.DEPLOYMENT\\scripts\\fleet-inventory-distro.py";
 const DEFAULT_DISTRO = "Debian";
 
 /** action -> argv for the distro script. `down`/`up` are the owner-facing names
@@ -50,6 +55,11 @@ const ACTIONS = Object.freeze({
   // ARC: is it solving and learning; start it (hold off, mask off, both units);
   // run it NOW for four hours despite quiet hours (attributed, self-expiring);
   // stop the solver (the world model stays up).
+  // Per-service, all read-only except the explicit bounce. --json so the window renders
+  // rows rather than scraping a table.
+  services: ["list"],
+  "services-sick": ["list", "--unhealthy"],
+  "services-boot": ["boot"],
   "arc-status": ["status"],
   "arc-start": ["start"],
   "arc-now": ["start", "--now", "4"],
@@ -57,6 +67,7 @@ const ACTIONS = Object.freeze({
 });
 /** Which script an action belongs to. Everything not named here is the fleet script. */
 const ARC_ACTIONS = new Set(["arc-status", "arc-start", "arc-now", "arc-stop"]);
+const SERVICE_ACTIONS = new Set(["services", "services-sick", "services-boot"]);
 const ACTION_NAMES = Object.freeze(Object.keys(ACTIONS));
 
 /** Actions that take the fleet (or part of it) DOWN — the window double-confirms these. */
@@ -73,6 +84,9 @@ const TIMEOUT_MS = Object.freeze({
   down: 900_000,
   resume: 1_800_000,
   up: 1_800_000,
+  services: 240_000,
+  "services-sick": 240_000,
+  "services-boot": 180_000,
   "arc-status": 300_000,
   "arc-start": 400_000,
   "arc-now": 400_000,
@@ -101,10 +115,17 @@ function arcScriptPath() {
   return process.env.AWDESK_ARC_SCRIPT || DEFAULT_ARC_SCRIPT;
 }
 
-function buildCommand(action, { script = scriptPath(), arcScript = arcScriptPath(), distro = distroName() } = {}) {
+function servicesScriptPath() {
+  return process.env.AWDESK_SERVICES_SCRIPT || DEFAULT_SERVICES_SCRIPT;
+}
+
+function buildCommand(action, { script = scriptPath(), arcScript = arcScriptPath(), servicesScript = servicesScriptPath(), distro = distroName() } = {}) {
   const argv = ACTIONS[action];
   if (!argv) throw new Error(`unknown fleet action "${action}" (one of ${ACTION_NAMES.join(", ")})`);
-  const which = ARC_ACTIONS.has(action) ? arcScript : script;
+  // Three scripts, one seam. A verb belongs to exactly one of them.
+  const which = ARC_ACTIONS.has(action) ? arcScript
+    : SERVICE_ACTIONS.has(action) ? servicesScript
+    : script;
   const inner = `python3 '${toDistroPath(which)}' ${argv.join(" ")} --json`;
   return { file: "wsl.exe", args: ["-d", distro, "-u", "root", "sh", "-c", inner] };
 }
@@ -115,10 +136,20 @@ function buildCommand(action, { script = scriptPath(), arcScript = arcScriptPath
  *  could not run is the exact silence this surface exists to end. */
 function parseVerdict(stdout, code, stderrTail = "") {
   const text = String(stdout ?? "");
-  const start = text.indexOf("{");
+  // A LIST verb answers with a top-level JSON ARRAY of service rows, not an object.
+  // Seeking "{" alone found the first row's brace INSIDE the array, and parsing from
+  // there threw on the trailing "]" -- so every row was discarded in silence and the
+  // caller got {ok:false,error:"exit 1"}. The desk pane looked right because my proof
+  // ran the script directly; the bridge, awsh and MCP all come through here.
+  const brace = text.indexOf("{");
+  const bracket = text.indexOf("[");
+  const start = bracket >= 0 && (brace < 0 || bracket < brace) ? bracket : brace;
   if (start >= 0) {
     try {
       const doc = JSON.parse(text.slice(start));
+      // rc 1 on a list means "found some" (unhealthy services) -- that is the ANSWER,
+      // not a failure -- so an array is ok whatever the rc, with the rc carried along.
+      if (Array.isArray(doc)) return { ok: true, rows: doc, count: doc.length, rc: code };
       if (doc && typeof doc === "object") {
         if (doc.verdict === "CANNOT_JUDGE") return { ok: false, cannotJudge: true, ...doc };
         if (typeof doc.ok !== "boolean") doc.ok = code === 0;
@@ -133,6 +164,22 @@ function parseVerdict(stdout, code, stderrTail = "") {
       ok: false,
       cannotJudge: true,
       error: stderrTail.trim() || "the Debian distro, python3 or podman did not answer",
+    };
+  }
+  // wsl.exe itself failed: it exits -1 (4294967295 unsigned) and prints
+  // `Wsl/Service/CreateInstance/0x800705b4` (timeout) or `E_UNEXPECTED` when the
+  // distro is wedged or stopped. The script never ran, so this is CANNOT JUDGE
+  // in plain words -- not "exit 4294967295", which is what the owner read on
+  // 2026-09-21 while the fleet had been dead for 20 minutes.
+  const wslErr = /Wsl\/Service|0x8007[0-9a-f]{4}|Catastrophic failure/i.test(stderrTail);
+  if (code === 4294967295 || code === -1 || wslErr) {
+    return {
+      ok: false,
+      cannotJudge: true,
+      wslDown: true,
+      error: "the Debian WSL distro did not answer (wsl.exe failed"
+        + (wslErr ? `: ${stderrTail.trim().split(/\r?\n/).filter(Boolean).slice(-1)[0].slice(0, 120)}` : "")
+        + ") -- the fleet is down or wedged; the WSL watchdog recovers it on its own, or open the Fleet pane",
     };
   }
   return {
@@ -343,6 +390,7 @@ module.exports = {
   ACTIONS,
   ACTION_NAMES,
   ARC_ACTIONS,
+  SERVICE_ACTIONS,
   DESTRUCTIVE,
   TIMEOUT_MS,
   FleetControl,

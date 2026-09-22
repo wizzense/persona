@@ -166,6 +166,10 @@ function createDeskMcpServer({
   // sets this — cast-config resolves CAST_FILE() itself (app.getPath("userData"),
   // or DESK_CAST_FILE).
   castFile = undefined,
+  // Test seam for party_export: the writer itself. Production leaves it null and
+  // the tool requires party-manifest.cjs lazily, so a broken writer costs the
+  // one tool call, never the server.
+  partyExport = null,
 }) {
   const server = new McpServer(
     {
@@ -302,6 +306,46 @@ function createDeskMcpServer({
       return {
         content: [{ type: "text", text: JSON.stringify(described, null, 2) }],
         isError: described.ok === false,
+      };
+    },
+  );
+
+  // party_export — WRITES %APPDATA%\Desk\party.json, the party manifest the other
+  // avatar products (Dark Matters guide slot, Saga, the sprite) join on by
+  // persona_id (schema: AitherOS/config/schemas/party-manifest.schema.json).
+  // It is a derived EXPORT of cast.json + the roster through the content gate,
+  // never a write INTO cast.json: the no-writer assertion in mcp-server.test.cjs
+  // stands (the name deliberately does not contain "cast"), and a character the
+  // gate hides is excluded from the file rather than handed to a product that
+  // never asked the gate. Unconditional, like cast_describe: nothing an
+  // embedder must wire for it to answer.
+  server.registerTool(
+    "party_export",
+    {
+      title: "Export the party manifest",
+      description:
+        "Write party.json (version 1, source awdesk): every configured cast actor and every " +
+        "roster character as a member keyed by persona_id, with body (vrm + vrma clips), " +
+        "voice, presence, rating and saga/sprite ids. Characters hidden by the content " +
+        "gate are EXCLUDED and reported. Returns {ok, file, members, excluded, problems}.",
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async () => {
+      let result;
+      try {
+        const exporter = partyExport || require("./party-manifest.cjs").exportParty;
+        result = await exporter({});
+      } catch (error) {
+        result = { ok: false, error: `party export threw: ${error && error.message ? error.message : error}` };
+      }
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        isError: result.ok !== true,
       };
     },
   );

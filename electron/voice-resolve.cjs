@@ -29,15 +29,22 @@ const cast = require("./cast-config.cjs");
  * resolveSpeech runs on every utterance — potentially several a second once
  * a room is busy — so re-reading, re-parsing and re-validating cast.json on
  * every call would make the hot path pay disk I/O for no reason. Cached by
- * resolved path + mtime, which self-invalidates the instant an owner edit
- * (or cast-window's write()) lands; a missing file (mtimeMs === null) is
- * cached too, so a box with no cast.json yet does not stat() on every line.
+ * resolved path + a stat STAMP (mtime AND size), which self-invalidates the
+ * instant an owner edit (or cast-window's write()) lands; a missing file
+ * (stamp === null) is cached too, so a box with no cast.json yet does not
+ * stat() on every line.
+ *
+ * Size is in the stamp because mtime alone is not enough: two writes inside
+ * one timestamp tick share an mtime, and the second was then served the
+ * FIRST snapshot. Measured 2026-09-22 on a Windows CI runner -- the
+ * effectiveVoice end-to-end test read the pre-edit voice (Jenny, not Ana).
  */
-let cache = null; // { file, mtimeMs, snapshot, problems, error }
+let cache = null; // { file, stamp, snapshot, problems, error }
 
-function statMtime(file) {
+function statStamp(file) {
   try {
-    return fs.statSync(file).mtimeMs;
+    const st = fs.statSync(file);
+    return `${st.mtimeMs}:${st.size}`;
   } catch {
     return null;
   }
@@ -45,14 +52,14 @@ function statMtime(file) {
 
 function currentSnapshot({ file } = {}) {
   const resolved = file || cast.CAST_FILE();
-  const mtimeMs = statMtime(resolved);
-  if (cache && cache.file === resolved && cache.mtimeMs === mtimeMs) {
+  const stamp = statStamp(resolved);
+  if (cache && cache.file === resolved && cache.stamp === stamp) {
     return cache;
   }
   // cast.load() is itself fail-soft (malformed bytes -> its own last-good
   // snapshot, see cast-config.cjs's `failSoft`) — nothing extra to catch here.
   const { snapshot, problems, error } = cast.load({ file: resolved });
-  cache = { file: resolved, mtimeMs, snapshot, problems, error };
+  cache = { file: resolved, stamp, snapshot, problems, error };
   return cache;
 }
 
@@ -203,8 +210,34 @@ function resolveSpeech(ctx = {}) {
   }
 }
 
+/**
+ * effectiveVoice -- the voice an utterance is actually synthesised with.
+ *
+ * The owner's cast wins over the caller: an authored row (actors[], authors[],
+ * defaults.voice, voice.defaultVoice) is "what the owner has chosen to hear"
+ * and a caller may not talk its way past it. But when NOTHING was authored the
+ * gate's voice is only a stable hash over a pool that is four men to two
+ * women, and that hash must not overrule a caller that asked for a voice by
+ * name. Measured 2026-09-21: every desk utterance for a day came out
+ * en-GB-RyanNeural because `service:awdesk` and `bridge:/speak` had no row,
+ * hashed to "fable", and the hash beat every explicit `voice` the callers
+ * sent -- the owner heard "some male British voice" and could not change it.
+ *
+ * @param {string|undefined} requested  the caller's `voice`, if any
+ * @param {{voice?: string, provenance?: {voiceFrom?: string}}|null} gate
+ * @param {string} [fallback="nova"]
+ */
+function effectiveVoice(requested, gate, fallback = "nova") {
+  const asked = typeof requested === "string" && requested.trim() ? requested.trim() : "";
+  const gateVoice = gate && typeof gate.voice === "string" && gate.voice.trim() ? gate.voice.trim() : "";
+  const from = gate && gate.provenance && typeof gate.provenance.voiceFrom === "string" ? gate.provenance.voiceFrom : "";
+  if (gateVoice && !(asked && from === "hash")) return gateVoice;
+  return asked || gateVoice || fallback;
+}
+
 module.exports = {
   resolveSpeech,
+  effectiveVoice,
 };
 
 if (require.main === module) {

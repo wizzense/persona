@@ -101,6 +101,15 @@ if (typeof raw.id !== "string" || raw.id.length === 0) return null;
         .map((o) => ({
           key: o.key,
           label: typeof o.label === "string" ? o.label : o.key,
+          // WHAT THE BUTTON DOES. A card recipe (awask.card_recipes) turns the
+          // answer into an ACTION — "Disable this wake" runs
+          // `awrise disable --name <job>` — and the raiser wrote that sentence
+          // into the option. Dropping it here left Desk offering a button whose
+          // effect is invisible until after it is pressed, which is the one
+          // thing a decidable card must never do. Bounded: a desk button is not
+          // a place to render 600 characters.
+          consequence:
+            typeof o.consequence === "string" ? o.consequence.slice(0, 200) : "",
           recommended: Boolean(o.recommended),
         }))
     : [];
@@ -111,8 +120,20 @@ if (typeof raw.id !== "string" || raw.id.length === 0) return null;
     kind: typeof raw.kind === "string" ? raw.kind : "decision",
     urgency: typeof raw.urgency === "string" ? raw.urgency : "normal",
     createdAt: Number(raw.created_at) || 0,
+    // The deadline is the card's OWN answer: an unanswered recipe card applies
+    // its declared default when this passes, so a surface that shows a card
+    // without it is hiding the fact that not answering is also a choice.
+    deadline: Number(raw.deadline) || 0,
     options,
     defaultKey: typeof raw.default_key === "string" ? raw.default_key : "",
+    // The recipe this card was built from, "" for a hand-raised card. A desk
+    // surface uses it to say the answer will DO something rather than merely be
+    // recorded, and it is the only honest way to distinguish the two.
+    recipe: typeof raw.card_recipe === "string" ? raw.card_recipe : "",
+    // The producer's identity for the QUESTION ("this job, this failure
+    // streak"). Desk never writes it — it is carried so a surface can group a
+    // streak instead of showing what looks like a repeat card.
+    dedupeKey: typeof raw.dedupe_key === "string" ? raw.dedupe_key : "",
     // WHERE the ask came from — a toast with no identity is noise the owner
     // cannot act on when a dozen sessions are open (owner report 2026-08-25).
     tab: typeof source.tab_title === "string" ? source.tab_title : "",

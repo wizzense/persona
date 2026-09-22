@@ -7,10 +7,15 @@ import { useEffect, useState } from 'react';
  * icons and make floating icons appear in the desk/avatar box... move away
  * from nested menus").
  *
- * LEFT-click a bead runs its action directly; RIGHT-click opens the full Desk
- * panel (same as right-clicking the avatar). The bell carries the live
- * decision-card count — the one thing the owner wants to see without clicking
- * anything at all.
+ * LEFT-click a bead runs its command; RIGHT-click opens THE menu — the same one
+ * the tray shows. The bell carries the live decision-card count — the one thing
+ * the owner wants to see without clicking anything at all.
+ *
+ * The beads are ROWS of electron/command-registry.cjs (surface `beads`), not a
+ * list typed here. They used to be: the chat bead said "Talk to Aither" while the
+ * tray's "Talk to the agents" meant the microphone, and the overlay had no bead
+ * because nobody remembered to type one. A bead is an id, a label and an icon
+ * NAME; this file owns only how an icon name is drawn.
  */
 
 function BellIcon() {
@@ -42,10 +47,45 @@ function GridIcon() {
   );
 }
 
+function DesktopIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3" y="4" width="18" height="12" rx="2" />
+      <path d="M8 20h8M12 16v4" />
+    </svg>
+  );
+}
+
+function MicIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="9" y="3" width="6" height="11" rx="3" />
+      <path d="M5 11a7 7 0 0 0 14 0M12 18v3" />
+    </svg>
+  );
+}
+
+/** Icon NAME (registry data) -> drawing. An unknown name draws the grid rather
+ *  than nothing: a bead with no glyph is a button nobody can read. */
+const ICONS: Record<string, () => React.ReactElement> = {
+  bell: BellIcon, chat: ChatIcon, grid: GridIcon, desktop: DesktopIcon, mic: MicIcon,
+};
+
+interface CommandRow { id: string; label: string; icon: string | null; group: string }
+
+/** What the rail shows before main answers (and in a browser preview with no
+ *  bridge). Same ids the registry declares, so a click still lands. */
+const FALLBACK_ROWS: CommandRow[] = [
+  { id: 'inbox.open', label: 'Inbox', icon: 'bell', group: 'go' },
+  { id: 'chat.open', label: 'Chat with Aither…', icon: 'chat', group: 'talk' },
+  { id: 'console.open', label: 'Aither Console…', icon: 'grid', group: 'go' },
+];
+
 interface BeadDeckBridge {
   getState(): Promise<{ openCount: number }>;
   open(): void;
   action(name: string): Promise<boolean>;
+  commands?(surface: string): Promise<CommandRow[]>;
 }
 
 function bridgeDeck(): BeadDeckBridge | null {
@@ -65,12 +105,12 @@ function Bead({ label, count, onLeftClick, children }: BeadProps) {
     <button
       type="button"
       className="bead"
-      title={count && count > 0 ? `${label} — ${count} waiting` : label}
+      title={label}
       aria-label={label}
       onClick={onLeftClick}
       onContextMenu={(event) => {
         event.preventDefault();
-        void bridgeDeck()?.action('inbox');
+        void bridgeDeck()?.action('menu');
       }}
     >
       {children}
@@ -87,11 +127,20 @@ function Bead({ label, count, onLeftClick, children }: BeadProps) {
  *  that exists nowhere else on the avatar. */
 export function Beads() {
   const [openCount, setOpenCount] = useState(0);
+  const [rows, setRows] = useState<CommandRow[]>(FALLBACK_ROWS);
 
   useEffect(() => {
     const deck = bridgeDeck();
     if (!deck) return;
     let alive = true;
+    // Labels carry live facts ("Inbox — 3 decisions waiting", "Hide overlay"), so
+    // the rows are re-read whenever main says something changed.
+    const pullRows = () => {
+      void deck.commands?.('beads').then((next) => {
+        if (alive && Array.isArray(next) && next.length) setRows(next);
+      }).catch(() => { /* older main: keep the fallback rows */ });
+    };
+    pullRows();
     void deck.getState().then((state) => {
       if (alive && state) setOpenCount(state.openCount ?? 0);
     });
@@ -103,6 +152,7 @@ export function Beads() {
       unsubscribe = bridge?.subscribe?.((event) => {
         if (event.type === 'decisions-changed') {
           setOpenCount(event.openCount ?? 0);
+          pullRows();
         }
       }) ?? (() => {});
     } catch {
@@ -133,19 +183,19 @@ export function Beads() {
   const deck = bridgeDeck();
   return (
     <div className="beads" aria-label="Desk beads">
-      <Bead
-        label="Inbox"
-        count={openCount}
-        onLeftClick={() => void deck?.action('inbox')}
-      >
-        <BellIcon />
-      </Bead>
-      <Bead label="Talk to Aither" onLeftClick={() => void deck?.action('talk')}>
-        <ChatIcon />
-      </Bead>
-      <Bead label="Aither Console" onLeftClick={() => void deck?.action('console')}>
-        <GridIcon />
-      </Bead>
+      {rows.map((row) => {
+        const Icon = ICONS[row.icon ?? ''] ?? GridIcon;
+        return (
+          <Bead
+            key={row.id}
+            label={row.label}
+            count={row.id === 'inbox.open' ? openCount : undefined}
+            onLeftClick={() => void deck?.action(row.id)}
+          >
+            <Icon />
+          </Bead>
+        );
+      })}
       {/* Gestures v5 (2026-09-18): the ROT/MOVE toggle was the fourth gesture
           design and the owner's verdict was "I'm confused". One button, one
           meaning — left-drag MOVES a body, right-drag TURNS it, the wheel SIZES

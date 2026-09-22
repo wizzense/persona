@@ -98,6 +98,20 @@ function castHandlers(getImpl) {
   return {
     "desk:cast-describe": () => call("describe", () => impl().describe?.()),
 
+    // The ONE async verb on this surface. `call()` above is synchronous by design
+    // (every castPaneImpl writer is), and a promise handed to it would be wrapped as
+    // an empty {ok:true} -- the result would vanish and the pane would report success
+    // for a gate that never moved. Turning mature content on is a round trip to the
+    // platform, so it gets its own path and its own await.
+    "desk:cast-set-adult-content": async (_event, enabled) => {
+      try {
+        const gate = require("./safety-gate.cjs");
+        return await gate.setAdultContent(enabled === true);
+      } catch (error) {
+        return { ok: false, error: `setAdultContent: ${String((error && error.message) || error)}` };
+      }
+    },
+
     "desk:cast-set-actor": (_event, key, patch) =>
       invalidArg("setActor", key, "key") ||
       call("setActor", () => impl().setActor?.({ key: String(key), patch: isPlainObject(patch) ? patch : {} })),
@@ -111,6 +125,11 @@ function castHandlers(getImpl) {
 
     "desk:cast-set-voice": (_event, patch) =>
       call("setVoice", () => impl().setVoice?.(isPlainObject(patch) ? patch : {})),
+
+    // `defaults` is an ActorConfig every actor inherits from (the tier under
+    // authors/actors): the "everyone" knobs -- today the physics faders.
+    "desk:cast-set-defaults": (_event, patch) =>
+      call("setDefaults", () => impl().setDefaults?.(isPlainObject(patch) ? patch : {})),
 
     "desk:cast-set-section": (_event, section, patch) =>
       invalidArg("setSection", section, "section") ||

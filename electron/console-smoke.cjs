@@ -103,7 +103,29 @@ async function run() {
     urls: { desktop: () => "about:blank" },
   });
 
+  // 🚩 The COLD path, exactly as main takes it: open the console and name a pane in
+  // the same breath ("Chat with <agent>…", "Cast & voices…", a card arriving). The
+  // request used to lose to start()'s own select(panes[0]) and the owner got Inbox.
+  // Sent at dom-ready on purpose: the shell's start() is then BETWEEN its two awaits
+  // (panes loaded, detached not yet), which is where the live desk delivers it --
+  // main's IPC is slower there than in this harness. focusPane() alone arrives
+  // after start() here, and an arm that cannot lose the race cannot fail: reverting
+  // the fix left this check green until the send moved here (mutation-verified).
+  win.webContents.once("dom-ready", () => {
+    win.webContents.send("desk:console-focus", { pane: "cast", param: null });
+  });
+
   await new Promise((resolve) => win.webContents.once("did-finish-load", resolve));
+
+  // Read the SETTLED selection, not the first one: the bug is start() selecting the
+  // first pane AFTER the requested one was shown, so an early read sees the right
+  // tab a moment before it is replaced (that early read is why this arm first
+  // stayed green with the fix reverted).
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+  const landed = await win.webContents.executeJavaScript(
+    "(document.querySelector('.tab[aria-selected=\"true\"]') || {}).id || ''");
+  check("a pane asked for during a COLD open is the pane that opens", landed === "tab-cast",
+    `selected = ${landed || "(nothing)"}`);
 
   // 1. The shell itself came up and got its own bridge.
   const shell = await win.webContents.executeJavaScript(

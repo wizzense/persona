@@ -162,6 +162,32 @@ const BUILTIN_VOICE = Object.freeze({
   muted: false,
 });
 
+/** The desk's own content ceiling. It is NOT the adult gate: the gate is the
+ *  platform's two halves (an explicit opt-in AND age verification, mirrored to
+ *  ~/.aither/adult_content.json by UserPersonaConfig) and nothing in this file
+ *  or this app can open it. This is a SECOND limit under it, which the owner
+ *  sets per machine: "even when mature content is unlocked, this desk shows
+ *  nothing above <rating>". Default r18 = "whatever the gate allows".
+ *
+ *  It can only ever hide more, so it is safe to sync between machines (the
+ *  awsettings DESK domain carries it): an r18 ceiling arriving on a machine
+ *  whose gate is shut still shows nothing.
+ *
+ *  `hideUnrated` is the other half of the owner's 2026-09-20 ask -- a character
+ *  nobody has judged is hidden with the adult ones. It defaults ON and lives
+ *  here so a roster being rated can be browsed deliberately, never by accident. */
+const CONTENT_RATINGS = ["general", "r15", "r18"];
+
+const BUILTIN_CONTENT = Object.freeze({
+  maxRating: "r18",
+  hideUnrated: true,
+});
+
+const CONTENT_FIELDS = Object.freeze({
+  maxRating: (v) => vEnum(v, CONTENT_RATINGS),
+  hideUnrated: vBool,
+});
+
 const BUILTIN_ACTOR = Object.freeze({
   presence: "normal",
   speak: true,
@@ -346,6 +372,73 @@ function vPlace(value) {
   return { ok: true, value: out };
 }
 
+// ─── spring-bone physics: how much a body moves ──────────────────────────────
+// Owner, 2026-09-20: "I love it but sometimes it's a little too much and I'd
+// like to be able to tune it per avatar/agent." The renderer's springs were
+// fixed at what the model authored (plus the defaults useVrmLoader.ts
+// invents); nothing the owner could write reached them. These five knobs are
+// MULTIPLIERS over the authored values (1 = as the model's author meant it),
+// so a model that is already gentle stays gentle at the default and the same
+// file works on every model in the roster. The renderer applies them per
+// joint in useVrmLoader.ts's applySpringScale, on top of the size compensation.
+//
+//   enabled    false freezes every chain at its authored rest pose.
+//   weight     × gravityPower -- how hard hair/tails/cloth hang down.
+//   stiffness  × stiffness -- how fast a chain springs back to its shape
+//                (higher = less swing).
+//   damping    × dragForce -- how quickly motion dies out (higher = fewer
+//                bounces; the renderer clamps the product to three-vrm's 0..1).
+//   jiggle     the BODY chains only (chest and hips, useVrmLoader.ts's
+//                BODY_JIGGLE_CHAIN): 1 as authored, 0 pins them still, 2 twice
+//                as loose. Separate from the others because those chains are
+//                the ones the owner named, and a hair fader must not touch them.
+//
+// Resolved PER SUB-KEY across the tiers (an actor row may set only `jiggle`
+// and inherit `weight` from defaults), each with its own provenance string,
+// so the pane can say "jiggle 0.5 from actors[...].physics.jiggle".
+const PHYSICS_MULTIPLIER_MAX = 3;
+const JIGGLE_MAX = 2;
+
+const BUILTIN_PHYSICS = Object.freeze({
+  enabled: true,
+  weight: 1,
+  stiffness: 1,
+  damping: 1,
+  jiggle: 1,
+});
+
+const PHYSICS_FIELDS = Object.freeze({
+  enabled: vBool,
+  weight: (v) => vNumber(v, { min: 0, max: PHYSICS_MULTIPLIER_MAX }),
+  stiffness: (v) => vNumber(v, { min: 0, max: PHYSICS_MULTIPLIER_MAX }),
+  damping: (v) => vNumber(v, { min: 0, max: PHYSICS_MULTIPLIER_MAX }),
+  jiggle: (v) => vNumber(v, { min: 0, max: JIGGLE_MAX }),
+});
+
+/** A physics block is validated as a WHOLE like vPlace: one bad sub-value or
+ *  unknown key costs this tier's block (it lands in problems[] with the
+ *  sub-path) and the sub-keys fall through to the next tier. `null` on a
+ *  sub-key is an explicit "unset here", dropped from the value so the tier
+ *  below answers it. */
+function vPhysics(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { ok: false, reason: `expected {${Object.keys(PHYSICS_FIELDS).join("?, ")}?}` };
+  }
+  const unknown = Object.keys(value).filter((k) => !(k in PHYSICS_FIELDS));
+  if (unknown.length) {
+    return { ok: false, value: unknown, reason: `unknown key(s): ${unknown.join(", ")}` };
+  }
+  const out = {};
+  for (const [key, validate] of Object.entries(PHYSICS_FIELDS)) {
+    const v = value[key];
+    if (v === undefined || v === null) continue;
+    const verdict = validate(v);
+    if (!verdict.ok) return { ok: false, at: key, value: v, reason: verdict.reason };
+    out[key] = verdict.value;
+  }
+  return { ok: true, value: out };
+}
+
 /** One ActorConfig field table, used BOTH by validateCast (file time) and by
  *  resolveActor (resolve time). One table means a value the file rejects can
  *  never be honoured by a caller that hands resolveActor a raw object. */
@@ -360,6 +453,7 @@ const ACTOR_FIELDS = Object.freeze({
   speak: vBool,
   body: vBool,
   place: vPlace,
+  physics: vPhysics,
   cooldownSeconds: (v) => vNumber(v, { min: 0 }),
   idleSeconds: (v) => vInt(v, { min: 30 }),
   maxChars: (v) => vInt(v, { min: 40, max: 2000 }),
@@ -399,6 +493,37 @@ const SPEECH_FILTER_FIELDS = Object.freeze({
   maxChars: (v) => vInt(v, { min: 40, max: 2000 }),
   allowCode: vBool,
 });
+
+// Plan: voice INPUT + configurable hotkeys (owner, 2026-09-22: "configure voice
+// input and speaker output... give us hotkeys thats are configurable"). Separate
+// from `voice` (output/TTS) on purpose -- input is capture + a talk MODE, output
+// is synthesis; conflating them is how a mute toggle ends up muting the avatar's
+// mouth instead of the microphone.
+const TALK_MODES = Object.freeze(["toggle", "hold", "open"]);
+
+const INPUT_FIELDS = Object.freeze({
+  micDeviceId: (v) => vString(v, { max: 200 }),
+  // Chromium deviceIds are per-machine/per-origin and can rotate on a driver
+  // update; the LABEL is what a human recognizes and what re-matching falls
+  // back to when the id no longer resolves.
+  micDeviceLabel: (v) => vString(v, { max: 200 }),
+  micMuted: vBool,
+  talkMode: (v) => vEnum(v, TALK_MODES),
+});
+
+const BUILTIN_INPUT = Object.freeze({
+  micDeviceId: "",
+  micDeviceLabel: "",
+  micMuted: false,
+  talkMode: "toggle",
+});
+
+// hotkeys{} is a dynamic id->accel map (command-registry ids), not a fixed
+// record, so it is validated inline in validateCast rather than via
+// validateRecord/FIELDS like every other section.
+function vAccelString(v) {
+  return vString(v, { max: 60 });
+}
 
 const CHANNEL_FIELDS = Object.freeze({
   voiced: vBool,
@@ -539,14 +664,72 @@ function emptyConfig() {
     prompts: {},
     vision: {},
     sync: {},
+    content: {},
+    input: {},
+    hotkeys: {},
+    appearance: { ...BUILTIN_APPEARANCE },
     migratedLegacyAt: null,
   };
 }
 
 const TOP_LEVEL_KEYS = [
-  "version", "stage", "voice", "defaults", "authors", "actors", "channels",
-  "models", "prompts", "vision", "sync", "migratedLegacyAt",
+  "version", "stage", "voice", "input", "hotkeys", "defaults", "authors", "actors",
+  "channels", "models", "prompts", "vision", "sync", "content", "appearance",
+  "migratedLegacyAt",
 ];
+
+/**
+ * appearance -- which of the FAMILY's themes the desk wears, and how big.
+ *
+ * Owner, 2026-09-20: the desk "needs to be better integrated into the design" of
+ * awsh, the workspace and the Living Desktop. Those share eleven theme ids; the
+ * desk had seven private palettes and no theme at all. The ids are not typed here:
+ * they are read from aither-themes.json, which gen_desk_tokens.py GENERATES from
+ * Veil's themes.ts, so a theme Veil adds is a theme the desk accepts and a typo is
+ * a named problem instead of a silently unstyled window.
+ *
+ * It lives in cast.json (not a new file) because cast.json is the desk's one
+ * synced settings file: the awsettings `desk` domain carries it between machines.
+ */
+const BUILTIN_APPEARANCE = Object.freeze({ theme: "dark-glass", uiScale: 1 });
+const UI_SCALE_MIN = 0.85;
+const UI_SCALE_MAX = 1.35;
+
+function knownThemes() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(path.join(__dirname, "aither-themes.json"), "utf8"));
+    const ids = (parsed.themes || []).map((theme) => String(theme.id));
+    if (ids.length) return ids;
+  } catch {
+    /* fall through: a missing generated file must not make every theme invalid */
+  }
+  return [BUILTIN_APPEARANCE.theme];
+}
+
+function validateAppearance(raw, problems) {
+  const out = { ...BUILTIN_APPEARANCE };
+  if (raw === undefined || raw === null) return out;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    problems.push({ path: "appearance", value: raw, reason: "expected an object" });
+    return out;
+  }
+  for (const key of Object.keys(raw)) {
+    if (key !== "theme" && key !== "uiScale") {
+      problems.push({ path: `appearance.${key}`, value: raw[key], reason: "unknown key (known: theme, uiScale)" });
+    }
+  }
+  if (raw.theme !== undefined) {
+    const themes = knownThemes();
+    if (typeof raw.theme === "string" && themes.includes(raw.theme)) out.theme = raw.theme;
+    else problems.push({ path: "appearance.theme", value: raw.theme, reason: `expected one of: ${themes.join(", ")}` });
+  }
+  if (raw.uiScale !== undefined) {
+    const n = Number(raw.uiScale);
+    if (Number.isFinite(n) && n >= UI_SCALE_MIN && n <= UI_SCALE_MAX) out.uiScale = n;
+    else problems.push({ path: "appearance.uiScale", value: raw.uiScale, reason: `expected ${UI_SCALE_MIN}-${UI_SCALE_MAX}` });
+  }
+  return out;
+}
 
 /**
  * validateCast — the pure reader of the v1 file shape. Never throws.
@@ -563,6 +746,10 @@ const TOP_LEVEL_KEYS = [
  *   actors:   { "<origin key>": ActorConfig },
  *   channels: { "#chan": { voiced (default FALSE), presence|null } }
  * }
+ * ActorConfig.physics: { enabled, weight 0-3, stiffness 0-3, damping 0-3,
+ *   jiggle 0-2 } -- multipliers over the model's authored springs, resolved
+ *   per sub-key (see PHYSICS_FIELDS). The resident avatar (slot0) reads
+ *   `actors["service:awdesk"]`, the same key its own voice does.
  *
  * @returns {{config: object|null, problems: Array<{path,value,reason}>, fatal: boolean}}
  *   `fatal` marks a whole-file, parse-class refusal (not an object, or a
@@ -599,9 +786,21 @@ function validateCast(raw) {
     problems,
   );
   config.voice = voice;
+  config.input = validateRecord(raw.input, INPUT_FIELDS, "input", problems);
   config.defaults = validateRecord(raw.defaults, ACTOR_FIELDS, "defaults", problems);
+  config.content = validateRecord(raw.content, CONTENT_FIELDS, "content", problems);
   for (const [section, fields] of Object.entries(DESK_SECTIONS)) {
     config[section] = validateRecord(raw[section], fields, section, problems);
+  }
+
+  const hotkeysRaw = raw.hotkeys;
+  config.hotkeys = {};
+  if (hotkeysRaw && typeof hotkeysRaw === "object" && !Array.isArray(hotkeysRaw)) {
+    for (const [id, accel] of Object.entries(hotkeysRaw)) {
+      const verdict = vAccelString(accel);
+      if (verdict.ok) config.hotkeys[id] = verdict.value;
+      else problems.push({ path: `hotkeys[${quoteKey(id)}]`, value: accel, reason: verdict.reason });
+    }
   }
 
   // authors: keyed on the lowercased author name, with an optional seats[] for
@@ -680,6 +879,8 @@ function validateCast(raw) {
       }
     }
   }
+
+  config.appearance = validateAppearance(raw.appearance, problems);
 
   if (typeof raw.migratedLegacyAt === "string" && raw.migratedLegacyAt.trim()) {
     config.migratedLegacyAt = raw.migratedLegacyAt.trim();
@@ -808,7 +1009,18 @@ function watch(onChange, { file = CAST_FILE(), debounceMs = 250 } = {}) {
   let timer = null;
   let watcher = null;
   let closed = false;
-  let lastMtimeMs = statMtime(resolved);
+  // Stamp = mtime AND size: two writes in one timestamp tick share an mtime,
+  // and an mtime-only guard dropped the real edit as "a touch that changed
+  // nothing" (measured 2026-09-22 on the Windows CI runner).
+  const statStamp = (f) => {
+    try {
+      const st = fs.statSync(f);
+      return `${st.mtimeMs}:${st.size}`;
+    } catch {
+      return null;
+    }
+  };
+  let lastStamp = statStamp(resolved);
 
   const fire = () => {
     timer = null;
@@ -817,8 +1029,9 @@ function watch(onChange, { file = CAST_FILE(), debounceMs = 250 } = {}) {
     const self = selfWrites.get(resolved);
     if (self && mtimeMs !== null && self.mtimeMs === mtimeMs) return; // our own renameSync
     if (self && Date.now() - self.at < SELF_WRITE_GUARD_MS && mtimeMs !== null && mtimeMs <= self.mtimeMs) return;
-    if (mtimeMs !== null && mtimeMs === lastMtimeMs) return; // a touch that changed nothing
-    lastMtimeMs = mtimeMs;
+    const stamp = statStamp(resolved);
+    if (stamp !== null && stamp === lastStamp) return; // a touch that changed nothing
+    lastStamp = stamp;
     let result;
     try {
       result = load({ file: resolved });
@@ -834,7 +1047,16 @@ function watch(onChange, { file = CAST_FILE(), debounceMs = 250 } = {}) {
 
   try {
     fs.mkdirSync(dir, { recursive: true });
-    watcher = fs.watch(dir, (_event, name) => {
+    // Watch the LONG path. libuv asserts (fs-event.c:72) and kills the process
+    // when a watched Windows dir is an 8.3 short name (C:/Users/RUNNER~1/...,
+    // GitHub's Windows runner temp dir) and the event names come back long.
+    let watchDir = dir;
+    try {
+      watchDir = fs.realpathSync.native(dir);
+    } catch {
+      /* unresolvable: watch what we were given */
+    }
+    watcher = fs.watch(watchDir, (_event, name) => {
       if (name && path.basename(String(name)) !== base) return; // ignore the .tmp siblings
       if (timer) clearTimeout(timer);
       timer = setTimeout(fire, debounceMs);
@@ -1083,6 +1305,9 @@ function normaliseSnapshot(snapshot) {
     prompts: plainObject(snapshot.prompts),
     vision: plainObject(snapshot.vision),
     sync: plainObject(snapshot.sync),
+    content: plainObject(snapshot.content),
+    input: plainObject(snapshot.input),
+    hotkeys: plainObject(snapshot.hotkeys),
     migratedLegacyAt: typeof snapshot.migratedLegacyAt === "string" ? snapshot.migratedLegacyAt : null,
   };
 }
@@ -1113,6 +1338,24 @@ function envNumber(env, name, validate, problems) {
     return null;
   }
   return { value: verdict.value, from: `env.${name}` };
+}
+
+/**
+ * resolveContent — the desk's content ceiling, field by field, with provenance.
+ * Pure and synchronous: content-rating.cjs reads it on every roster listing.
+ */
+function resolveContent(snapshot) {
+  const cfg = normaliseSnapshot(snapshot);
+  const problems = [];
+  const record = plainObject(cfg.content);
+  const out = { ...BUILTIN_CONTENT };
+  const from = {};
+  for (const field of Object.keys(CONTENT_FIELDS)) {
+    const hit = readField(record, field, "content", problems, CONTENT_FIELDS[field]);
+    out[field] = hit ? hit.value : BUILTIN_CONTENT[field];
+    from[field] = hit ? hit.from : "builtin";
+  }
+  return { ...out, from, problems };
 }
 
 /**
@@ -1184,6 +1427,41 @@ function resolveDesk(snapshot, { env = process.env } = {}) {
     out[section] = resolved;
   }
   out.problems = problems;
+  return out;
+}
+
+/**
+ * resolveInput / resolveHotkeys -- companions to resolveVoice for the input
+ * half of Plan: configurable voice + hotkeys.
+ */
+function resolveInput(snapshot) {
+  const cfg = normaliseSnapshot(snapshot);
+  const problems = [];
+  const out = {};
+  const pick = (field) => {
+    const hit = readField(cfg.input, field, "input", problems, INPUT_FIELDS[field]);
+    out[field] = hit ? hit.value : BUILTIN_INPUT[field];
+    out[`${field}From`] = hit ? hit.from : "builtin";
+  };
+  pick("micDeviceId");
+  pick("micDeviceLabel");
+  pick("micMuted");
+  pick("talkMode");
+  out.problems = problems;
+  return out;
+}
+
+/** id -> accel string overrides, already validated by validateCast. Never
+ *  throws on a missing/malformed hotkeys section -- an empty map means every
+ *  command-registry entry keeps its DEFAULT accel, which is the safe state. */
+function resolveHotkeys(snapshot) {
+  const cfg = normaliseSnapshot(snapshot);
+  const out = {};
+  if (cfg.hotkeys && typeof cfg.hotkeys === "object") {
+    for (const [id, accel] of Object.entries(cfg.hotkeys)) {
+      if (typeof accel === "string" && accel.trim()) out[id] = accel.trim();
+    }
+  }
   return out;
 }
 
@@ -1454,6 +1732,24 @@ function resolveActor(snapshot, ctx = {}) {
     captionedReason = `${chKey} is not voiced (${channelVoicedFrom})`;
   }
 
+  // Physics resolves PER SUB-KEY: each of the five knobs walks the tiers on
+  // its own, so `actors[x].physics = {jiggle: 0.3}` inherits weight/stiffness/
+  // damping from `defaults.physics` instead of resetting them. `pick` cannot
+  // do that (it returns the first tier's whole block), so the walk is inline.
+  const physics = { ...BUILTIN_PHYSICS };
+  const physicsFrom = {};
+  for (const knob of Object.keys(PHYSICS_FIELDS)) physicsFrom[knob] = "builtin";
+  for (const tier of tiers) {
+    if (tier.only && !tier.only.includes("physics")) continue;
+    const hit = readField(tier.record, "physics", tier.prefix, problems, vPhysics);
+    if (!hit) continue;
+    for (const [knob, value] of Object.entries(hit.value)) {
+      if (physicsFrom[knob] !== "builtin") continue; // a more specific tier already answered
+      physics[knob] = value;
+      physicsFrom[knob] = `${hit.from}.${knob}`;
+    }
+  }
+
   return {
     key: origin.key,
     keys: origin.keys,
@@ -1495,6 +1791,8 @@ function resolveActor(snapshot, ctx = {}) {
     bodyFrom: bodyHit ? bodyHit.from : "builtin",
     place: placeHit ? placeHit.value : null,
     placeFrom: placeHit ? placeHit.from : "builtin",
+    physics,
+    physicsFrom,
     channelVoiced,
     channelVoicedFrom,
     // Derived verdicts, so every consumer answers them the same way.
@@ -1664,8 +1962,17 @@ function migrateLegacy({ file = CAST_FILE(), avatarsFile = undefined, now = Date
 
 module.exports = {
   ACTOR_FIELDS,
+  BUILTIN_INPUT,
+  INPUT_FIELDS,
+  TALK_MODES,
+  resolveInput,
+  resolveHotkeys,
   BUILTIN_ACTOR,
+  BUILTIN_APPEARANCE,
+  knownThemes,
+  BUILTIN_CONTENT,
   BUILTIN_DESK,
+  BUILTIN_PHYSICS,
   BUILTIN_STAGE,
   BUILTIN_VOICE,
   CAST_FILE,
@@ -1673,6 +1980,9 @@ module.exports = {
   LEGACY_AGENT_VOICES,
   LEGACY_AVATARS_FILE,
   ORIGIN_LITERALS,
+  PHYSICS_FIELDS,
+  PHYSICS_MULTIPLIER_MAX,
+  JIGGLE_MAX,
   POSITION_BOUND,
   PRESENCE_LEVELS,
   SCALE_MAX,
@@ -1691,7 +2001,9 @@ module.exports = {
   noteSeen,
   originOf,
   readSeen,
+  CONTENT_RATINGS,
   resolveActor,
+  resolveContent,
   resolveDesk,
   resolveStage,
   resolveVoice,

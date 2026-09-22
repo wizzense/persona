@@ -7,6 +7,9 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("fleet", {
   status: (opts) => ipcRenderer.invoke("desk:fleet-status", opts ?? {}),
+  // Host-side, 3 s: do the fleet's front doors answer? Tells a BUSY distro from
+  // a DEAD one while the full probe is still walking the WSL hop.
+  doors: () => ipcRenderer.invoke("desk:fleet-doors"),
   run: (action) => ipcRenderer.invoke("desk:fleet-run", String(action)),
   onProgress: (listener) => {
     const handler = (_event, payload) => listener(payload);

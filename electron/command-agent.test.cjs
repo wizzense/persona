@@ -122,8 +122,87 @@ test("CommandAgent: fleet commands route to FleetControl and answer with the fle
   assert.equal(result.kind, "fleet");
   // The same words the Fleet window uses — never a bare "ok".
   assert.match(result.reply, /^DOWN — Fleet: 0 container\(s\) running, 171\/189 units masked/);
+  // A destructive verb ARMS; the second, exact word fires it.
   const down = await agent.run("fleet down", { source: "test" });
-  assert.match(down.reply, /^Fleet down: ok/);
+  assert.equal(down.verdict.armed, true);
+  assert.match(down.reply, /^Fleet down is armed .* Type "confirm"/);
+  const fired = await agent.run("confirm", { source: "test" });
+  assert.match(fired.reply, /^Fleet down: done/);
+});
+
+test("CommandAgent: a destructive verb is armed by the sentence and fired by the confirm word, from the same surface", async () => {
+  const fleet = fakeFleetControl();
+  const calls = [];
+  fleet.run = async (action, opts) => { calls.push([action, opts]); return { ok: true, fleet_running_after: 3 }; };
+  const { agent } = agentWith({ fleetControl: fleet });
+
+  // "gpu quiet" answers in the owner's words, not the script's ("gaming").
+  const armed = await agent.run("gpu quiet", { source: "command-window" });
+  assert.equal(armed.ok, true);
+  assert.match(armed.reply, /^GPU quiet is armed — it stops every LLM\/GPU container/);
+  assert.equal(calls.length, 0, "nothing ran on the sentence alone");
+
+  // A confirm from ANOTHER surface is refused and disarms.
+  const wrong = await agent.run("confirm", { source: "relay:agents" });
+  assert.match(wrong.reply, /refused — confirm from the same window/);
+  assert.equal(calls.length, 0);
+  const nothing = await agent.run("confirm", { source: "command-window" });
+  assert.match(nothing.reply, /^Nothing is armed/);
+
+  // Arm again; any other command cancels it.
+  await agent.run("gpu quiet", { source: "command-window" });
+  await agent.run("what time is it", { source: "command-window" });
+  const cancelled = await agent.run("yes", { source: "command-window" });
+  assert.match(cancelled.reply, /^Nothing is armed/);
+  assert.equal(calls.length, 0);
+
+  // Arm and confirm: FleetControl is called WITH confirm:true, reply is labelled.
+  await agent.run("gpu quiet", { source: "command-window" });
+  const fired = await agent.run("confirm", { source: "command-window" });
+  assert.deepEqual(calls, [["gaming", { confirm: true }]]);
+  assert.match(fired.reply, /^GPU quiet: done — 3 container\(s\) still running/);
+
+  // A sentence that merely MENTIONS the phrase from the relay never arms anything.
+  const relay = await agent.run("why is fleet down red", { source: "relay:agents" });
+  assert.match(relay.reply, /refused — a destructive verb cannot be confirmed from the relay/);
+  assert.equal(agent.pendingConfirm, null);
+
+  // The armed verb expires.
+  await agent.run("gpu quiet", { source: "command-window" });
+  agent.pendingConfirm.at -= 3 * 60 * 1000;
+  const late = await agent.run("confirm", { source: "command-window" });
+  assert.match(late.reply, /confirmation window .* has passed/);
+  assert.equal(calls.length, 1);
+});
+
+test("CommandAgent: a non-destructive fleet verb runs at once and speaks plain words when the distro is gone", async () => {
+  const fleet = fakeFleetControl();
+  fleet.run = async () => ({ ok: false, cannotJudge: true, wslDown: true, error: "the Debian WSL distro did not answer (wsl.exe failed)" });
+  const { agent } = agentWith({ fleetControl: fleet });
+  const r = await agent.run("gpu resume", { source: "test" });
+  assert.equal(r.ok, false);
+  assert.match(r.reply, /^GPU resume: could not reach the fleet — the Debian WSL distro did not answer/);
+  fleet.run = async () => ({ ok: false, busy: "resume", error: "busy" });
+  const b = await agent.run("fleet status", { source: "test" });
+  assert.match(b.reply, /could not reach the fleet|busy/);
+});
+
+test("CommandAgent: fleet verbs never wait behind a running claude agent; a queued agent command SAYS it is queued", async () => {
+  const { agent } = agentWith({ claude: () => fakeChild({ stdout: claudeStream("ok"), delay: 60 }) });
+  const progress = [];
+  agent.on("progress", (p) => progress.push(p));
+  const long = agent.run("write me a poem", { source: "test" });
+  const fleet = await Promise.race([
+    agent.run("fleet status", { source: "test" }).then(() => "fleet"),
+    new Promise((r) => setTimeout(() => r("timeout"), 40)),
+  ]);
+  assert.equal(fleet, "fleet", "the fleet verb answered while claude was still running");
+  const second = agent.run("second poem", { source: "test" });
+  assert.equal(agent.queueLength, 1);
+  assert.ok(progress.some((p) => p.phase === "queued" && /queued behind "write me a poem" — 1 waiting/.test(p.text)),
+    "the queued command is announced where the owner is looking");
+  await long;
+  await second;
 });
 
 test("CommandAgent: agent commands spawn claude headless with stream-json", async () => {
