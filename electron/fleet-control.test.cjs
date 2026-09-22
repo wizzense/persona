@@ -57,6 +57,23 @@ test("parseVerdict keeps the ROWS of a list verb, and rc 1 there is an answer", 
   assert.equal(none.count, 0);
 });
 
+test("parseVerdict: a wsl.exe failure is CANNOT JUDGE in plain words, never a bare exit code", () => {
+  // wsl.exe exits -1 (4294967295 unsigned) when the distro cannot be started.
+  const v = parseVerdict("", 4294967295, "");
+  assert.equal(v.ok, false);
+  assert.equal(v.cannotJudge, true);
+  assert.equal(v.wslDown, true);
+  assert.match(v.error, /Debian WSL distro did not answer/);
+  assert.doesNotMatch(v.error, /4294967295/);
+  const named = parseVerdict("", 1, "Error code: Wsl/Service/CreateInstance/0x800705b4");
+  assert.equal(named.cannotJudge, true);
+  assert.match(named.error, /CreateInstance\/0x800705b4/);
+  // An ordinary script failure is still an ordinary failure.
+  const plain = parseVerdict("", 1, "podman: no such container");
+  assert.equal(plain.cannotJudge, undefined);
+  assert.equal(plain.error, "podman: no such container");
+});
+
 test("parseVerdict: JSON wins, rc 2 is CANNOT_JUDGE never ok, garbage is a refusal", () => {
   const ok = parseVerdict('progress noise\n{"ok": true, "fleet": {"running": 0}}', 0);
   assert.equal(ok.ok, true);

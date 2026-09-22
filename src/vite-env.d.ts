@@ -138,5 +138,7 @@ interface Window {
     voiceHeard?(text: string): Promise<unknown>;
     /** Listening / transcribing / idle, so the tray can say what the mic is doing. */
     voiceListenState?(state: string): void;
+    runCommand?(id: string): Promise<{ ok: boolean; error?: string }>;
+    getMicDeviceId?(): Promise<string>;
   };
 }

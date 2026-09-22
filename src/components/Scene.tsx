@@ -257,6 +257,15 @@ function PlacedAvatar({ slotId, transform, onDrag, onScale, onRotate, avatarProp
   // Where the left button went down, so pointerup can tell a CLICK (focus the
   // avatar) from a DRAG (move/rotate) — the same 5-6px band the drag hook uses.
   const clickStartRef = useRef<{ x: number; y: number } | null>(null);
+  // Plan: click/hold-to-talk on the avatar (owner 2026-09-22: "let you click
+  // on the avatar... hold a button to talk"). Scoped to slot0 (Aither's own
+  // resident body) -- the mic is ONE global stream, not per-avatar, so only
+  // the body that answers by voice should trigger it; another session's
+  // avatar is a future "steer that session" gesture, not this one.
+  const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const holdingTalkRef = useRef(false);
+  const TALK_HOLD_MS = 260;
+  const TALK_CLICK_PX = 8;
   // How far a right-button press travelled: a right-DRAG turns the body and
   // must not also open the menu on release; a right-CLICK (no travel) does.
   const rightTravelRef = useRef(0);
@@ -369,6 +378,16 @@ function PlacedAvatar({ slotId, transform, onDrag, onScale, onRotate, avatarProp
                 x: event.nativeEvent.clientX,
                 y: event.nativeEvent.clientY,
               };
+              if (slotId === 'slot0') {
+                holdingTalkRef.current = false;
+                if (holdTimerRef.current) clearTimeout(holdTimerRef.current);
+                holdTimerRef.current = setTimeout(() => {
+                  holdTimerRef.current = null;
+                  if (!clickStartRef.current) return; // already released -> was a tap, not a hold
+                  holdingTalkRef.current = true;
+                  void window.deskBridge?.runCommand?.('voice.talk'); // toggle idle -> listening
+                }, TALK_HOLD_MS);
+              }
             }
             if (event.button !== 0 && event.button !== 2) return;
             // Gestures, v5 (2026-09-18, owner: the right-click move was
@@ -442,6 +461,29 @@ function PlacedAvatar({ slotId, transform, onDrag, onScale, onRotate, avatarProp
             // everyone" lives in a menu) is not a gesture; focus stays available
             // where it is explicit, the per-avatar context menu.
             if (event.button !== 0 || !clickStartRef.current) return;
+            if (slotId === 'slot0') {
+              if (holdTimerRef.current) {
+                clearTimeout(holdTimerRef.current);
+                holdTimerRef.current = null;
+              }
+              const start = clickStartRef.current;
+              const travel = Math.hypot(
+                event.nativeEvent.clientX - start.x,
+                event.nativeEvent.clientY - start.y,
+              );
+              if (holdingTalkRef.current) {
+                // A completed hold ALWAYS stops on release, even if the
+                // avatar also moved -- the mic must never be left stuck open.
+                holdingTalkRef.current = false;
+                void window.deskBridge?.runCommand?.('voice.talk');
+              } else if (travel <= TALK_CLICK_PX) {
+                // A quick tap that never triggered the hold timer: toggle,
+                // same as the hotkey.
+                void window.deskBridge?.runCommand?.('voice.talk');
+              }
+              // travel > TALK_CLICK_PX with no completed hold: a genuine
+              // drag, already handled by beginDrag/onDrag -- no talk action.
+            }
             clickStartRef.current = null;
           }}
           onContextMenu={(event) => {

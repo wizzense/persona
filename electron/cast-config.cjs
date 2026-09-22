@@ -494,6 +494,37 @@ const SPEECH_FILTER_FIELDS = Object.freeze({
   allowCode: vBool,
 });
 
+// Plan: voice INPUT + configurable hotkeys (owner, 2026-09-22: "configure voice
+// input and speaker output... give us hotkeys thats are configurable"). Separate
+// from `voice` (output/TTS) on purpose -- input is capture + a talk MODE, output
+// is synthesis; conflating them is how a mute toggle ends up muting the avatar's
+// mouth instead of the microphone.
+const TALK_MODES = Object.freeze(["toggle", "hold", "open"]);
+
+const INPUT_FIELDS = Object.freeze({
+  micDeviceId: (v) => vString(v, { max: 200 }),
+  // Chromium deviceIds are per-machine/per-origin and can rotate on a driver
+  // update; the LABEL is what a human recognizes and what re-matching falls
+  // back to when the id no longer resolves.
+  micDeviceLabel: (v) => vString(v, { max: 200 }),
+  micMuted: vBool,
+  talkMode: (v) => vEnum(v, TALK_MODES),
+});
+
+const BUILTIN_INPUT = Object.freeze({
+  micDeviceId: "",
+  micDeviceLabel: "",
+  micMuted: false,
+  talkMode: "toggle",
+});
+
+// hotkeys{} is a dynamic id->accel map (command-registry ids), not a fixed
+// record, so it is validated inline in validateCast rather than via
+// validateRecord/FIELDS like every other section.
+function vAccelString(v) {
+  return vString(v, { max: 60 });
+}
+
 const CHANNEL_FIELDS = Object.freeze({
   voiced: vBool,
   presence: (v) => vEnum(v, PRESENCE_LEVELS),
@@ -634,14 +665,71 @@ function emptyConfig() {
     vision: {},
     sync: {},
     content: {},
+    input: {},
+    hotkeys: {},
+    appearance: { ...BUILTIN_APPEARANCE },
     migratedLegacyAt: null,
   };
 }
 
 const TOP_LEVEL_KEYS = [
-  "version", "stage", "voice", "defaults", "authors", "actors", "channels",
-  "models", "prompts", "vision", "sync", "content", "migratedLegacyAt",
+  "version", "stage", "voice", "input", "hotkeys", "defaults", "authors", "actors",
+  "channels", "models", "prompts", "vision", "sync", "content", "appearance",
+  "migratedLegacyAt",
 ];
+
+/**
+ * appearance -- which of the FAMILY's themes the desk wears, and how big.
+ *
+ * Owner, 2026-09-20: the desk "needs to be better integrated into the design" of
+ * awsh, the workspace and the Living Desktop. Those share eleven theme ids; the
+ * desk had seven private palettes and no theme at all. The ids are not typed here:
+ * they are read from aither-themes.json, which gen_desk_tokens.py GENERATES from
+ * Veil's themes.ts, so a theme Veil adds is a theme the desk accepts and a typo is
+ * a named problem instead of a silently unstyled window.
+ *
+ * It lives in cast.json (not a new file) because cast.json is the desk's one
+ * synced settings file: the awsettings `desk` domain carries it between machines.
+ */
+const BUILTIN_APPEARANCE = Object.freeze({ theme: "dark-glass", uiScale: 1 });
+const UI_SCALE_MIN = 0.85;
+const UI_SCALE_MAX = 1.35;
+
+function knownThemes() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(path.join(__dirname, "aither-themes.json"), "utf8"));
+    const ids = (parsed.themes || []).map((theme) => String(theme.id));
+    if (ids.length) return ids;
+  } catch {
+    /* fall through: a missing generated file must not make every theme invalid */
+  }
+  return [BUILTIN_APPEARANCE.theme];
+}
+
+function validateAppearance(raw, problems) {
+  const out = { ...BUILTIN_APPEARANCE };
+  if (raw === undefined || raw === null) return out;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    problems.push({ path: "appearance", value: raw, reason: "expected an object" });
+    return out;
+  }
+  for (const key of Object.keys(raw)) {
+    if (key !== "theme" && key !== "uiScale") {
+      problems.push({ path: `appearance.${key}`, value: raw[key], reason: "unknown key (known: theme, uiScale)" });
+    }
+  }
+  if (raw.theme !== undefined) {
+    const themes = knownThemes();
+    if (typeof raw.theme === "string" && themes.includes(raw.theme)) out.theme = raw.theme;
+    else problems.push({ path: "appearance.theme", value: raw.theme, reason: `expected one of: ${themes.join(", ")}` });
+  }
+  if (raw.uiScale !== undefined) {
+    const n = Number(raw.uiScale);
+    if (Number.isFinite(n) && n >= UI_SCALE_MIN && n <= UI_SCALE_MAX) out.uiScale = n;
+    else problems.push({ path: "appearance.uiScale", value: raw.uiScale, reason: `expected ${UI_SCALE_MIN}-${UI_SCALE_MAX}` });
+  }
+  return out;
+}
 
 /**
  * validateCast — the pure reader of the v1 file shape. Never throws.
@@ -698,10 +786,21 @@ function validateCast(raw) {
     problems,
   );
   config.voice = voice;
+  config.input = validateRecord(raw.input, INPUT_FIELDS, "input", problems);
   config.defaults = validateRecord(raw.defaults, ACTOR_FIELDS, "defaults", problems);
   config.content = validateRecord(raw.content, CONTENT_FIELDS, "content", problems);
   for (const [section, fields] of Object.entries(DESK_SECTIONS)) {
     config[section] = validateRecord(raw[section], fields, section, problems);
+  }
+
+  const hotkeysRaw = raw.hotkeys;
+  config.hotkeys = {};
+  if (hotkeysRaw && typeof hotkeysRaw === "object" && !Array.isArray(hotkeysRaw)) {
+    for (const [id, accel] of Object.entries(hotkeysRaw)) {
+      const verdict = vAccelString(accel);
+      if (verdict.ok) config.hotkeys[id] = verdict.value;
+      else problems.push({ path: `hotkeys[${quoteKey(id)}]`, value: accel, reason: verdict.reason });
+    }
   }
 
   // authors: keyed on the lowercased author name, with an optional seats[] for
@@ -780,6 +879,8 @@ function validateCast(raw) {
       }
     }
   }
+
+  config.appearance = validateAppearance(raw.appearance, problems);
 
   if (typeof raw.migratedLegacyAt === "string" && raw.migratedLegacyAt.trim()) {
     config.migratedLegacyAt = raw.migratedLegacyAt.trim();
@@ -1184,6 +1285,8 @@ function normaliseSnapshot(snapshot) {
     vision: plainObject(snapshot.vision),
     sync: plainObject(snapshot.sync),
     content: plainObject(snapshot.content),
+    input: plainObject(snapshot.input),
+    hotkeys: plainObject(snapshot.hotkeys),
     migratedLegacyAt: typeof snapshot.migratedLegacyAt === "string" ? snapshot.migratedLegacyAt : null,
   };
 }
@@ -1303,6 +1406,41 @@ function resolveDesk(snapshot, { env = process.env } = {}) {
     out[section] = resolved;
   }
   out.problems = problems;
+  return out;
+}
+
+/**
+ * resolveInput / resolveHotkeys -- companions to resolveVoice for the input
+ * half of Plan: configurable voice + hotkeys.
+ */
+function resolveInput(snapshot, { env = process.env } = {}) {
+  const cfg = normaliseSnapshot(snapshot);
+  const problems = [];
+  const out = {};
+  const pick = (field) => {
+    const hit = readField(cfg.input, field, "input", problems, INPUT_FIELDS[field]);
+    out[field] = hit ? hit.value : BUILTIN_INPUT[field];
+    out[`${field}From`] = hit ? hit.from : "builtin";
+  };
+  pick("micDeviceId");
+  pick("micDeviceLabel");
+  pick("micMuted");
+  pick("talkMode");
+  out.problems = problems;
+  return out;
+}
+
+/** id -> accel string overrides, already validated by validateCast. Never
+ *  throws on a missing/malformed hotkeys section -- an empty map means every
+ *  command-registry entry keeps its DEFAULT accel, which is the safe state. */
+function resolveHotkeys(snapshot) {
+  const cfg = normaliseSnapshot(snapshot);
+  const out = {};
+  if (cfg.hotkeys && typeof cfg.hotkeys === "object") {
+    for (const [id, accel] of Object.entries(cfg.hotkeys)) {
+      if (typeof accel === "string" && accel.trim()) out[id] = accel.trim();
+    }
+  }
   return out;
 }
 
@@ -1803,7 +1941,14 @@ function migrateLegacy({ file = CAST_FILE(), avatarsFile = undefined, now = Date
 
 module.exports = {
   ACTOR_FIELDS,
+  BUILTIN_INPUT,
+  INPUT_FIELDS,
+  TALK_MODES,
+  resolveInput,
+  resolveHotkeys,
   BUILTIN_ACTOR,
+  BUILTIN_APPEARANCE,
+  knownThemes,
   BUILTIN_CONTENT,
   BUILTIN_DESK,
   BUILTIN_PHYSICS,

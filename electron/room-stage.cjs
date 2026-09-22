@@ -234,6 +234,16 @@ function truncateText(text, maxChars) {
   return s.length > limit ? s.slice(0, Math.max(0, limit - 1)) + "…" : s;
 }
 
+/** Pure: drop the "(Another Claude session sent a message: <agent-message ...>"
+ *  wrapper and its closing tag; everything else passes through untouched. */
+function stripSteeringEnvelope(text) {
+  let t = String(text);
+  t = t.replace(/^\s*\(?\s*Another Claude session sent a message:\s*/i, "");
+  t = t.replace(/^\s*<agent-message\b[^>]*>\s*\)?\s*/i, "");
+  t = t.replace(/\s*<\/agent-message>\s*\)?\s*$/i, "");
+  return t.trim() || String(text);
+}
+
 class RoomStage {
   /**
    * @param {object} io
@@ -432,6 +442,11 @@ class RoomStage {
    * keeps the row's ORIGINAL origin, not the resident's.
    */
   enqueue(u) {
+    // The harness's steering wrapper is transport, not speech: a bubble that
+    // read "(Another Claude session sent a message: <agent-message from=
+    // "a8424fef..."> says: ..." (owner screenshot 2026-09-21) was reciting the
+    // envelope. Strip it before anything is queued or ventriloquised.
+    if (u && typeof u.text === "string") u = { ...u, text: stripSteeringEnvelope(u.text) };
     const resolution = typeof this.io.resolve === "function" ? this.io.resolve(u) || null : null;
     if (resolution && resolution.dropped) {
       this._refuse(u, resolution);
@@ -582,6 +597,7 @@ class RoomStage {
 }
 
 module.exports = {
+  stripSteeringEnvelope,
   DEFAULT_COOLDOWN_MS,
   DEFAULT_IDLE_MS,
   DEFAULT_MAX_BODIES,

@@ -544,7 +544,9 @@ function renderOnStage() {
     const subtitle = [row.actorKind, row.actorId, row.slotId].filter(Boolean).join(" · ");
     listEl.appendChild(actorRow({
       key: row.origin,
-      title: row.resident ? `${row.character || title} (resident)` : title,
+      // WHO first, body second: "aither (resident) -- body 通常版-tall", never the VRM's
+      // file name as the headline (owner screenshots 2026-09-21: every pane led with "通常版").
+      title: row.resident ? `${title || "aither"} (resident)${row.character ? ` — body ${row.character}` : ""}` : title,
       subtitle,
       resolution: row.resolution,
       tag: row.resident ? "resident · slot0" : "on stage",

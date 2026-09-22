@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Settings</title>
+<link rel="stylesheet" href="aither-tokens.css" />
+<style>
+  :root { --red: var(--destructive); --amber: var(--warning); }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+    font: 13px/1.45 var(--font-sans); }
+  body { display: grid; grid-template-rows: 44px 1fr; height: 100vh; }
+  .bar { display: flex; align-items: center; gap: 10px; padding: 0 14px;
+    border-bottom: 1px solid var(--line); }
+  .embedded .bar .title { display: none; }
+  .bar .title { font-weight: 600; }
+  #content { overflow-y: auto; min-height: 0; }
+  section { border-bottom: 1px solid var(--line); padding: 12px 14px; }
+  section h2 { margin: 0 0 4px; font-size: 12px; letter-spacing: .04em;
+    text-transform: uppercase; color: var(--muted); }
+  section .lede { color: var(--muted); font-size: 11px; margin: 0 0 10px; }
+  .row { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
+  .row label { min-width: 140px; color: var(--muted); font-size: 12px; }
+  select, button { appearance: none; border: 1px solid var(--line); background: var(--btn);
+    color: var(--fg); border-radius: 6px; padding: 6px 10px; cursor: pointer; font: 12px/1.2 system-ui; }
+  select { flex: 1; min-width: 0; }
+  button:hover { background: var(--btn-hi); }
+  button.small { padding: 3px 8px; font-size: 11px; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line);
+    border-radius: 999px; padding: 2px 10px; font-size: 11px; color: var(--muted); }
+  .pill.dead { color: var(--red); border-color: color-mix(in oklch, var(--bad), var(--background) 62%); }
+  .note { font-size: 11px; color: var(--amber); margin-top: 4px; }
+  .hotkeys { display: flex; flex-direction: column; gap: 6px; }
+  .hotkey-row { display: flex; align-items: center; gap: 8px; padding: 6px 0;
+    border-bottom: 1px solid color-mix(in oklch, var(--line), transparent 40%); }
+  .hotkey-row .id { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .hotkey-row .accel { font-family: var(--font-mono, monospace); font-size: 12px;
+    background: var(--btn); border: 1px solid var(--line); border-radius: 4px; padding: 2px 8px; }
+  #status { font-size: 11px; color: var(--muted); padding: 4px 14px; }
+  #status.err { color: var(--red); }
+  #status.ok { color: var(--fg); }
+</style>
+</head>
+<body>
+  <div class="bar"><div class="title">Settings</div></div>
+  <div id="content">
+    <section>
+      <h2>Microphone</h2>
+      <p class="lede">Which device captures your voice, and whether it's muted.</p>
+      <div class="row">
+        <label>Input device</label>
+        <select id="micSelect"><option value="">Grant access to list devices…</option></select>
+        <button id="grantMic" class="small">Grant access</button>
+      </div>
+      <div class="row">
+        <label>Muted</label>
+        <button id="muteToggle" class="small">…</button>
+      </div>
+      <p class="note">Takes effect on your next talk (no restart needed). If the saved device disappears, the system default is used instead.</p>
+    </section>
+
+    <section>
+      <h2>Talk mode</h2>
+      <p class="lede">How the mic starts and stops listening.</p>
+      <div class="row">
+        <label>Mode</label>
+        <select id="talkMode">
+          <option value="toggle">Toggle (press to start, press again to stop)</option>
+          <option value="hold">Hold to talk — saved, not yet enforced for the HOTKEY</option>
+          <option value="open">Open mic (continuous) — saved, not yet enforced</option>
+        </select>
+      </div>
+      <p class="note">Click the avatar to toggle talking. Press and hold it (~a quarter second) to talk while held, release to stop — this works today regardless of the mode above, which only affects the keyboard shortcut.</p>
+    </section>
+
+    <section>
+      <h2>Hotkeys</h2>
+      <p class="lede">Click Rebind, then press the key combo you want. Conflicts are checked before saving.</p>
+      <div id="hotkeys" class="hotkeys"></div>
+    </section>
+  </div>
+  <div id="status"></div>
+
+<script>
+(() => {
+  const bridge = window.settingsBridge;
+  const statusEl = document.getElementById("status");
+  const micSelect = document.getElementById("micSelect");
+  const grantMicBtn = document.getElementById("grantMic");
+  const muteToggle = document.getElementById("muteToggle");
+  const talkModeSel = document.getElementById("talkMode");
+  const hotkeysEl = document.getElementById("hotkeys");
+
+  let current = null; // last settingsBridge.get() result
+
+  function say(text, kind) {
+    statusEl.textContent = text || "";
+    statusEl.className = kind || "";
+  }
+
+  async function refresh() {
+    const res = await bridge.get();
+    if (!res || !res.ok) { say("could not read settings: " + (res && res.error || "unknown"), "err"); return; }
+    current = res;
+    muteToggle.textContent = res.input.micMuted ? "Unmute" : "Mute";
+    muteToggle.classList.toggle("on", !!res.input.micMuted);
+    talkModeSel.value = res.input.talkMode || "toggle";
+    if (res.input.micDeviceLabel) {
+      // Nothing selectable until a grant happens, but show what's saved.
+      const opt = document.createElement("option");
+      opt.value = res.input.micDeviceId || "";
+      opt.textContent = res.input.micDeviceLabel + " (saved)";
+      opt.selected = true;
+      micSelect.innerHTML = "";
+      micSelect.appendChild(opt);
+    }
+    renderHotkeys(res.hotkeys || []);
+  }
+
+  grantMicBtn.addEventListener("click", async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach((t) => t.stop()); // just wanted the grant, for labels
+      const devices = (await navigator.mediaDevices.enumerateDevices())
+        .filter((d) => d.kind === "audioinput");
+      micSelect.innerHTML = "";
+      if (!devices.length) {
+        const opt = document.createElement("option");
+        opt.textContent = "no input devices found";
+        micSelect.appendChild(opt);
+        return;
+      }
+      for (const d of devices) {
+        const opt = document.createElement("option");
+        opt.value = d.deviceId;
+        opt.textContent = d.label || `microphone (${d.deviceId.slice(0, 8)})`;
+        if (current && d.deviceId === current.input.micDeviceId) opt.selected = true;
+        micSelect.appendChild(opt);
+      }
+      say(`${devices.length} microphone(s) found`, "ok");
+    } catch (error) {
+      say("microphone access denied or unavailable: " + (error && error.message || error), "err");
+    }
+  });
+
+  micSelect.addEventListener("change", async () => {
+    const opt = micSelect.selectedOptions[0];
+    if (!opt || !opt.value) return;
+    const result = await bridge.setInput({ micDeviceId: opt.value, micDeviceLabel: opt.textContent.replace(" (saved)", "") });
+    say(result.ok ? "saved" : "could not save: " + (result.error || "unknown"), result.ok ? "ok" : "err");
+  });
+
+  muteToggle.addEventListener("click", async () => {
+    const next = !(current && current.input.micMuted);
+    const result = await bridge.setInput({ micMuted: next });
+    if (result.ok) await refresh();
+    else say("could not save: " + (result.error || "unknown"), "err");
+  });
+
+  talkModeSel.addEventListener("change", async () => {
+    const result = await bridge.setInput({ talkMode: talkModeSel.value });
+    say(result.ok ? "saved" : "could not save: " + (result.error || "unknown"), result.ok ? "ok" : "err");
+  });
+
+  function accelFromEvent(event) {
+    const parts = [];
+    if (event.ctrlKey || event.metaKey) parts.push("Ctrl");
+    if (event.altKey) parts.push("Alt");
+    if (event.shiftKey) parts.push("Shift");
+    let key = event.key;
+    if (["Control", "Meta", "Alt", "Shift"].includes(key)) return null; // modifier alone: keep listening
+    if (key === " ") key = "Space";
+    else if (key.length === 1) key = key.toUpperCase();
+    parts.push(key);
+    return parts.join("+");
+  }
+
+  function renderHotkeys(rows) {
+    hotkeysEl.innerHTML = "";
+    for (const row of rows) {
+      const el = document.createElement("div");
+      el.className = "hotkey-row";
+      const idEl = document.createElement("div");
+      idEl.className = "id";
+      idEl.textContent = row.label || row.id;
+      const accelEl = document.createElement("span");
+      accelEl.className = "accel" + (row.dead ? " pill dead" : "");
+      accelEl.textContent = row.accel + (row.dead ? " (held by another app)" : "");
+      const rebindBtn = document.createElement("button");
+      rebindBtn.className = "small";
+      rebindBtn.textContent = "Rebind";
+      const resetBtn = document.createElement("button");
+      resetBtn.className = "small";
+      resetBtn.textContent = "Reset";
+      resetBtn.disabled = row.accel === row.defaultAccel;
+      resetBtn.addEventListener("click", async () => {
+        const result = await bridge.clearHotkey(row.id);
+        say(result.ok ? "reset" : "could not reset: " + (result.error || "unknown"), result.ok ? "ok" : "err");
+        await refresh();
+      });
+      rebindBtn.addEventListener("click", () => {
+        rebindBtn.textContent = "press keys… (Esc to cancel)";
+        const onKey = async (event) => {
+          event.preventDefault();
+          if (event.key === "Escape") { cleanup(); return; }
+          const accel = accelFromEvent(event);
+          if (!accel) return; // modifier-only keydown, keep waiting
+          cleanup();
+          rebindBtn.textContent = "checking…";
+          const probe = await bridge.probeAccel(accel, row.id);
+          if (!probe.ok) {
+            say(`"${accel}" is ${probe.reason || "unavailable"}`, "err");
+            rebindBtn.textContent = "Rebind";
+            return;
+          }
+          const result = await bridge.setHotkey(row.id, accel);
+          say(result.ok ? `bound to ${accel}` : "could not save: " + (result.error || "unknown"), result.ok ? "ok" : "err");
+          await refresh();
+        };
+        const cleanup = () => { window.removeEventListener("keydown", onKey, true); rebindBtn.textContent = "Rebind"; };
+        window.addEventListener("keydown", onKey, true);
+      });
+      el.append(idEl, accelEl, rebindBtn, resetBtn);
+      hotkeysEl.appendChild(el);
+    }
+  }
+
+  refresh();
+})();
+</script>
+</body>
+</html>

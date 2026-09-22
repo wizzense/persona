@@ -20,7 +20,7 @@ test("every pane resolves to a page that exists", () => {
   const panes = paneSources("http://127.0.0.1:5173");
   // The count is asserted so a pane cannot be DROPPED by an edit that only meant
   // to reorder the rail; bump it deliberately when one is added.
-  assert.equal(panes.length, 8);
+  assert.equal(panes.length, 10);  // Plan: Settings pane added 2026-09-22
   for (const pane of panes) {
     if (pane.kind !== "file") continue;
     assert.ok(
@@ -35,7 +35,8 @@ test("the rail is in this exact order -- a drop or a reorder must fail here", ()
   // Listed explicitly rather than derived from PANES, so an edit that silently
   // drops or reshuffles an entry is caught here instead of only downstream.
   assert.deepEqual(PANES.map((p) => p.id),
-    ["cards", "command", "fleet", "sessions", "chat", "stage", "cast", "desktop"]);
+    ["cards", "command", "fleet", "sessions", "chat", "stage", "cast", "settings",
+    "characters", "desktop"]);
 });
 
 test("the Cast pane is a FILE pane, src resolved the same in dev-server and file:// modes", () => {
@@ -269,4 +270,17 @@ test("a hosted pane is hidden by a rect of NULL, not by being left painted", () 
   const source = read("console-window.cjs");
   assert.match(source, /partition: pane\.partition/);
   assert.match(source, /removeChildView/);
+});
+
+test("a pane asked for while the console is cold-opening is HELD, not replaced by Inbox", () => {
+  // Owner-facing: "Chat with <agent>…" / "Cast & voices…" with the console closed
+  // opened it on INBOX. The focus message beat start() (dropped: `panes` was empty),
+  // or start() selected panes[0] over it. Measured live 2026-09-20 through
+  // POST /console/open {"pane":"chat"} against a closed console.
+  const html = require("node:fs").readFileSync(require("node:path").join(__dirname, "console.html"), "utf8");
+  assert.match(html, /if \(!started\) \{ pendingFocus = payload; return; \}/, "an early focus request is dropped again");
+  const start = html.slice(html.indexOf("(async function start()"));
+  assert.match(start, /started = true;[\s\S]*?if \(!applyFocus\(pendingFocus\) && panes\.length\) select\(panes\[0\]\.id\);/,
+    "start() must honour the held request before falling back to the first pane");
+  assert.doesNotMatch(start, /\n {2}if \(panes\.length\) select\(panes\[0\]\.id\);/, "start() selects the first pane unconditionally again");
 });

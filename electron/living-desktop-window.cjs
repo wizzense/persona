@@ -438,57 +438,19 @@ function setSolidBackground(solid) {
   if (isOpen()) void desktopWin.loadURL(urlFor(transparentMode));
 }
 
-/** Menu fragment for main.cjs's avatar/tray menus — built fresh on every popup so the
- *  labels and checkbox reflect live state. */
-function buildLivingDesktopMenu() {
-  return [
-    {
-      label: isOpen() && desktopWin.isVisible() ? "Hide overlay" : "Open overlay",
-      click: () => toggleLivingDesktop(),
-    },
-    {
-      label: "Shell",
-      submenu: SHELL_CHOICES.map((choice) => ({
-        label: choice.label,
-        type: "radio",
-        checked: shellId === choice.id,
-        click: () => setShell(choice.id),
-      })),
-    },
-    {
-      label: "Click-through desktop (ghost mode)",
-      type: "checkbox",
-      checked: ghostMode,
-      click: () => {
-        ghostMode = !ghostMode;
-        applyGhostTick();
-      },
-    },
-    {
-      label: "Sign in (portal)…",
-      click: () => beginSignIn(),
-    },
-    {
-      label: "Solid background",
-      type: "checkbox",
-      checked: !transparentMode,
-      click: () => setSolidBackground(transparentMode),
-    },
-    {
-      label: "Reload",
-      enabled: isOpen(),
-      click: () => {
-        if (isOpen()) desktopWin.webContents.reload();
-      },
-    },
-    {
-      label: "Close",
-      enabled: isOpen(),
-      click: () => {
-        if (isOpen()) desktopWin.close();
-      },
-    },
-  ];
+// The overlay's menu rows are RECORDS in command-registry.cjs (group `desktop`),
+// rendered onto the tray, every body's menu and the palette. This module used to
+// export a hand-built menu fragment for them; the 09-13 consolidation deleted its
+// two call sites and it sat here with zero callers for a week, which is how the
+// overlay became unreachable by hand. What stays here is the STATE those rows
+// read (desktopStatus) and the setters they call.
+function setGhostMode(on) {
+  ghostMode = Boolean(on);
+  applyGhostTick();
+}
+
+function reloadLivingDesktop() {
+  if (isOpen()) desktopWin.webContents.reload();
 }
 
 // ── Desk -> Aitheros Online state channel ──────────────────────────────────────────────
@@ -630,7 +592,23 @@ function closeDesktopApp() {
   if (appWin && !appWin.isDestroyed()) appWin.close();
 }
 
+/**
+ * Make the shared partition signed-in if it can be, and say whether it is.
+ *
+ * For any surface that shows aitherium.com from this partition WITHOUT being the
+ * overlay window -- today the console's AitherOS Online pane. The overlay ran
+ * syncPortalSessionCookie() before its own load; the pane ran nothing, so with no
+ * cookie already in the partition it loaded the apex signed-out and the owner got
+ * the marketing landing page inside his own console (screenshot, 2026-09-20).
+ */
+async function ensureDesktopSession() {
+  await syncPortalSessionCookie();
+  return hasSessionCookie();
+}
+
 module.exports = {
+  ensureDesktopSession,
+  portalLoginUrl: () => PORTAL_LOGIN_URL,
   openLivingDesktop: showLivingDesktop, // kept for older callers
   closeDesktopApp,
   showLivingDesktop,
@@ -644,7 +622,9 @@ module.exports = {
   hideLivingDesktop,
   toggleLivingDesktop,
   setSolidBackground,
-  buildLivingDesktopMenu,
+  setGhostMode,
+  reloadLivingDesktop,
+  beginSignIn,
   setDeskStateProvider,
   pushDeskState,
   isOpen,

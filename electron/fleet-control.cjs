@@ -166,6 +166,22 @@ function parseVerdict(stdout, code, stderrTail = "") {
       error: stderrTail.trim() || "the Debian distro, python3 or podman did not answer",
     };
   }
+  // wsl.exe itself failed: it exits -1 (4294967295 unsigned) and prints
+  // `Wsl/Service/CreateInstance/0x800705b4` (timeout) or `E_UNEXPECTED` when the
+  // distro is wedged or stopped. The script never ran, so this is CANNOT JUDGE
+  // in plain words -- not "exit 4294967295", which is what the owner read on
+  // 2026-09-21 while the fleet had been dead for 20 minutes.
+  const wslErr = /Wsl\/Service|0x8007[0-9a-f]{4}|Catastrophic failure/i.test(stderrTail);
+  if (code === 4294967295 || code === -1 || wslErr) {
+    return {
+      ok: false,
+      cannotJudge: true,
+      wslDown: true,
+      error: "the Debian WSL distro did not answer (wsl.exe failed"
+        + (wslErr ? `: ${stderrTail.trim().split(/\r?\n/).filter(Boolean).slice(-1)[0].slice(0, 120)}` : "")
+        + ") -- the fleet is down or wedged; the WSL watchdog recovers it on its own, or open the Fleet pane",
+    };
+  }
   return {
     ok: code === 0,
     error: code === 0 ? null : (stderrTail.trim() || `exit ${code}`),

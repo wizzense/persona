@@ -40,25 +40,35 @@ test("window size is reachable from the TRAY, not only from a gesture", () => {
   );
   const at = MAIN.indexOf("buildMenu(\"tray\"");
   assert.ok(at > 0, "the tray is no longer rendered from the registry");
-  assert.match(
-    MAIN.slice(at, at + 600),
-    /nest:\s*\{\s*"window-size":/,
-    "the tray must nest the size group under one label, or it renders six flat rows",
-  );
+  // The parent label is registry DATA (GROUPS) since 2026-09-20: each call site
+  // used to pass its own `nest` map, and the tray and the body's menu named the
+  // same group differently.
+  assert.ok(registry.GROUPS["window-size"] && registry.GROUPS["window-size"].menu,
+    "the size group must nest under one label, or it renders eight flat rows");
+  const tray = registry.buildMenu("tray", () => {}, {});
+  const nested = tray.find((row) => row.label === registry.GROUPS["window-size"].menu);
+  assert.ok(nested && nested.submenu.length >= 6, "the tray lost its size submenu");
 });
 
 test("the avatar's own menu keeps its size submenu too", () => {
   const at = MAIN.indexOf("function popupAvatarMenu");
   assert.ok(at > 0, "popupAvatarMenu is gone");
-  assert.match(MAIN.slice(at, at + 2500), /\.\.\.buildSizeMenu\(\)/);
+  assert.match(MAIN.slice(at, at + 2500), /buildMenu\(\s*"avatar-menu"/);
+  const body = registry.buildMenu("avatar-menu", () => {}, { ctx: { slotId: "slot1" } });
+  const nested = body.find((row) => row.label === registry.GROUPS["window-size"].menu);
+  assert.ok(nested && nested.submenu.length >= 6, "a body's menu lost its size submenu");
 });
 
 test("a size shortcut that could not be registered SAYS so", () => {
   // register() returns false when another app holds the accelerator. Discarding
   // that is how the keyboard path dies with no error, no log and no symptom
   // other than "it stopped working".
-  const at = MAIN.indexOf("CommandOrControl+Shift+=");
-  assert.ok(at > 0, "the grow shortcut is gone");
+  assert.ok(registry.shortcuts().some((k) => k.electron === "CommandOrControl+Shift+=" && k.id === "window.size.bigger"),
+    "the grow shortcut is gone");
+  // Plan: configurable hotkeys -- main now calls shortcuts(overrides) from
+  // inside applyHotkeys(), not a bare shortcuts() at the top level.
+  const at = MAIN.indexOf("commandRegistry.shortcuts(");
+  assert.ok(at > 0, "main no longer registers the registry's shortcuts");
   const block = MAIN.slice(Math.max(0, at - 900), at + 900);
   assert.match(block, /if \(!globalShortcut\.register\(/,
     "the registration result must be checked");

@@ -19,7 +19,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
 const { randomUUID } = require("node:crypto");
-const { summarize: summarizeFleet, classify: classifyFleet } = require("./fleet-control.cjs");
+const { summarize: summarizeFleet, classify: classifyFleet, DESTRUCTIVE: DESTRUCTIVE_FLEET } = require("./fleet-control.cjs");
 // One spelling of the mirror channel, shared with the poller that reads it. A
 // second literal here is how a rename leaves the desk writing to a channel
 // nothing polls. relay-poller requires only node builtins, so this is not a cycle.
@@ -54,6 +54,35 @@ const FLEET_VERBS = Object.freeze({
   "arc start": "arc-start",
   "start arc": "arc-start",
 });
+
+/** What the owner reads back. `gaming` is the script's name for "gpu quiet";
+ *  a reply headed "Fleet gaming" answered a verb nobody typed (2026-09-21). */
+const FLEET_LABELS = Object.freeze({
+  status: "Fleet status",
+  down: "Fleet down",
+  up: "Fleet up",
+  quiesce: "Fleet quiesce",
+  resume: "GPU resume",
+  gaming: "GPU quiet",
+  adopt: "Fleet adopt",
+  "arc-status": "ARC status",
+  "arc-start": "ARC start",
+  "arc-now": "ARC run now",
+  "arc-stop": "ARC stop",
+});
+
+/** What a DESTRUCTIVE verb will do, said before it does it. */
+const FLEET_CONSEQUENCE = Object.freeze({
+  gaming: "stops every LLM/GPU container and holds them down until GPU resume",
+  quiesce: "stops the LLM containers and holds them down until fleet resume",
+  down: "stops the WHOLE fleet (every container) and holds it down until fleet up",
+  "arc-stop": "stops the ARC solver (the world model stays up)",
+});
+
+/** The one word that confirms an ARMED destructive verb. Exact match only —
+ *  a sentence containing "yes" is a sentence, not a confirmation. */
+const CONFIRM_WORDS = new Set(["confirm", "yes", "y", "do it", "go"]);
+const CONFIRM_TTL_MS = 2 * 60 * 1000;
 
 function transcriptPath() {
   return path.join(os.homedir(), ".aither", "desk-command.jsonl");
@@ -123,6 +152,10 @@ function ensureTranscriptDir() {
  */
 function classifyCommand(text) {
   const normalized = String(text ?? "").toLowerCase().trim().replace(/\s+/g, " ");
+  // A bare confirmation word is its own kind: it means something only while a
+  // destructive verb is armed, and it must never reach the claude lane (where
+  // "yes" would spawn a 30-minute agent to answer a question nobody asked).
+  if (CONFIRM_WORDS.has(normalized)) return { kind: "confirm" };
   for (const [key, action] of Object.entries(FLEET_VERBS)) {
     if (normalized === key || normalized.includes(key)) {
       return { kind: "fleet", action };
@@ -145,8 +178,11 @@ class CommandAgent extends EventEmitter {
     this._claudePath = claudePath;
     this._relayPath = relayPath;
     this.queue = [];
-    this.current = null; // { id, startedAt }
+    this.current = null; // { id, text, startedAt } -- the claude lane only
     this.children = new Map(); // id -> child process
+    // A destructive fleet verb the owner typed, waiting for its one-word
+    // confirmation: { action, text, source, at }. Cleared by any other command.
+    this.pendingConfirm = null;
   }
 
   get queueLength() {
@@ -196,10 +232,26 @@ class CommandAgent extends EventEmitter {
     this._appendTranscript(request);
     this.emit("request", { id, text, source });
 
+    // Fleet verbs (and the word that confirms one) never wait behind a claude
+    // agent: FleetControl serialises itself and answers in seconds, while an
+    // agent command can hold the lane for 30 minutes. Measured 2026-09-21:
+    // "gpu quiet" sat silently behind a running probe for three minutes and the
+    // owner read it as "no response". Different executor, different lane.
+    if (classify.kind !== "agent") {
+      return this._executeCommand(id, text, classify, source);
+    }
+
     // Queue or run immediately if nothing is running.
     if (this.current) {
       this.queue.push({ id, text, classify, source });
       this.emit("queued", { id, queueLength: this.queue.length });
+      // Say so where the owner is looking: a queued command that renders
+      // nothing is indistinguishable from a dead window.
+      this.emit("progress", {
+        id,
+        text: `queued behind "${String(this.current.text || "").slice(0, 80)}" — ${this.queue.length} waiting`,
+        phase: "queued",
+      });
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
           // If still in queue after 30 min, assume timeout.
@@ -220,15 +272,21 @@ class CommandAgent extends EventEmitter {
   }
 
   async _executeCommand(id, text, classify, source) {
-    this.current = { id, startedAt: Date.now() };
-    this.emit("progress", { id, text: `> ${classify.kind === "fleet" ? "fleet: " : "claude: "}${text}`, phase: "start" });
+    // Only the claude lane owns `current` and the queue (see run()).
+    const ownsLane = classify.kind === "agent";
+    if (ownsLane) this.current = { id, text, startedAt: Date.now() };
+    this.emit("progress", { id, text: `> ${classify.kind === "agent" ? "claude: " : "fleet: "}${text}`, phase: "start" });
 
     let outcome = null; // what the relay ack reports: the reply and whether it worked
     try {
       let result;
-      if (classify.kind === "fleet") {
-        result = await this._handleFleetCommand(id, text, classify.action);
+      if (classify.kind === "confirm") {
+        result = await this._handleConfirm(id, text, source);
+      } else if (classify.kind === "fleet") {
+        result = await this._handleFleetCommand(id, text, classify.action, source);
       } else {
+        // Anything that is not a confirmation cancels an armed verb.
+        this.pendingConfirm = null;
         result = await this._handleAgentCommand(id, text, source);
       }
 
@@ -264,11 +322,11 @@ class CommandAgent extends EventEmitter {
       this.emit("failed", { id, error });
       return { ok: false, id, reply, kind: classify.kind, verdict };
     } finally {
-      this.current = null;
+      if (ownsLane) this.current = null;
       // Relay best-effort (fire-and-forget): an [ack] with the reply, never the request.
       void this._relayRequest(text, classify.kind, { ...(outcome || { reply: "", ok: false }), source });
       // Process next in queue.
-      const next = this.queue.shift();
+      const next = ownsLane ? this.queue.shift() : null;
       if (next) {
         this.emit("dequeued", { id: next.id, queueLength: this.queue.length });
         const result = await this._executeCommand(next.id, next.text, next.classify, next.source);
@@ -277,31 +335,61 @@ class CommandAgent extends EventEmitter {
     }
   }
 
-  async _handleFleetCommand(id, text, action) {
+  async _handleFleetCommand(id, text, action, source = "unknown", { confirmed = false } = {}) {
+    const label = FLEET_LABELS[action] || `Fleet ${action}`;
     if (!this.fleetControl) {
-      return {
-        ok: false,
-        id,
-        reply: "Fleet control is not available",
-        kind: "fleet",
-      };
+      return { ok: false, id, reply: `${label}: fleet control is not available in this desk`, kind: "fleet" };
     }
 
-    const verdict = await this.fleetControl.run(action);
+    // A DESTRUCTIVE verb is ARMED by the sentence and fired by a second,
+    // exact-match word from the same surface — the chat equivalent of the
+    // Fleet window's double-click. classifyCommand() matches by inclusion, so a
+    // sentence that merely MENTIONS "fleet down" reads like the command
+    // (security finding 2026-09-19); the second word is what makes it deliberate.
+    // The relay never confirms: a peer agent's "yes" is not the owner's.
+    if (DESTRUCTIVE_FLEET.has(action) && !confirmed) {
+      if (/^relay:/.test(String(source || ""))) {
+        this.pendingConfirm = null;
+        return {
+          ok: false, id, kind: "fleet",
+          reply: `${label}: refused — a destructive verb cannot be confirmed from the relay; use the Fleet pane or the Command window.`,
+          verdict: { ok: false, requiresConfirmation: true, action },
+        };
+      }
+      this.pendingConfirm = { action, text, source, at: Date.now() };
+      return {
+        ok: true, id, kind: "fleet",
+        reply: `${label} is armed — it ${FLEET_CONSEQUENCE[action] || "changes the fleet"}. `
+          + `Type "confirm" within 2 minutes to do it; anything else cancels.`,
+        verdict: { ok: true, armed: true, action },
+      };
+    }
+    this.pendingConfirm = null;
+
+    // The second argument is honoured by a FleetControl that gates on it and
+    // ignored by one that does not.
+    const verdict = await this.fleetControl.run(action, { confirm: true });
     // The reply IS the fleet's state, in the same words the Fleet window uses —
-    // a bare "ok" answers nothing the owner asked.
+    // a bare "ok" answers nothing the owner asked, and a bare exit code
+    // ("Fleet gaming: exit 4294967295", 2026-09-21) answers it in the wrong language.
     let reply;
-    if (action === "status") {
-      reply = verdict.cannotJudge
-        ? `CANNOT JUDGE — ${verdict.error || "no verdict"}`
-        : `${classifyFleet(verdict)} — ${summarizeFleet(verdict)}`;
+    if (verdict.cannotJudge) {
+      reply = `${label}: could not reach the fleet — ${verdict.error || "no verdict"}`;
+    } else if (verdict.busy) {
+      // A busy refusal has no counts; rendering it as a status read "UNKNOWN —
+      // ? container(s)", which is a riddle, not an answer.
+      reply = `${label}: the fleet is busy with "${verdict.busy}" — try again in a moment`;
+    } else if (action === "status") {
+      reply = `${classifyFleet(verdict)} — ${summarizeFleet(verdict)}`;
+    } else if (verdict.requiresConfirmation) {
+      reply = `${label}: refused — ${verdict.error || "needs confirmation"}`;
     } else if (verdict.ok) {
       const after = verdict.fleet_running_after != null
         ? ` — ${verdict.fleet_running_after} container(s) still running`
         : verdict.fleet_running != null ? ` — ${verdict.fleet_running} container(s) running` : "";
-      reply = `Fleet ${action}: ok${after}`;
+      reply = `${label}: done${after}`;
     } else {
-      reply = `Fleet ${action}: ${verdict.error || "refused"}`;
+      reply = `${label}: ${verdict.error || "refused"}`;
     }
 
     return {
@@ -311,6 +399,23 @@ class CommandAgent extends EventEmitter {
       kind: "fleet",
       verdict,
     };
+  }
+
+  /** The owner typed the confirmation word: fire the armed verb, or say there is none. */
+  async _handleConfirm(id, text, source = "unknown") {
+    const pending = this.pendingConfirm;
+    this.pendingConfirm = null;
+    if (!pending) {
+      return { ok: false, id, kind: "fleet", reply: `Nothing is armed — type the verb first (e.g. "gpu quiet"), then "confirm".` };
+    }
+    const label = FLEET_LABELS[pending.action] || `Fleet ${pending.action}`;
+    if (Date.now() - pending.at > CONFIRM_TTL_MS) {
+      return { ok: false, id, kind: "fleet", reply: `${label}: the confirmation window (2 minutes) has passed — type "${pending.text}" again.` };
+    }
+    if (pending.source !== source || /^relay:/.test(String(source || ""))) {
+      return { ok: false, id, kind: "fleet", reply: `${label}: refused — confirm from the same window that armed it.` };
+    }
+    return this._handleFleetCommand(id, pending.text, pending.action, source, { confirmed: true });
   }
 
   async _handleAgentCommand(id, text) {

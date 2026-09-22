@@ -29,6 +29,9 @@ contextBridge.exposeInMainWorld("deskBridge", {
     // whose right answer is not one of its options no longer needs a terminal.
     steer: (id, text) => ipcRenderer.invoke("desk:deck-steer", { id, text }),
     action: (name, arg) => ipcRenderer.invoke("desk:deck-action", name, arg),
+    // The rows of a non-menu surface ("beads"), from command-registry.cjs: id,
+    // resolved label, icon name. A bead sends its id back through `action`.
+    commands: (surface) => ipcRenderer.invoke("desk:command-rows", surface ?? "beads"),
     // The Aitherium marketplace, one-stop-shop data layer
     // (market-client.cjs speaks MCP to the local gateway with the session
     // bearer; same credential story as the relay feed).
@@ -70,6 +73,16 @@ contextBridge.exposeInMainWorld("deskBridge", {
   voiceHeard: (text) => ipcRenderer.invoke("desk:voice-heard", String(text || "")),
   /** listening / transcribing / idle / error: … — for the tray's mic line. */
   voiceListenState: (state) => ipcRenderer.send("desk:voice-listen-state", String(state || "")),
+  // Plan: click/hold-to-talk on the avatar body (owner 2026-09-22). Routes
+  // through the SAME dispatch as the hotkey/tray/palette, so mute-gating,
+  // the spoken "on it"/"muted" feedback and every future command work here
+  // for free -- never a second, renderer-local copy of what a command does.
+  runCommand: (id) => ipcRenderer.invoke("desk:run-command", String(id || "")),
+  // Plan: device selection (Settings pane) takes effect on the NEXT capture,
+  // not just at app start -- read fresh each time, never cached in the module.
+  getMicDeviceId: () => ipcRenderer.invoke("desk:settings-get")
+    .then((r) => (r && r.ok && r.input ? r.input.micDeviceId : "")),
+
   // Drop-to-avatar (2026-08-29): the renderer hands the File object over;
   // the sandboxed renderer cannot see paths, so webUtils resolves it here.
   // Main MIME-routes it (image/audio/video/doc) and resolves with the

@@ -193,6 +193,11 @@ function createBridgeServer({
   onEvent,
   mcpHandler = null,
   decisionsProvider = null,
+  // () => the awrise wake snapshot main holds (jobs, clock liveness, staleness).
+  // READ ONLY on this bridge: mutations go to the harness daemon's /wakes
+  // window, which owns the bearer check and the argv control. A second
+  // mutating door here would be a rival window with its own credential story.
+  wakesProvider = null,
   fleetHandler = null,
   commandHandler = null,
   // The two desktop surfaces: POST /desktop/overlay | /desktop/app raise a
@@ -202,6 +207,7 @@ function createBridgeServer({
   speakHandler = null,
   // POST /console/open {pane?}: raise the Aither Console on a pane (default inbox).
   consoleHandler = null,
+  commandsHandler = null,
   // () => {x, y, width, height} of the visible avatar window, or null.
   avatarBoundsProvider = null,
   // () => the room stage's status (who is on stage, queue, spoken), or null.
@@ -288,6 +294,67 @@ function createBridgeServer({
       return;
     }
 
+    // The awrise wake list, read-only, for the surfaces Desk hosts (the same
+    // trust class as /decisions: loopback host, and CORS-readable only by the
+    // owner's own origins). `clock_stale`/`last_tick_at` ride along because a
+    // job list WITHOUT them reads as healthy while the scheduler is dead, and
+    // `source`/`stale_since` say whether this is live or a cached snapshot.
+    if (request.url === "/wakes") {
+      if (!decisionsReadOriginAllowed(origin)) {
+        response.writeHead(403);
+        response.end();
+        return;
+      }
+      const cors = origin
+        ? { "access-control-allow-origin": origin, vary: "Origin" }
+        : {};
+      if (request.method === "OPTIONS") {
+        response.writeHead(204, {
+          ...cors,
+          "access-control-allow-methods": "GET, OPTIONS",
+          "access-control-allow-headers": "content-type",
+        });
+        response.end();
+        return;
+      }
+      if (request.method !== "GET") {
+        response.writeHead(405, { allow: "GET, OPTIONS" });
+        response.end();
+        return;
+      }
+      if (wakesProvider == null) {
+        response.writeHead(404);
+        response.end();
+        return;
+      }
+      let feed;
+      try {
+        feed = wakesProvider();
+      } catch {
+        feed = null;
+      }
+      const wakes = Array.isArray(feed?.wakes) ? feed.wakes : [];
+      response.writeHead(200, { ...cors, "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          source: feed?.source ?? "none",
+          stale_since: feed?.stale_since ?? null,
+          installed: feed?.installed ?? null,
+          schema: feed?.schema ?? null,
+          migration: feed?.migration ?? null,
+          wakes,
+          count: wakes.length,
+          failing: Number(feed?.failing) || 0,
+          disabled: Number(feed?.disabled) || 0,
+          running: Number(feed?.running) || 0,
+          last_tick_at: feed?.last_tick_at ?? null,
+          clock_stale: feed?.clock_stale === true,
+          error: feed?.error ?? (feed ? null : "unavailable"),
+        }),
+      );
+      return;
+    }
+
     // Fleet control over loopback (2026-09-07): GET /fleet/status, POST
     // /fleet/<down|up|gaming|resume|adopt|open>. Same trust as /mcp — loopback
     // host, no foreign Origin — and every verb lands on main's ONE FleetControl,
@@ -339,6 +406,54 @@ function createBridgeServer({
     // raises it on that pane -- the escalation ladder's desk rung uses this
     // instead of a separate Tk popup that covered the avatar. Same trust
     // class as /desktop: a window on the owner's own screen, no bearer.
+    // THE COMMAND LIST, for everything that is not a menu (owner, 2026-09-20: the desk
+    // must melt into "awsh + awdk + awnode + aitherconnect"). GET /commands is the
+    // same rows the Ctrl+K palette shows -- ids and resolved labels from
+    // command-registry.cjs -- and POST /commands/run {id, arg?} runs one through
+    // main's ONE runCommand switch. So `awsh /desk`, `adk desk`, an agent and a tray
+    // click offer the same verbs under the same names, instead of each client
+    // keeping a hand-written list that drifts from the menus.
+    //
+    // Trust: the same class as /fleet and /desktop -- loopback, no foreign Origin.
+    // It adds no power: every id here is already a palette row, and the destructive
+    // ones still stop at main's on-screen confirm dialog. An id that is not a
+    // palette row (quit, a body-scoped verb) is refused, not run.
+    if (request.url === "/commands" || request.url === "/commands/run") {
+      if (!originAllowed(origin)) {
+        response.writeHead(403);
+        response.end();
+        return;
+      }
+      if (commandsHandler == null) {
+        response.writeHead(404);
+        response.end();
+        return;
+      }
+      const isRun = request.url === "/commands/run";
+      if (request.method !== (isRun ? "POST" : "GET")) {
+        response.writeHead(405, { allow: isRun ? "POST" : "GET" });
+        response.end();
+        return;
+      }
+      Promise.resolve()
+        .then(() => (isRun ? readJsonBody(request) : null))
+        .then((body) => (isRun
+          ? commandsHandler.run(String(body?.id || ""), body?.arg == null ? undefined : String(body.arg))
+          : { ok: true, commands: commandsHandler.list() }))
+        .then((result) => {
+          if (response.headersSent) return;
+          const refused = result && result.ok === false;
+          response.writeHead(refused ? 404 : 200, { "content-type": "application/json" });
+          response.end(JSON.stringify(result ?? { ok: true }));
+        })
+        .catch((error) => {
+          if (response.headersSent) return;
+          response.writeHead(500, { "content-type": "application/json" });
+          response.end(JSON.stringify({ ok: false, error: error?.message || String(error) }));
+        });
+      return;
+    }
+
     if (request.url === "/console/open") {
       if (!originAllowed(origin)) {
         response.writeHead(403);

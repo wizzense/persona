@@ -166,7 +166,26 @@ function AvatarSceneApp() {
   const talkRef = useRef<ReturnType<typeof createPushToTalk> | null>(null);
   if (!talkRef.current && typeof window !== 'undefined') {
     talkRef.current = createPushToTalk({
-      getStream: () => navigator.mediaDevices.getUserMedia({ audio: true }),
+      getStream: async () => {
+        // Plan: honour the Settings pane's device pick, read fresh each call
+        // so a change there takes effect on the NEXT talk, no app restart.
+        // Falls back to the system default on any failure -- an unreadable
+        // setting or a device that no longer exists must never silence the
+        // mic outright.
+        let deviceId = '';
+        try { deviceId = (await window.deskBridge?.getMicDeviceId?.()) || ''; } catch { /* default */ }
+        const constraints: MediaStreamConstraints = deviceId
+          ? { audio: { deviceId: { exact: deviceId } } }
+          : { audio: true };
+        try {
+          return await navigator.mediaDevices.getUserMedia(constraints);
+        } catch {
+          // The saved device may be gone (unplugged, driver change) -- retry
+          // the default rather than fail the whole talk gesture.
+          if (deviceId) return navigator.mediaDevices.getUserMedia({ audio: true });
+          throw new Error('microphone unavailable');
+        }
+      },
       makeRecorder: (stream, mime) => new MediaRecorder(stream, { mimeType: mime }),
       encode: async (blob) => {
         const bytes = new Uint8Array(await blob.arrayBuffer());

@@ -1,0 +1,83 @@
+{
+  "generatedBy": "AitherOS/dev/tools/gen_desk_tokens.py",
+  "default": "dark-glass",
+  "themes": [
+    {
+      "id": "dark-glass",
+      "name": "Dark Glass",
+      "category": "dark",
+      "accent": "#7c6fc4",
+      "bodyBg": "#030308"
+    },
+    {
+      "id": "midnight-ocean",
+      "name": "Midnight Ocean",
+      "category": "cool",
+      "accent": "#2dd4bf",
+      "bodyBg": "#020a12"
+    },
+    {
+      "id": "neon-cyberpunk",
+      "name": "Neon Cyberpunk",
+      "category": "vibrant",
+      "accent": "#e879f9",
+      "bodyBg": "#0a0212"
+    },
+    {
+      "id": "forest-depth",
+      "name": "Forest Depth",
+      "category": "cool",
+      "accent": "#4ade80",
+      "bodyBg": "#020d06"
+    },
+    {
+      "id": "sunset-horizon",
+      "name": "Sunset Horizon",
+      "category": "warm",
+      "accent": "#fb923c",
+      "bodyBg": "#0d0504"
+    },
+    {
+      "id": "arctic-nord",
+      "name": "Arctic Nord",
+      "category": "cool",
+      "accent": "#88c0d0",
+      "bodyBg": "#1a2028"
+    },
+    {
+      "id": "monokai-pro",
+      "name": "Monokai Pro",
+      "category": "classic",
+      "accent": "#ffd866",
+      "bodyBg": "#1e1c1a"
+    },
+    {
+      "id": "rose-gold",
+      "name": "Ros\u00e9 Gold",
+      "category": "warm",
+      "accent": "#f9a8d4",
+      "bodyBg": "#0d0408"
+    },
+    {
+      "id": "crimson-night",
+      "name": "Crimson Night",
+      "category": "dark",
+      "accent": "#f87171",
+      "bodyBg": "#0a0304"
+    },
+    {
+      "id": "solar-flare",
+      "name": "Solar Flare",
+      "category": "vibrant",
+      "accent": "#fbbf24",
+      "bodyBg": "#0d0802"
+    },
+    {
+      "id": "matrix-green",
+      "name": "Matrix",
+      "category": "classic",
+      "accent": "#22c55e",
+      "bodyBg": "#000a02"
+    }
+  ]
+}
