@@ -416,10 +416,13 @@ test("watch: an external edit in the SAME mtime tick still fires (size is in the
   const events = [];
   const unwatch = cast.watch((result) => events.push(result), { file, debounceMs: 50 });
   try {
+    // macOS FSEvents arms the stream asynchronously: an edit in the first
+    // milliseconds after fs.watch() is not delivered at all (CI, 2026-09-22).
+    await sleep(250);
     fs.writeFileSync(file, `${JSON.stringify({ version: 1, defaults: { voice: "nova" } })}
 `, "utf8");
     fs.utimesSync(file, tick, tick);
-    await sleep(350);
+    await sleep(500);
     assert.ok(events.length >= 1, "a same-tick external edit was dropped by the change guard");
     assert.equal(events[events.length - 1].snapshot.defaults.voice, "nova");
   } finally {
