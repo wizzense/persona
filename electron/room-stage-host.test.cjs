@@ -225,6 +225,7 @@ test("cast-config.watch: a changed character re-spawns only that slot, via spawn
     // Simulate a slot room-stage.cjs's own ensureSlot already spawned, with
     // the character the OLD file authored.
     stage.slots.set("room-agent-a", { agent: "agent-a", character: "Nova", actorId: "", actorKind: "" });
+    await sleep(250); // let macOS FSEvents arm the watch before the edit
 
     writeCast(file, { version: 1, authors: { "agent-a": { character: "Luna" } } });
     await sleep(400);
@@ -262,6 +263,7 @@ test("cast-config.watch: an UNCHANGED character on stage triggers no re-spawn", 
   try {
     const stage = host.startRoomStage(deps);
     stage.slots.set("room-agent-a", { agent: "agent-a", character: "Nova", actorId: "", actorKind: "" });
+    await sleep(250); // let macOS FSEvents arm the watch before the edit
 
     // A save that changes something IRRELEVANT to this actor.
     writeCast(file, { version: 1, authors: { "agent-a": { character: "Nova" } }, voice: { defaultSpeed: 1.1 } });
@@ -470,6 +472,9 @@ test("cast-config.watch: a changed physics block sends ONE tune-avatar for that 
   try {
     const stage = host.startRoomStage(deps);
     stage.slots.set("room-agent-a", { agent: "agent-a", character: "Nova", actorId: "", actorKind: "" });
+    // macOS FSEvents arms the watch asynchronously; an edit in the first
+    // milliseconds is not delivered (intermittent on the arm64 runner).
+    await sleep(250);
 
     writeCast(file, {
       version: 1,
