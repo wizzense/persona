@@ -14,4 +14,6 @@ contextBridge.exposeInMainWorld("settingsBridge", {
   probeAccel: (accel, excludeId) => ipcRenderer.invoke("desk:settings-probe-accel", accel, excludeId),
   setHotkey: (id, accel) => ipcRenderer.invoke("desk:settings-set-hotkey", id, accel),
   clearHotkey: (id) => ipcRenderer.invoke("desk:settings-set-hotkey", id, ""),
+  bricksList: () => ipcRenderer.invoke("desk:bricks-list"),
+  bricksAct: (verb, name) => ipcRenderer.invoke("desk:bricks-act", verb, name),
 });

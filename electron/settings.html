@@ -78,6 +78,16 @@
       <p class="lede">Click Rebind, then press the key combo you want. Conflicts are checked before saving.</p>
       <div id="hotkeys" class="hotkeys"></div>
     </section>
+
+    <section>
+      <h2>Updates</h2>
+      <p class="lede">Aither World bricks installed on this machine. Upgrade tests the brick afterwards and rolls back on its own if the test fails.</p>
+      <div class="row">
+        <button id="bricksCheck" class="small">Check for updates</button>
+        <label style="min-width:0"><input type="checkbox" id="bricksOnlyOutdated" checked> only outdated</label>
+      </div>
+      <div id="bricks" class="hotkeys"></div>
+    </section>
   </div>
   <div id="status"></div>
 
@@ -224,6 +234,77 @@
       hotkeysEl.appendChild(el);
     }
   }
+
+  const bricksEl = document.getElementById("bricks");
+  const onlyOutdated = document.getElementById("bricksOnlyOutdated");
+  let bricksRows = [];
+
+  function renderBricks() {
+    bricksEl.innerHTML = "";
+    const rows = onlyOutdated.checked ? bricksRows.filter((r) => r.outdated) : bricksRows;
+    if (!rows.length) {
+      const empty = document.createElement("div");
+      empty.className = "note";
+      empty.textContent = bricksRows.length ? "every installed brick is current" : "not checked yet";
+      bricksEl.appendChild(empty);
+      return;
+    }
+    for (const r of rows) {
+      const el = document.createElement("div");
+      el.className = "hotkey-row";
+      const name = document.createElement("div");
+      name.className = "id";
+      name.textContent = r.id;
+      const ver = document.createElement("span");
+      ver.className = "accel";
+      ver.textContent = r.latest && r.latest !== r.installed ? `${r.installed} → ${r.latest}` : r.installed;
+      el.append(name, ver);
+      // An editable checkout or a git install is updated outside pip: say so, offer nothing.
+      if (r.editable || r.source === "git") {
+        const why = document.createElement("span");
+        why.className = "pill";
+        why.textContent = r.editable ? "source checkout (git)" : "git install";
+        el.appendChild(why);
+      } else {
+        for (const verb of ["upgrade", "test", "rollback"]) {
+          if (verb === "upgrade" && !r.outdated) continue;
+          const b = document.createElement("button");
+          b.className = "small";
+          b.textContent = verb[0].toUpperCase() + verb.slice(1);
+          b.addEventListener("click", async () => {
+            b.disabled = true;
+            say(`${verb} ${r.id}…`, "");
+            const res = await bridge.bricksAct(verb, r.id);
+            const d = res.data || {};
+            if (res.ok) say(verb === "test" ? `${r.id}: import ${d.import}, ${d.selftest}` : `${r.id}: ${d.from} → ${d.to}`, "ok");
+            else say(d.rolled_back ? `${r.id} failed its test and was rolled back` : `${r.id}: ${res.error}`, "err");
+            await checkBricks();
+          });
+          el.appendChild(b);
+        }
+      }
+      if (r.error && r.source !== "git") {
+        const err = document.createElement("span");
+        err.className = "pill dead";
+        err.textContent = r.error;
+        el.appendChild(err);
+      }
+      bricksEl.appendChild(el);
+    }
+  }
+
+  async function checkBricks() {
+    say("checking the index…", "");
+    const res = await bridge.bricksList();
+    if (!res.ok) { say("could not list bricks: " + res.error, "err"); return; }
+    bricksRows = res.data || [];
+    const n = bricksRows.filter((r) => r.outdated).length;
+    say(`${bricksRows.length} bricks installed, ${n} with a newer version`, "ok");
+    renderBricks();
+  }
+
+  document.getElementById("bricksCheck").addEventListener("click", checkBricks);
+  onlyOutdated.addEventListener("change", renderBricks);
 
   refresh();
 })();
