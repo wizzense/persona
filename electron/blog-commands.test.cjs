@@ -210,7 +210,7 @@ test("the editor URL honours AWDESK_VEIL_URL and encodes the slug", () => {
 });
 
 test("the default editor host is the one that answered 200 (apex, trailing slash), not api.*", () => {
-  // Measured 2026-09-19: api.aitherium.com/blog/editor -> 503; aitherium.com/blog/editor/?slug= -> 200.
+  // Measured 2026-09-19: the api. host's /blog/editor -> 503; aitherium.com/blog/editor/?slug= -> 200.
   const prior = process.env.AWDESK_VEIL_URL;
   try {
     delete process.env.AWDESK_VEIL_URL;
