@@ -98,4 +98,38 @@ function tailTranscript(transcriptPath, { maxLines = 60, maxBytes = 512 * 1024 }
   }
 }
 
-module.exports = { listSessions, tailTranscript, harnessToken, DAEMON };
+const STATUS_ORDER = { working: 0, "waiting-input": 1, idle: 2 };
+
+function clip(text, n) {
+  const s = String(text || "").replace(/\s+/g, " ").trim();
+  return s.length > n ? `${s.slice(0, n - 1)}…` : s;
+}
+
+/**
+ * A short, prompt-sized brief of the owner's live sessions for the Command
+ * agent (owner, 2026-09-22: "have context of all of my active sessions and
+ * work"). Working sessions first. "Could not look" is said as such -- never an
+ * empty list, which would read as "nothing is running".
+ */
+function sessionsBrief(result, { max = 15 } = {}) {
+  if (!result || !result.ok) {
+    return `The owner's active sessions: unknown right now (${(result && result.note) || "no answer"}).`;
+  }
+  const rows = [...result.sessions].sort(
+    (a, b) => (STATUS_ORDER[a.status] ?? 3) - (STATUS_ORDER[b.status] ?? 3),
+  );
+  if (!rows.length) return "The owner has no active agent sessions right now.";
+  const lines = rows.slice(0, max).map((s) => {
+    const summary = s.last_activity_summary ? ` -- ${clip(s.last_activity_summary, 90)}` : "";
+    return `- [${s.status || "?"}] ${s.harness || "?"} ${String(s.id || "").slice(0, 12)}: ${clip(s.title, 70)}${summary}`;
+  });
+  const more = rows.length > max ? `\n(+${rows.length - max} more)` : "";
+  return (
+    `The owner's active agent sessions right now (${rows.length}), from the harness daemon:\n` +
+    `${lines.join("\n")}${more}\n` +
+    "When the owner asks about ongoing work, answer from these; to message or steer one, " +
+    "use the awsh MCP tools (awsh_send / awsh_say) with its id."
+  );
+}
+
+module.exports = { listSessions, tailTranscript, harnessToken, sessionsBrief, DAEMON };

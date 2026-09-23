@@ -71,11 +71,12 @@ function claudeStream(text, { tools = [] } = {}) {
 }
 
 function agentWith({ claude = null, fleetControl = fakeFleetControl(), relay = null,
-  backendResolver = undefined } = {}) {
+  backendResolver = undefined, sessionsContext = undefined } = {}) {
   const spawned = [];
   const agent = new CommandAgent({
     fleetControl,
     backendResolver,
+    sessionsContext,
     transcriptFile: tmpTranscript(),
     spawnImpl: (cmd, args, opts) => {
       spawned.push({ cmd, args, opts });
@@ -428,4 +429,23 @@ test("classifyCommand: ARC phrases map to the ARC verbs, and the long phrase win
   assert.deepEqual(classifyCommand("stop arc"), { kind: "fleet", action: "arc-stop" });
   assert.deepEqual(classifyCommand("arc start"), { kind: "fleet", action: "arc-start" });
   assert.equal(classifyCommand("tell me about the story arc").kind, "agent", "a bare 'arc' is not a verb");
+});
+
+test("CommandAgent: the live-sessions brief rides the system prompt; a failing lookup never blocks the command", async () => {
+  const brief = "The owner's active agent sessions right now (1), from the harness daemon:";
+  const { agent, spawned } = agentWith({ sessionsContext: async () => brief });
+  await agent.run("what are my sessions doing", { source: "voice" });
+  const args = spawned.find((s) => s.cmd === "claude").args;
+  const prompt = args[args.indexOf("--append-system-prompt") + 1];
+  assert.ok(prompt.includes(brief), "the brief reached the prompt");
+  assert.ok(prompt.startsWith("You are dispatched"), "the built-in floor stays first");
+
+  const failing = agentWith({ sessionsContext: async () => { throw new Error("daemon down"); } });
+  const result = await failing.agent.run("do it anyway", { source: "voice" });
+  assert.equal(result.ok, true);
+});
+
+test("CommandAgent: a fake spawn never reads the live daemon by default", () => {
+  const { agent } = agentWith();
+  assert.equal(agent.sessionsContext, null);
 });
