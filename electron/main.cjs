@@ -1299,6 +1299,35 @@ const voiceAsk = require("./voice-ask.cjs").createVoiceAsk({
   },
 });
 
+/**
+ * Ask a decision card aloud and apply the spoken reply: a number or an
+ * option's words answers it, anything else steers the raising session. A card
+ * answered by click while the question was out is left alone.
+ */
+async function answerCardByVoice(card) {
+  const { cardPrompt, matchReply } = require("./voice-card.cjs");
+  let res;
+  try {
+    res = await voiceAsk.ask(cardPrompt(card), { timeoutMs: 90000 });
+  } catch (error) {
+    debugLog("voice card ask failed", error && error.message);
+    return;
+  }
+  if (!res || !res.ok) return; // unanswered: the popup and the inbox still have it
+  if (!openDecisions.some((c) => c && c.id === card.id)) {
+    void speakAloud("That one was already answered.", undefined, undefined, "slot0", "service:awdesk-voice");
+    return;
+  }
+  const reply = matchReply(card, res.answer);
+  if (reply.kind === "answer") {
+    const ok = decisionCards.answerCard(card.id, reply.key, "answered by voice");
+    void speakAloud(ok ? `Answered: ${reply.label}.` : "I could not record that answer.", undefined, undefined, "slot0", "service:awdesk-voice");
+  } else if (reply.kind === "steer") {
+    const ok = decisionCards.steerCard(card.id, reply.text);
+    void speakAloud(ok ? "Sent that to the session." : "I could not send that.", undefined, undefined, "slot0", "service:awdesk-voice");
+  }
+}
+
 function toggleMicMute() {
   try {
     const { load, write, resolveInput } = require("./cast-config.cjs");
@@ -3546,7 +3575,14 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
           : (n === 1
               ? `A decision needs you: ${title}.`
               : `${n} decisions need you. The latest is: ${title}.`);
-        try { void speakAloud(phrase, "nova", undefined, "slot0", "service:awdesk-decisions"); } catch { /* best-effort */ }
+        // A NEW card is a spoken question the owner can answer out loud
+        // (voice-card.cjs); a backlog, a muted mic or an ask already waiting
+        // keeps the plain announcement. The popups below still open either way.
+        if (!isBacklog && lead.id && !micMuted() && !voiceAsk.waiting) {
+          void answerCardByVoice(lead);
+        } else {
+          try { void speakAloud(phrase, "nova", undefined, "slot0", "service:awdesk-decisions"); } catch { /* best-effort */ }
+        }
         try {
           if (isBacklog) {
             openInbox();                          // backlog: ONE console, no 30-popup storm
