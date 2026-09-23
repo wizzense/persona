@@ -502,7 +502,8 @@ class CommandAgent extends EventEmitter {
       let child;
       try {
         child = this.spawnImpl(this.claudePath, args, {
-          cwd: "C:\\AitherOS-Fresh",
+          // Same override the harness backend honours (command-harness.cjs).
+          cwd: process.env.AWDESK_COMMAND_CWD || "C:\\AitherOS-Fresh",
           stdio: ["ignore", "pipe", "pipe"],
           windowsHide: true,
           // The resolved profile rides the spawn env — never a settings.json

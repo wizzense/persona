@@ -449,3 +449,14 @@ test("CommandAgent: a fake spawn never reads the live daemon by default", () => 
   const { agent } = agentWith();
   assert.equal(agent.sessionsContext, null);
 });
+
+test("CommandAgent: AWDESK_COMMAND_CWD moves where the agent runs (same override as the harness backend)", async () => {
+  process.env.AWDESK_COMMAND_CWD = "/tmp/elsewhere";
+  try {
+    const { agent, spawned } = agentWith();
+    await agent.run("where am i", { source: "test" });
+    assert.equal(spawned.find((s) => s.cmd === "claude").opts.cwd, "/tmp/elsewhere");
+  } finally {
+    delete process.env.AWDESK_COMMAND_CWD;
+  }
+});
