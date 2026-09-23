@@ -32,6 +32,7 @@ The heavy lifting lives in electron/character-roster.cjs (forkCharacter,
 customiseOf, modificationAllowed) so the desk and this CLI cannot disagree
 about what a fork is; this file is the hands.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -64,7 +65,11 @@ def node_call(expression: str) -> tuple[int, str, str]:
     )
     proc = subprocess.run(
         ["node", "-e", script],
-        cwd=DESK_ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace",
+        cwd=DESK_ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
     )
     return proc.returncode, proc.stdout, proc.stderr
 
@@ -106,7 +111,9 @@ def cmd_list() -> int:
         except (OSError, ValueError):
             continue
         if record.get("base"):
-            rows.append((d.name, record["base"], record.get("source", ""), bool(record.get("customise"))))
+            rows.append(
+                (d.name, record["base"], record.get("source", ""), bool(record.get("customise")))
+            )
     if not rows:
         print("\n  no variants yet. Make one:")
         print("    python fork-character.py <base> <variant> --bone head=1.1\n")
@@ -116,8 +123,10 @@ def cmd_list() -> int:
         rating = jsnode(f"c.getRating({json.dumps(name)})")
         hidden = jsnode(f"c.hiddenReason({json.dumps(name)})")
         flag = "  " if not hidden else "* "
-        print(f"  {flag}{name:<44} <- {base:<28} {rating:<8} {'recipe' if has else 'EMPTY'}"
-              + (f"  [hidden: {hidden}]" if hidden else ""))
+        print(
+            f"  {flag}{name:<44} <- {base:<28} {rating:<8} {'recipe' if has else 'EMPTY'}"
+            + (f"  [hidden: {hidden}]" if hidden else "")
+        )
     print()
     return 0
 
@@ -130,8 +139,10 @@ def cmd_show(name: str) -> int:
     merged = jsnode(f"r.customiseOf({json.dumps(name)})")
     print(f"\n  {name}")
     print(f"    base         {record.get('base') or '(none -- an original)'}")
-    print(f"    rating       {jsnode(f'c.getRating({json.dumps(name)})')}"
-          f"   hidden: {jsnode(f'c.hiddenReason({json.dumps(name)})') or 'no'}")
+    print(
+        f"    rating       {jsnode(f'c.getRating({json.dumps(name)})')}"
+        f"   hidden: {jsnode(f'c.hiddenReason({json.dumps(name)})') or 'no'}"
+    )
     print(f"    licence      {record.get('licence') or '(not recorded)'}")
     print(f"    model        {jsnode(f'r.resolveModelFile({json.dumps(name)})') or 'UNRESOLVED'}")
     print(f"    recipe       {json.dumps(merged, ensure_ascii=False)}\n")
@@ -139,14 +150,20 @@ def cmd_show(name: str) -> int:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0],
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__.splitlines()[0], formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("base", nargs="?", help="the character to fork")
     ap.add_argument("variant", nargs="?", help="a short suffix: <base>-<variant>")
-    ap.add_argument("--bone", action="append", metavar="NAME=SCALE",
-                    help="scale a humanoid bone (head=1.1); 0.5-2, children move with it")
-    ap.add_argument("--shape", action="append", metavar="NAME=VALUE",
-                    help="hold an expression (happy=0.3); 0-1")
+    ap.add_argument(
+        "--bone",
+        action="append",
+        metavar="NAME=SCALE",
+        help="scale a humanoid bone (head=1.1); 0.5-2, children move with it",
+    )
+    ap.add_argument(
+        "--shape", action="append", metavar="NAME=VALUE", help="hold an expression (happy=0.3); 0-1"
+    )
     ap.add_argument("--tint", metavar="#RRGGBB", help="tint every material toward this colour")
     ap.add_argument("--tint-strength", type=float, default=1.0, metavar="0-1")
     ap.add_argument("--outline", type=float, metavar="WIDTH", help="MToon outline width")
@@ -178,14 +195,15 @@ def main() -> int:
     if materials:
         recipe["materials"] = materials
     if not recipe:
-        print("ERROR: a fork with an empty recipe is just a second name for the same "
-              "character. Give at least one of --bone / --shape / --tint / --outline.",
-              file=sys.stderr)
+        print(
+            "ERROR: a fork with an empty recipe is just a second name for the same "
+            "character. Give at least one of --bone / --shape / --tint / --outline.",
+            file=sys.stderr,
+        )
         return 2
 
     result = jsnode(
-        f"r.forkCharacter({json.dumps(args.base)},{json.dumps(args.variant)},"
-        f"{json.dumps(recipe)})"
+        f"r.forkCharacter({json.dumps(args.base)},{json.dumps(args.variant)},{json.dumps(recipe)})"
     )
     if not result or not result.get("ok"):
         print(f"REFUSED: {(result or {}).get('reason')}", file=sys.stderr)
