@@ -378,3 +378,13 @@ test("main.cjs RENDERS the tray from the registry, it does not hand-write it", (
   // and what it sets is that template, not a second hand-written one.
   assert.match(main.slice(set, set + 200), /Menu\.buildFromTemplate\(trayTemplate\)/);
 });
+
+test("voice.talk names what the hotkey does in the current talk mode", () => {
+  const reg = require("./command-registry.cjs");
+  const talk = reg.byId("voice.talk");
+  const says = (ctx, text) => assert.ok(reg.labelOf(talk, ctx).startsWith(text), reg.labelOf(talk, ctx));
+  says({ talkMode: "open", openMic: false }, "Turn open mic on");
+  says({ talkMode: "open", openMic: true }, "Turn open mic off");
+  says({ talkMode: "hold", listening: true }, "Stop listening");
+  says({}, "Speak to the agents (microphone)");
+});
