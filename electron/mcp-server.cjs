@@ -162,6 +162,7 @@ function createDeskMcpServer({
   onCommand = null,
   onDesktop = null,
   onSpeak = null,
+  onAsk = null,
   // Test/override seam for cast_describe (see describeCast). Production never
   // sets this — cast-config resolves CAST_FILE() itself (app.getPath("userData"),
   // or DESK_CAST_FILE).
@@ -654,6 +655,26 @@ function createDeskMcpServer({
       },
       async ({ text, voice, speed }) => {
         const result = await onSpeak({ text, voice, speed });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], isError: result?.ok === false };
+      },
+    );
+  }
+
+  if (onAsk != null) {
+    server.registerTool(
+      "ask_owner",
+      {
+        title: "Ask the owner a question out loud and wait for the spoken answer",
+        description:
+          "The desk avatar speaks the question, then listens: the owner answers by voice (hotkey, a click on the avatar, or open mic) and the transcript comes back here as `answer`. Use it for a decision or a fact only the owner has -- one short question. One ask at a time across every session; a second is refused while one waits. Fails with ok:false and a reason when the mic is muted, nothing was heard, or no answer came within timeout_s.",
+        inputSchema: {
+          question: z.string().min(1).max(500).describe("One short question, spoken as written."),
+          timeout_s: z.number().int().min(5).max(300).optional().describe("How long to wait for the answer (default 60)."),
+        },
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+      },
+      async ({ question, timeout_s }) => {
+        const result = await onAsk({ question, timeoutMs: (timeout_s || 60) * 1000 });
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], isError: result?.ok === false };
       },
     );

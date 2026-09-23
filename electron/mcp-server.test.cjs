@@ -476,3 +476,29 @@ test("list_animations is NOT registered when no lister is supplied", async (cont
   const tools = await client.listTools();
   assert.ok(!tools.tools.some((t) => t.name === "list_animations"));
 });
+
+test("ask_owner returns the owner's spoken answer and passes the timeout through", async (context) => {
+  const asked = [];
+  const mcpHandler = createDeskMcpHandler({
+    onAnimation: () => true,
+    onWindowAction: () => true,
+    getStatus: () => ({ windowVisible: true, voiceState: null, listener: null }),
+    onAsk: async ({ question, timeoutMs }) => {
+      asked.push({ question, timeoutMs });
+      return { question, ok: true, answer: "yes, ship it" };
+    },
+  });
+  const bridge = createBridgeServer({ port: 0, onEvent: () => {}, mcpHandler });
+  const address = await bridge.listen();
+  const client = new Client({ name: "desk-test-ask", version: "1.0.0" });
+  const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${address.port}/mcp`));
+  context.after(async () => { await client.close(); await bridge.close(); });
+  await client.connect(transport);
+
+  const tools = await client.listTools();
+  assert.ok(tools.tools.some((t) => t.name === "ask_owner"), "ask_owner must be registered when onAsk is supplied");
+  const result = await client.callTool({ name: "ask_owner", arguments: { question: "Ship it?", timeout_s: 30 } });
+  assert.equal(result.isError, false);
+  assert.equal(JSON.parse(result.content[0].text).answer, "yes, ship it");
+  assert.deepEqual(asked, [{ question: "Ship it?", timeoutMs: 30000 }]);
+});
