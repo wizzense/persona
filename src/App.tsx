@@ -8,6 +8,7 @@ import {
   type SetStateAction,
 } from 'react';
 
+import { browserMeter, createHandsFree } from './voice/handsFree';
 import { createPushToTalk } from './voice/pushToTalk';
 import { Scene } from './components/Scene';
 import { clearLevel, setLevel } from './hooks/voiceLevels';
@@ -164,9 +165,15 @@ function AvatarSceneApp() {
   // and kept in a ref: a recorder rebuilt on every render would lose the stream
   // it is holding.
   const talkRef = useRef<ReturnType<typeof createPushToTalk> | null>(null);
+  // Open mic / the hotkey's talk-until-quiet (src/voice/handsFree.ts). It owns
+  // one master stream while active and hands the recorder clones of it.
+  const handsFreeRef = useRef<ReturnType<typeof createHandsFree> | null>(null);
+  const speakingRef = useRef(false);
   if (!talkRef.current && typeof window !== 'undefined') {
     talkRef.current = createPushToTalk({
       getStream: async () => {
+        const shared = handsFreeRef.current?.cloneStream();
+        if (shared) return shared;
         // Plan: honour the Settings pane's device pick, read fresh each call
         // so a change there takes effect on the NEXT talk, no app restart.
         // Falls back to the system default on any failure -- an unreadable
@@ -200,6 +207,28 @@ function AvatarSceneApp() {
       onError: (message) => window.deskBridge?.voiceListenState?.(`error: ${message}`),
     });
   }
+  if (!handsFreeRef.current && talkRef.current && typeof window !== 'undefined') {
+    const talk = talkRef.current;
+    handsFreeRef.current = createHandsFree({
+      getStream: async () => {
+        let deviceId = '';
+        try { deviceId = (await window.deskBridge?.getMicDeviceId?.()) || ''; } catch { /* default */ }
+        try {
+          return await navigator.mediaDevices.getUserMedia(
+            deviceId ? { audio: { deviceId: { exact: deviceId } } } : { audio: true },
+          );
+        } catch {
+          if (deviceId) return navigator.mediaDevices.getUserMedia({ audio: true });
+          throw new Error('microphone unavailable');
+        }
+      },
+      meter: browserMeter,
+      talk,
+      isEchoing: () => speakingRef.current,
+      onError: (message) => window.deskBridge?.voiceListenState?.(`error: ${message}`),
+    });
+  }
+  useEffect(() => () => handsFreeRef.current?.disable(), []);
 
   useEffect(() => {
     const bridge = window.deskBridge;
@@ -296,8 +325,12 @@ function AvatarSceneApp() {
         // the mic is released on every exit path, including a throw from the
         // gateway -- a stream left open keeps the OS mic light on, which reads
         // as "it is still listening to me".
-        if (event.listening) void talkRef.current?.start();
+        if (event.listening && event.oneShot) void handsFreeRef.current?.oneShot();
+        else if (event.listening) void talkRef.current?.start();
         else talkRef.current?.stop();
+      } else if (event.type === 'open-mic') {
+        if (event.on) void handsFreeRef.current?.enableOpen();
+        else handsFreeRef.current?.disable();
       } else if (event.type === 'bubble') {
         const text = bubbleText(event.text);
         if (!text) return;
@@ -369,6 +402,8 @@ function AvatarSceneApp() {
     voice.phase === 'active' &&
     voice.activity === 'speaking' &&
     !voice.outputMuted;
+  // Open mic ignores the mic while the desk is talking (echo).
+  speakingRef.current = speaking;
 
   useEffect(() => {
     const startedSpeaking = speaking && !previousSpeaking.current;

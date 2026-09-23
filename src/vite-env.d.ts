@@ -94,7 +94,8 @@ type AvatarBridgeEvent =
   // Plan 40 slice C ("I also want to be able to talk back"): main asks the avatar
   // window to open the mic, because that window is up whenever the overlay is --
   // the deck's chat box was the only place the owner could speak from before.
-  | { type: 'listen'; listening: boolean }
+  | { type: 'listen'; listening: boolean; oneShot?: boolean }
+  | { type: 'open-mic'; on: boolean }
   // The content rater's full-body frames (main relays POST /roster/capture):
   // render each model whole and hand the JPEG back through
   // deck.saveCharacterFullBody. See src/thumbnails.ts renderVrmFullBody.

@@ -257,7 +257,10 @@ const COMMANDS = Object.freeze([
   Object.freeze({
     id: "voice.talk", group: "talk", accel: "Ctrl+Shift+Space", icon: "mic",
     surfaces: ["tray", "avatar-menu", "palette", "jumplist"],
-    label: (ctx = {}) => (ctx.listening ? "Stop listening" : "Speak to the agents (microphone)"),
+    label: (ctx = {}) => {
+      if (ctx.talkMode === "open") return ctx.openMic ? "Turn open mic off" : "Turn open mic on";
+      return ctx.listening ? "Stop listening" : "Speak to the agents (microphone)";
+    },
   }),
   // Plan: configurable voice + hotkeys (owner 2026-09-22: "let you click on the
   // avatar... enable voice mode or mute"). A dedicated mute toggle separate from
