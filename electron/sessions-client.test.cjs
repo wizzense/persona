@@ -102,3 +102,22 @@ test("tailTranscript: a missing path or file is a note, never a throw", () => {
   assert.equal(missing.ok, false);
   assert.match(missing.note, /cannot read transcript/);
 });
+
+test("sessionsBrief: working first, capped, and 'could not look' is never an empty list", () => {
+  const { sessionsBrief } = require("./sessions-client.cjs");
+  const brief = sessionsBrief({
+    ok: true,
+    sessions: [
+      { id: "idle-one-000000", status: "idle", harness: "awdk", title: "local loop" },
+      { id: "work-one-000000", status: "working", harness: "claude", title: "fixing the fleet", last_activity_summary: "ran the gates" },
+      { id: "wait-one-000000", status: "waiting-input", harness: "claude", title: "needs you" },
+    ],
+  }, { max: 2 });
+  const lines = brief.split("\n");
+  assert.match(lines[1], /^- \[working\] claude work-one-000: fixing the fleet -- ran the gates$/);
+  assert.match(lines[2], /^- \[waiting-input\]/);
+  assert.ok(brief.includes("(+1 more)"));
+  assert.ok(brief.includes("awsh_send"));
+  assert.match(sessionsBrief({ ok: false, sessions: [], note: "daemon unreachable" }), /unknown right now \(daemon unreachable\)/);
+  assert.equal(sessionsBrief({ ok: true, sessions: [] }), "The owner has no active agent sessions right now.");
+});

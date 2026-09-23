@@ -179,11 +179,23 @@ function classifyCommand(text) {
   return { kind: "agent" };
 }
 
+/** The live-sessions brief every agent prompt carries (sessions-client.cjs). */
+async function defaultSessionsContext() {
+  const { listSessions, sessionsBrief } = require("./sessions-client.cjs");
+  return sessionsBrief(await listSessions({ timeoutMs: 3000 }));
+}
+
 class CommandAgent extends EventEmitter {
   constructor({ fleetControl = null, spawnImpl = spawn, claudePath = null, relayPath = null,
-    transcriptFile = null, backendResolver = undefined } = {}) {
+    transcriptFile = null, backendResolver = undefined, sessionsContext = undefined } = {}) {
     super();
     this._backendResolver = backendResolver;
+    // What the owner's other sessions are doing, added to every agent prompt.
+    // Only the REAL spawn reads the live daemon by default: a test with a fake
+    // spawn must never make a network call it did not ask for.
+    this.sessionsContext = sessionsContext !== undefined
+      ? sessionsContext
+      : (spawnImpl === spawn ? defaultSessionsContext : null);
     this.fleetControl = fleetControl;
     this.spawnImpl = spawnImpl;
     // Injectable: the first test suite wrote to the OWNER's real transcript, so
@@ -453,6 +465,14 @@ class CommandAgent extends EventEmitter {
         phase: "run",
       });
     }
+    let sessionsNote = "";
+    if (typeof this.sessionsContext === "function") {
+      try {
+        sessionsNote = String((await this.sessionsContext()) || "");
+      } catch {
+        sessionsNote = ""; // context is a help, never a reason to refuse the command
+      }
+    }
     return new Promise((resolve, reject) => {
       // The built-in is the floor and is never replaceable: cast.json's
       // prompts.commandPersona / commandAppend are added AROUND it (see
@@ -467,6 +487,7 @@ class CommandAgent extends EventEmitter {
       } catch {
         systemPrompt = builtinPrompt;
       }
+      if (sessionsNote) systemPrompt = `${systemPrompt}\n\n${sessionsNote}`;
 
       const args = [
         "-p",

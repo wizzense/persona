@@ -1283,6 +1283,22 @@ function toggleListening() {
   refreshTrayMenu();
 }
 
+// A session asks the owner aloud and gets the spoken answer back (voice-ask.cjs).
+// While it waits, the next transcript is the ANSWER, not a new command.
+const voiceAsk = require("./voice-ask.cjs").createVoiceAsk({
+  speak: (question) => speakAloud(question, undefined, undefined, "slot0", "mcp:speak"),
+  listen: () => {
+    if (micMuted()) return { ok: false, error: "microphone is muted" };
+    // Open mic already hears the next sentence; otherwise record until quiet.
+    if (openMicOn) return { ok: true };
+    if (!avatarWindow || avatarWindow.isDestroyed()) showOverlay();
+    listenState = "listening";
+    sendToAvatar("listen", { listening: true, oneShot: true });
+    refreshTrayMenu();
+    return { ok: true };
+  },
+});
+
 function toggleMicMute() {
   try {
     const { load, write, resolveInput } = require("./cast-config.cjs");
@@ -2822,6 +2838,10 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
       refreshTrayMenu();
       if (!said) return { ok: false, error: "nothing was heard" };
       debugLog("voice heard", said.slice(0, 120));
+      if (voiceAsk.offer(said)) {
+        void speakAloud("Got it.", undefined, undefined, "slot0", "service:awdesk-voice");
+        return { ok: true, text: said, answered: true };
+      }
       try {
         void speakAloud("On it, asking now.", undefined, undefined, "slot0", "service:awdesk-voice");
         const result = await commandAction(said, { source: "voice" });
@@ -2835,6 +2855,9 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
     ipcMain.on("desk:voice-listen-state", (_event, state) => {
       const next = String(state || "idle");
       const prev = listenState;
+      // A failed capture ends a waiting ask with the reason. Under open mic a
+      // cough is not an answer: keep waiting until the ask's own timeout.
+      if (next.startsWith("error:") && !openMicOn) voiceAsk.fail(next.slice(6).trim());
       listenState = next;
       refreshTrayMenu();
       // The toggle was INVISIBLE (state only reached the tray label) -- so a
@@ -3354,6 +3377,7 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
       // U28: the MCP `speak` tool door -- origin STAMPED here, same reason as
       // the bridge's speakHandler above.
       onSpeak: ({ text, voice, speed }) => speakAloud(text, voice, speed, undefined, "mcp:speak"),
+      onAsk: ({ question, timeoutMs }) => voiceAsk.ask(question, { timeoutMs }),
       onDesktop: (surface) => {
         if (surface === "overlay") showLivingDesktop();
         else if (surface === "app") showDesktopApp();
