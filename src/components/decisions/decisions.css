@@ -1,0 +1,151 @@
+/*
+ * The Inbox / Decisions page -- the design grammar of electron/aither-ui.css
+ * (page head with title + one-line status, sub-tabs, 10px-radius cards, 11px
+ * uppercase section labels), scoped under .dx-* because this bundle also draws
+ * the transparent avatar window: aither-ui.css's html/body rules cannot be
+ * imported here. Tokens only (aither-tokens.css via src/styles.css); no colour
+ * literals.
+ */
+
+/* ── page frame ─────────────────────────────────────────────────────────── */
+.dx-shell { width: 100%; height: 100%; display: flex; flex-direction: column; overflow: hidden;
+  background: var(--bg-sunk); color: var(--fg); font: 13px/1.5 var(--font-sans);
+  border-radius: 14px; user-select: none; }
+.dx-head { flex: none; display: flex; align-items: center; gap: 12px; padding: 16px 20px 10px;
+  -webkit-app-region: drag; }
+.dx-head h1 { margin: 0; font-size: 18px; font-weight: 650; letter-spacing: -.01em; }
+/* Inside the console the shell's bar already says "Decisions"; keep the status line only. */
+html.embedded .dx-head h1 { display: none; }
+.dx-head .dx-sub { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dx-head button { -webkit-app-region: no-drag; }
+.dx-tabs { flex: none; display: flex; gap: 2px; padding: 0 16px; border-bottom: 1px solid var(--line); }
+.dx-tab { appearance: none; border: 0; background: none; color: var(--muted); cursor: pointer;
+  font: 550 13px/1 var(--font-sans); padding: 10px 12px 11px; position: relative;
+  display: inline-flex; align-items: center; gap: 6px; }
+.dx-tab:hover { color: var(--fg); }
+.dx-tab[aria-selected="true"] { color: var(--fg); }
+.dx-tab[aria-selected="true"]::after { content: ""; position: absolute; left: 8px; right: 8px;
+  bottom: -1px; height: 2px; border-radius: 2px; background: var(--brand); }
+.dx-count { display: inline-block; min-width: 18px; padding: 1px 6px; border-radius: 999px;
+  background: var(--warn); color: var(--background); font-size: 10px; font-weight: 700; text-align: center; }
+.dx-count.is-quiet { background: var(--surface-800); color: var(--surface-300); }
+.dx-body { flex: 1; min-height: 0; overflow-y: auto; padding: 12px 16px 20px; }
+.dx-stack { display: flex; flex-direction: column; gap: 12px; }
+.dx-foot { flex: none; padding: 6px 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; }
+.dx-grow { flex: 1; }
+
+/* ── cards and labels ───────────────────────────────────────────────────── */
+.dx-card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+.dx-card-head { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; }
+.dx-section { margin: 0; font-size: 11px; font-weight: 650; letter-spacing: .07em;
+  text-transform: uppercase; color: var(--surface-400); }
+.dx-note { font-size: 12px; color: var(--muted); margin: 0; }
+.dx-mono { font-family: var(--font-mono); font-size: 11px; }
+.dx-empty { color: var(--muted); padding: 28px 8px; text-align: center; font-size: 12px;
+  display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.dx-empty strong { color: var(--fg); font-size: 14px; }
+
+/* ── buttons, fields, chips ─────────────────────────────────────────────── */
+.dx-btn { appearance: none; display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid var(--line); background: var(--btn); color: var(--fg);
+  border-radius: 7px; padding: 5px 11px; font: 550 12px/1.2 var(--font-sans); cursor: pointer;
+  transition: background .12s, border-color .12s, color .12s; white-space: nowrap; }
+.dx-btn:hover { background: var(--btn-hi); }
+.dx-btn:disabled { opacity: .45; cursor: not-allowed; }
+.dx-btn.dx-primary { background: var(--brand); border-color: transparent; color: var(--primary-foreground); }
+.dx-btn.dx-primary:hover { filter: brightness(1.1); }
+.dx-btn.dx-ghost { background: none; border-color: transparent; color: var(--muted); }
+.dx-btn.dx-ghost:hover { color: var(--fg); background: var(--surface-900); }
+.dx-btn.dx-danger { color: var(--bad); }
+.dx-btn.dx-danger.is-armed { background: var(--bad); color: var(--background); border-color: transparent; }
+.dx-btn.dx-small { padding: 3px 9px; font-size: 11px; }
+.dx-shell .dx-btn kbd { font-size: 10px; padding: 0 4px; }
+.dx-input { appearance: none; width: 100%; min-width: 0; background: var(--bg-deep); color: var(--fg);
+  border: 1px solid var(--line); border-radius: 7px; padding: 6px 10px; font: 13px/1.3 var(--font-sans);
+  outline: none; user-select: text; }
+.dx-input:focus { border-color: var(--brand); }
+.dx-chip { appearance: none; display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+  border: 1px solid var(--line); background: none; color: var(--surface-300); border-radius: 999px;
+  padding: 3px 10px; font: 550 11px/1.4 var(--font-sans); }
+.dx-chip:hover { color: var(--fg); background: var(--surface-900); }
+.dx-chip[aria-pressed="true"] { color: var(--fg); border-color: var(--brand); background: var(--surface-800); }
+.dx-chip:disabled { opacity: .4; cursor: default; }
+.dx-chip-n { font-size: 10px; font-weight: 700; color: var(--muted); font-variant-numeric: tabular-nums; }
+.dx-tag { flex: none; font-size: 10px; font-weight: 600; padding: 1px 7px; border-radius: 999px;
+  background: var(--surface-800); color: var(--surface-300); max-width: 140px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dx-tag.dx-has-default { background: none; border: 1px solid var(--line); color: var(--muted); }
+.dx-sep { width: 1px; align-self: stretch; background: var(--line); margin: 0 4px; }
+.dx-shell kbd { font: 10px var(--font-mono); border: 1px solid var(--line); border-radius: 4px;
+  padding: 1px 5px; color: var(--surface-300); background: var(--surface-900); }
+
+/* ── dots ───────────────────────────────────────────────────────────────── */
+.dx-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--surface-500); }
+.dx-urg-critical { background: var(--bad); }
+.dx-urg-high { background: var(--warn); }
+.dx-urg-normal { background: var(--brand); }
+.dx-urg-low { background: var(--surface-500); }
+.dx-dot.dx-ok { background: var(--ok); }
+
+/* ── triage + bulk bars ─────────────────────────────────────────────────── */
+.dx-page { display: flex; flex-direction: column; gap: 10px; }
+.dx-triage { display: flex; flex-direction: column; gap: 8px; }
+.dx-triage-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.dx-search { flex: 1 1 220px; }
+.dx-seg { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+.dx-seg-label { font-size: 11px; color: var(--muted); padding: 0 8px; }
+.dx-seg-btn { appearance: none; border: 0; border-left: 1px solid var(--line); background: none; color: var(--muted);
+  font: 550 11px/1 var(--font-sans); padding: 7px 9px; cursor: pointer; }
+.dx-seg-btn:hover { color: var(--fg); }
+.dx-seg-btn[aria-pressed="true"] { background: var(--surface-800); color: var(--fg); }
+.dx-bulkbar { position: sticky; top: -12px; z-index: 2; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 6px 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+.dx-check-label { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--surface-300); cursor: pointer; }
+.dx-check { width: 14px; height: 14px; margin: 0; accent-color: var(--brand); cursor: pointer; flex: none; }
+.dx-keys { font-size: 11px; color: var(--muted); display: inline-flex; gap: 3px; align-items: center; }
+.dx-focus-gone { padding: 0 4px; }
+
+/* ── the list ───────────────────────────────────────────────────────────── */
+.dx-list { display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 10px; overflow: hidden; }
+.dx-group + .dx-group { border-top: 1px solid var(--line); }
+.dx-group-head { display: flex; align-items: center; gap: 8px; margin: 0; padding: 10px 12px 6px;
+  font-size: 11px; font-weight: 650; letter-spacing: .07em; text-transform: uppercase; color: var(--surface-400); }
+.dx-row { border-bottom: 1px solid var(--line); border-left: 2px solid transparent; }
+.dx-row:last-child { border-bottom: 0; }
+.dx-row.is-cursor { border-left-color: var(--brand); background: var(--surface-900); }
+.dx-row.is-selected { background: color-mix(in oklch, var(--brand), transparent 90%); }
+.dx-row.is-open { background: var(--surface-900); }
+.dx-row-line { display: flex; align-items: center; gap: 8px; padding: 0 10px; }
+.dx-row-main { appearance: none; flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px;
+  background: none; border: 0; color: inherit; text-align: left; cursor: pointer; padding: 8px 0;
+  font: inherit; }
+.dx-row-text { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 8px; }
+.dx-row-title { font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; max-width: 60%; }
+.dx-row.is-open .dx-row-title { white-space: normal; max-width: none; }
+.dx-row-sum { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 0; min-width: 0; }
+.dx-age { flex: none; min-width: 44px; text-align: right; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.dx-age.is-stale { color: var(--warn); }
+.dx-more { appearance: none; border: 0; border-top: 1px solid var(--line); background: none; color: var(--brand);
+  font: 550 12px/1 var(--font-sans); padding: 10px; cursor: pointer; }
+.dx-more:hover { background: var(--surface-900); }
+
+/* ── the expanded row ───────────────────────────────────────────────────── */
+.dx-detail { padding: 2px 14px 12px 42px; display: flex; flex-direction: column; gap: 8px; user-select: text; }
+.dx-detail-summary { margin: 0; white-space: pre-wrap; color: var(--surface-200); font-size: 13px; }
+.dx-detail-meta { margin: 0; display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11px; color: var(--muted); }
+.dx-due { color: var(--warn); }
+.dx-options { display: flex; flex-wrap: wrap; gap: 6px; }
+.dx-consequences { margin: 0; padding-left: 16px; font-size: 11px; color: var(--muted); }
+.dx-detail-foot { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.dx-steer { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; flex: 1 1 260px; }
+.dx-steer .dx-input { flex: 1 1 200px; }
+.dx-steer .dx-note { width: 100%; font-size: 11px; }
+
+/* ── awareness ──────────────────────────────────────────────────────────── */
+.dx-aw-list { display: flex; flex-direction: column; }
+.dx-aw-row { display: flex; align-items: center; gap: 10px; padding: 7px 2px; border-bottom: 1px solid var(--line); font-size: 12px; }
+.dx-aw-row:last-child { border-bottom: 0; }
+.dx-aw-label { flex: none; min-width: 90px; font-weight: 550; }
+.dx-aw-text { flex: 1; min-width: 0; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dx-aw-row.is-failing .dx-aw-text { color: var(--surface-200); }

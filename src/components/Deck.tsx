@@ -1,19 +1,22 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
+import {
+  useCallback, useEffect, useMemo, useRef, useState,
+  type CSSProperties, type DragEvent, type HTMLAttributes, type ReactNode,
+} from 'react';
 
 import { renderVrmThumbnail } from '../thumbnails';
+import { bulkApi } from './decisions/bridge';
+import { DecisionsPage } from './decisions/DecisionsPage';
+import { ageBucket, type DecisionCard } from './decisions/model';
+import { SystemAwareness } from './decisions/SystemAwareness';
+import './decisions/decisions.css';
 import {
   EMPTY_DECK_STATE,
-  cardWhere,
   clockLabel,
   clockTone,
   formatAge,
   normalizeWakes,
   cardLabel,
   dueLabel,
-  sharedCause,
-  transportNote,
-  otherChoices,
-  primaryChoice,
   reasonLabel,
   staleLabel,
   wakeActionMessage,
@@ -34,15 +37,6 @@ import {
  * second implementation.
  */
 
-function BellIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
-      <path d="M13.7 21a2 2 0 0 1-3.4 0" />
-    </svg>
-  );
-}
-
 function ChipIcon() {
   return (
     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -56,23 +50,6 @@ function ChatIcon() {
   return (
     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M21 12a8 8 0 0 1-8 8H4l2-3a8 8 0 1 1 15-5z" />
-    </svg>
-  );
-}
-
-function MonitorIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <rect x="3" y="4" width="18" height="13" rx="2" />
-      <path d="M8 21h8M12 17v4" />
-    </svg>
-  );
-}
-
-function TerminalIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M4 17l6-5-6-5M12 19h8" />
     </svg>
   );
 }
@@ -158,15 +135,19 @@ function bridgeSubscribe(listener: (event: Record<string, unknown>) => void): ()
   }
 }
 
-const URGENCY_TONE: Record<string, string> = {
-  critical: '#ff5d5d',
-  high: '#ff9f43',
-  normal: '#7aa2ff',
-  low: '#5d7f8f',
-};
+/** The inbox's sub-pages. Decisions own the scroll; messages, wakes and the
+ *  awareness panel sit behind their own tabs instead of stacking under 300 cards. */
+type InboxTab = 'decisions' | 'messages' | 'wakes' | 'system';
 
-function urgencyTone(urgency: string): string {
-  return URGENCY_TONE[urgency] ?? URGENCY_TONE.normal;
+/** `?card=<id>` — the console reloads the Inbox pane with it (console.html) so
+ *  "show me THIS card" opens the list with that card expanded. Read once. */
+function focusCardFromUrl(): string | null {
+  try {
+    const id = new URLSearchParams(window.location.search).get('card');
+    return id ? id : null;
+  } catch {
+    return null;
+  }
 }
 
 /** WAKES — awrise's scheduled jobs.
@@ -735,376 +716,6 @@ function ModelsMarketSection({
 }
 
 
-function ChevronLeftIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M15 5l-7 7 7 7" />
-    </svg>
-  );
-}
-
-function ChevronRightIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M9 5l7 7-7 7" />
-    </svg>
-  );
-}
-
-/** Flip THROUGH the cards one at a time instead of scrolling a stack — the
- *  owner's words: "you flip through them" (2026-08-25). One card owns the
- *  stage; prev/next arrows page through; the pop-out button spawns that card's
- *  own Tk answer window (awask window <id>), so the pop-up action cards stay
- *  reachable FROM the desk rather than living on a separate surface. */
-function CardFlipper({
-  cards,
-  nowMs,
-  onAnswer,
-  onPopout,
-}: {
-  cards: DeckDecision[];
-  nowMs: number;
-  onAnswer: (id: string, choice: string) => void;
-  onPopout: (id: string) => void;
-}) {
-  const [index, setIndex] = useState(0);
-  // An answered card shrinks the list; keep the index legal and on the SAME
-  // visual position (the next card slides into view).
-  const clamped = Math.min(index, Math.max(0, cards.length - 1));
-  const card = cards[clamped];
-  return (
-    <div className="deck-flipper">
-      <div className="deck-flipper-nav">
-        <button
-          className="deck-icon-btn"
-          title="Previous card"
-          disabled={clamped === 0}
-          onClick={() => setIndex(Math.max(0, clamped - 1))}
-        >
-          <ChevronLeftIcon />
-        </button>
-        <span className="deck-flipper-count">
-          {clamped + 1} of {cards.length}
-        </span>
-        <button
-          className="deck-icon-btn"
-          title="Next card"
-          disabled={clamped >= cards.length - 1}
-          onClick={() => setIndex(Math.min(cards.length - 1, clamped + 1))}
-        >
-          <ChevronRightIcon />
-        </button>
-        <button
-          className="deck-chip deck-flipper-popout"
-          title="Open this card in its own pop-out answer window"
-          onClick={() => onPopout(card.id)}
-        >
-          Pop out
-        </button>
-      </div>
-      <DecisionRow card={card} nowMs={nowMs} onAnswer={onAnswer} />
-    </div>
-  );
-}
-
-function DecisionRow({
-  card,
-  nowMs,
-  onAnswer,
-}: {
-  card: DeckDecision;
-  nowMs: number;
-  onAnswer: (id: string, choice: string) => void;
-}) {
-  const primary = primaryChoice(card);
-  const others = otherChoices(card);
-  const where = cardWhere(card);
-  return (
-    <article className="deck-card">
-      <header className="deck-card-head">
-        <span className="deck-urgency-dot" style={{ background: urgencyTone(card.urgency) }} />
-        <h3 className="deck-card-title">{card.title}</h3>
-        <time className="deck-card-age">{formatAge(card.createdAt, nowMs)}</time>
-      </header>
-      {card.summary ? <p className="deck-card-summary">{card.summary}</p> : null}
-      {where ? <p className="deck-card-where">{where}</p> : null}
-      <footer className="deck-card-actions">
-        {primary ? (
-          <button
-            className="deck-btn deck-btn-primary"
-            title={`Answer "${primary.label}" — recorded, and the asking session is told right away`}
-            onClick={() => onAnswer(card.id, primary.key)}
-          >
-            {primary.label}
-          </button>
-        ) : (
-          <button
-            className="deck-btn deck-btn-primary"
-            title="Open this card in the full answer window"
-            onClick={() => void bridgeDeck()?.action('popup')}
-          >
-            Open answer window
-          </button>
-        )}
-        {others.map((option) => (
-          <button
-            key={option.key}
-            className="deck-btn"
-            title={`Answer "${option.label}" instead`}
-            onClick={() => onAnswer(card.id, option.key)}
-          >
-            {option.label}
-          </button>
-        ))}
-      </footer>
-      <SteerBox card={card} />
-    </article>
-  );
-}
-
-/**
- * "None of these — do this instead." The card plane's STEER verb, which the
- * deck never had: until 2026-09-08 a card whose right answer was not one of
- * its options had to be retyped in a terminal (`awask steer <id> "..."`), so
- * the deck was a multiple-choice quiz over work orders. The text goes to the
- * asking session and is mirrored to the coordination channel.
- */
-function SteerBox({ card }: { card: DeckDecision }) {
-  const [open, setOpen] = useState(false);
-  const [text, setText] = useState('');
-  const [note, setNote] = useState<string | null>(null);
-
-  const send = () => {
-    const body = text.trim();
-    if (!body) return;
-    const deck = bridgeDeck() as unknown as { steer?: (id: string, t: string) => Promise<boolean> } | null;
-    if (!deck?.steer) {
-      setNote('Steering needs a newer Desk build.');
-      return;
-    }
-    setText('');
-    void deck
-      .steer(card.id, body)
-      // "Handed to awask", never "sent to the session": the write is a DETACHED
-      // spawn by design (nothing may block or flash on the owner's desktop), so
-      // main learns that the process started, not that the store took it. The
-      // deck's answer/cancel buttons have always had this shape; saying
-      // "delivered" would be the one claim we cannot make.
-      .then((ok) => setNote(ok ? 'Handed to awask.' : 'Refused — awask did not start.'))
-      .catch(() => setNote('Refused — awask is unreachable.'));
-  };
-
-  if (!open) {
-    return (
-      <button
-        className="deck-card-steer-open"
-        title="Tell the asking session what to do instead of picking one of its options"
-        onClick={() => setOpen(true)}
-      >
-        Something else…
-      </button>
-    );
-  }
-  return (
-    <div className="deck-card-steer">
-      <input
-        className="deck-card-steer-input"
-        autoFocus
-        placeholder="Do this instead…"
-        value={text}
-        onChange={(event) => {
-          setText(event.target.value);
-          if (note) setNote(null);
-        }}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter') send();
-          if (event.key === 'Escape') setOpen(false);
-        }}
-      />
-      <button className="deck-btn" onClick={send}>Send</button>
-      {note ? <p className="deck-card-steer-note">{note}</p> : null}
-    </div>
-  );
-}
-
-/**
- * System awareness (#9): one panel over the five snapshot sources main
- * serves (system / voice / vision / desktop / connect). Every source fails
- * soft by contract — an unavailable backend renders its reason, never a
- * broken panel.
- */
-type SnapshotSource = Record<string, unknown> | null | undefined;
-interface AwarenessState {
-  ok: boolean;
-  system?: SnapshotSource;
-  agents?: SnapshotSource;
-  status?: SnapshotSource;
-  window?: SnapshotSource;
-  context?: SnapshotSource;
-  workspace?: SnapshotSource;
-  terminals?: { total?: number; note?: string } | null;
-  reason?: string;
-}
-
-function noteOf(src: SnapshotSource): string {
-  if (!src || typeof src !== 'object') return '';
-  const note = (src as Record<string, unknown>).note;
-  return typeof note === 'string' ? note : '';
-}
-
-function SystemSection() {
-  const [awareness, setAwareness] = useState<Record<string, AwarenessState | undefined>>({});
-  const [busy, setBusy] = useState(false);
-
-  const runAwareness = useCallback(() => {
-    const bridge = window.deskBridge as unknown as {
-      system?: {
-        snapshot?: () => Promise<AwarenessState>;
-        voice?: () => Promise<AwarenessState>;
-        vision?: () => Promise<AwarenessState>;
-        desktop?: () => Promise<AwarenessState>;
-        connect?: () => Promise<AwarenessState>;
-      };
-    } | undefined;
-    if (!bridge?.system) return;
-    setBusy(true);
-    const guard = (name: string) => (res: AwarenessState | undefined) => {
-      setAwareness((prev) => ({ ...prev, [name]: res ?? { ok: false, reason: 'unreachable' } }));
-    };
-    void bridge.system.snapshot?.().then(guard('system')).finally(() => setBusy(false));
-    void bridge.system.voice?.().then(guard('voice'));
-    void bridge.system.vision?.().then(guard('vision'));
-    void bridge.system.desktop?.().then(guard('desktop'));
-    void bridge.system.connect?.().then(guard('connect'));
-  }, []);
-
-  useEffect(() => {
-    runAwareness();
-  }, [runAwareness]);
-
-  const sys = awareness.system;
-  const voice = awareness.voice;
-  const vision = awareness.vision;
-  const desktop = awareness.desktop;
-  const connect = awareness.connect;
-
-  const systemObj = sys?.system as { services?: unknown[] } | null | undefined;
-  const agentsObj = sys?.agents as { activities?: unknown[] } | null | undefined;
-  const serviceCount = Array.isArray(systemObj?.services)
-    ? systemObj.services.length
-    : systemObj && typeof systemObj === 'object' && !noteOf(systemObj)
-      ? Object.keys(systemObj).length
-      : '?';
-  const agentsCount = Array.isArray(agentsObj?.activities)
-    ? agentsObj.activities.length
-    : agentsObj && typeof agentsObj === 'object' && !noteOf(agentsObj)
-      ? Object.keys(agentsObj).length
-      : '?';
-
-  const voiceLine = (() => {
-    if (!voice?.ok) return `unreachable — ${voice?.reason ?? ''}`;
-    const status = voice.status as { status?: string; error?: string } | null | undefined;
-    if (status?.status === 'error') return `down — ${status.error ?? 'service error'}`;
-    const note = noteOf(voice.status as SnapshotSource);
-    if (note) return note;
-    return 'up';
-  })();
-
-  const visionLine = (() => {
-    if (!vision?.ok) return `unreachable — ${vision?.reason ?? ''}`;
-    const error = (vision.status as { error?: string } | null | undefined)?.error;
-    if (error) return `down — ${error}`;
-    const note = noteOf(vision.status as SnapshotSource);
-    if (note) return note;
-    return 'up';
-  })();
-
-  const desktopLine = (() => {
-    if (!desktop?.ok) return `unreachable — ${desktop?.reason ?? ''}`;
-    const win = desktop.window as
-      | { available?: boolean; process?: string; title?: string; message?: string; reason?: string }
-      | null | undefined;
-    if (win?.available === false) {
-      return `unavailable — ${win.message ?? win.reason ?? 'platform'}`;
-    }
-    const winNote = noteOf(desktop.window as SnapshotSource);
-    if (winNote) return winNote;
-    if (win?.process) return `${win.process}${win.title ? ` — ${win.title}` : ''}`;
-    return 'no window data';
-  })();
-
-  const connectLine = (() => {
-    if (!connect?.ok) return `unreachable — ${connect?.reason ?? ''}`;
-    const ws = connect.workspace as { profile?: string | null } | null | undefined;
-    const wsNote = noteOf(connect.workspace as SnapshotSource);
-    if (wsNote) return wsNote;
-    const profile = ws?.profile ?? 'no active workspace profile';
-    const tt = connect.terminals?.total ?? 0;
-    const ttNote = connect.terminals?.note;
-    return `${profile} · ${tt} terminal session(s)${ttNote ? ` — ${ttNote}` : ''}`;
-  })();
-
-  // One sentence per source, in words -- and when every source failed for the SAME
-  // reason, that reason ONCE instead of once per row.
-  const lines = [voiceLine, visionLine, desktopLine, connectLine].map((line) =>
-    transportNote(line.replace(/^(unreachable|down|unavailable) — /, '')));
-  const cause = sharedCause(lines);
-  const [voiceText, visionText, desktopText, connectText] = lines;
-
-  return (
-    <section className="deck-section" aria-label="System awareness">
-      <h2 className="deck-section-head">
-        <span className="deck-section-icon"><MonitorIcon /></span>
-        System awareness
-        <button
-          className="deck-chip"
-          title="Refresh every awareness source"
-          onClick={() => runAwareness()}
-          disabled={busy}
-        >
-          {busy ? '…' : 'Refresh'}
-        </button>
-      </h2>
-      <div className="deck-row deck-row-static">
-        <span className="deck-row-label">System</span>
-        <span className="deck-row-label">
-          {serviceCount === '?' && agentsCount === '?'
-            ? 'unknown — the platform did not answer'
-            : `${serviceCount} service key(s) · ${agentsCount} agent activity key(s)`}
-        </span>
-      </div>
-      {cause ? (
-        <div className="deck-row deck-row-static deck-row-cause">
-          <span className="deck-row-label">Voice · Vision · Desktop · Workspace</span>
-          <span className="deck-row-label">all read through one door, and {cause}. Nothing here is broken on its own.</span>
-        </div>
-      ) : null}
-      {cause ? null : (
-        <div className="deck-row deck-row-static">
-          <span className="deck-row-label">Voice</span>
-          <span className="deck-row-label">{voiceText}</span>
-        </div>
-      )}
-      {cause ? null : (
-        <div className="deck-row deck-row-static">
-          <span className="deck-row-label">Vision</span>
-          <span className="deck-row-label">{visionText}</span>
-        </div>
-      )}
-      {cause ? null : (
-        <div className="deck-row deck-row-static">
-          <span className="deck-row-label">Desktop</span>
-          <span className="deck-row-label">{desktopText}</span>
-        </div>
-      )}
-      <div className="deck-row deck-row-static">
-        <span className="deck-row-label">Workspace</span>
-        <span className="deck-row-label">{cause ? 'see above' : connectText}</span>
-      </div>
-    </section>
-  );
-}
-
 /**
  * The Console's two content panes, sharing ONE deck-state subscription.
  *
@@ -1119,6 +730,10 @@ function SystemSection() {
 export function Deck({ view = 'inbox' }: { view?: 'inbox' | 'characters' } = {}) {
   const isCharacters = view === 'characters';
   const [state, setState] = useState<DeckState>(EMPTY_DECK_STATE);
+  const [tab, setTab] = useState<InboxTab>('decisions');
+  const [focusId] = useState(focusCardFromUrl);
+  // Feature-detected once: a preload without deck.bulk hides Dismiss.
+  const [bulk] = useState(bulkApi);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const answering = useRef<Set<string>>(new Set());
   // The per-agent DIRECT chat (owner ask 2026-08-25): one open conversation at
@@ -1228,6 +843,22 @@ export function Deck({ view = 'inbox' }: { view?: 'inbox' | 'characters' } = {})
     });
   }, []);
 
+  /** Optimistic removal for the ids a bulk call handed to awask; the watcher's
+   *  next deck-state push confirms or corrects, exactly like a single answer. */
+  const handleBulkDone = useCallback((ids: string[]) => {
+    const gone = new Set(ids);
+    setState((current) => {
+      const decisions = current.decisions.filter((c) => !gone.has(c.id));
+      const removed = current.decisions.length - decisions.length;
+      return {
+        ...current,
+        decisions,
+        openCount: Math.max(0, current.openCount - removed),
+        totalCount: current.totalCount === undefined ? undefined : Math.max(0, current.totalCount - removed),
+      };
+    });
+  }, []);
+
   const runAction = useCallback((name: string, arg?: string) => {
     void bridgeDeck()?.action(name, arg);
   }, []);
@@ -1317,39 +948,91 @@ export function Deck({ view = 'inbox' }: { view?: 'inbox' | 'characters' } = {})
     }
   }, [chatRootId, chatTarget, runAction, state.relayChannel]);
 
+  const drag = {
+    onDragOver: (event: DragEvent) => {
+      event.preventDefault();
+      setDragOver(true);
+    },
+    onDragLeave: () => setDragOver(false),
+    onDrop: (event: DragEvent) => {
+      event.preventDefault();
+      setDragOver(false);
+      handleDrop(event.dataTransfer.files);
+    },
+  };
+  const dropOverlay = dragOver ? (
+    <div className="deck-drop-overlay">
+      <div className="deck-drop-overlay-box">
+        <strong>Drop on Aither</strong>
+        <span>I'll look at it, or put it in the knowledge base</span>
+      </div>
+    </div>
+  ) : null;
+  // Drop-to-avatar verdicts: newest first. The verdict line is the whole
+  // feedback — images/audio get a description/transcript, docs get
+  // chunk/entity counts, failures get the reason.
+  const dropsSection = drops.length > 0 ? (
+    <section className="deck-section" aria-label="Drops">
+      <h2 className="deck-section-head">
+        <span className="deck-section-icon"><DeskIcon /></span>
+        Drops
+      </h2>
+      {drops.map((drop, index) => (
+        <div className={`deck-drop-row ${drop.ok ? 'deck-drop-ok' : 'deck-drop-err'}`} key={`${drop.name}-${index}`}>
+          <span className="deck-drop-kind">
+            {drop.ok ? (drop.kind ?? 'file') : '✗'}
+          </span>
+          <span className="deck-drop-text">
+            <strong>{drop.name}</strong>
+            {drop.summary ? <span>{drop.summary}</span> : null}
+            {drop.reason ? <span className="deck-drop-reason">{drop.reason}</span> : null}
+          </span>
+        </div>
+      ))}
+    </section>
+  ) : null;
+
+  if (!isCharacters) {
+    return (
+      <InboxPage
+        state={state}
+        nowMs={nowMs}
+        tab={tab}
+        onTab={setTab}
+        focusId={focusId}
+        bulk={bulk}
+        drag={drag}
+        overlay={dropOverlay}
+        drops={dropsSection}
+        onAnswer={handleAnswer}
+        onBulkDone={handleBulkDone}
+        runAction={runAction}
+        wakes={(
+          <WakesSection
+            wakes={state.wakes}
+            nowMs={nowMs}
+            notes={wakeNotes}
+            pending={wakePending}
+            onAction={handleWakeAction}
+          />
+        )}
+      />
+    );
+  }
+
   return (
     <main
       className="deck"
-      onDragOver={(event) => {
-        event.preventDefault();
-        setDragOver(true);
-      }}
-      onDragLeave={() => setDragOver(false)}
-      onDrop={(event) => {
-        event.preventDefault();
-        setDragOver(false);
-        handleDrop(event.dataTransfer.files);
-      }}
+      {...drag}
     >
-      {dragOver ? (
-        <div className="deck-drop-overlay">
-          <div className="deck-drop-overlay-box">
-            <strong>Drop on Aither</strong>
-            <span>I'll look at it, or put it in the knowledge base</span>
-          </div>
-        </div>
-      ) : null}
+      {dropOverlay}
       <header className="deck-header">
         <span className="deck-header-icon"><DeskIcon /></span>
-        <h1 className="deck-title">Inbox</h1>
-        <span className={`deck-count ${state.openCount > 0 ? 'deck-count-live' : ''}`}>
-          {state.openCount > 0 ? `${state.openCount} waiting` : 'all clear'}
-          {(state.totalCount ?? 0) > state.openCount ? ` · ${(state.totalCount ?? 0) - state.openCount} FYI` : ''}
-        </span>
+        <h1 className="deck-title">Characters</h1>
         <button
           className="deck-close"
           aria-label="Close panel"
-          title="Close the inbox (the bell, the tray badge and the console's Inbox tab reopen it)"
+          title="Close this panel"
           onClick={() => bridgeDeck()?.close()}
         >
           <CloseIcon />
@@ -1357,76 +1040,10 @@ export function Deck({ view = 'inbox' }: { view?: 'inbox' | 'characters' } = {})
       </header>
 
       <div className="deck-body">
-        {/* Drop-to-avatar inbox: newest first. The verdict line is the whole
-            feedback — images/audio get a description/transcript, docs get
-            chunk/entity counts, failures get the reason. */}
-        {drops.length > 0 ? (
-          <section className="deck-section" aria-label="Drops">
-            <h2 className="deck-section-head">
-              <span className="deck-section-icon"><DeskIcon /></span>
-              Drops
-            </h2>
-            {drops.map((drop, index) => (
-              <div className={`deck-drop-row ${drop.ok ? 'deck-drop-ok' : 'deck-drop-err'}`} key={`${drop.name}-${index}`}>
-                <span className="deck-drop-kind">
-                  {drop.ok ? (drop.kind ?? 'file') : '✗'}
-                </span>
-                <span className="deck-drop-text">
-                  <strong>{drop.name}</strong>
-                  {drop.summary ? <span>{drop.summary}</span> : null}
-                  {drop.reason ? <span className="deck-drop-reason">{drop.reason}</span> : null}
-                </span>
-              </div>
-            ))}
-          </section>
-        ) : null}
-        {/* CONSOLIDATED 2026-09-13 (owner: "notifications in the middle of this
-            desk menu wtf"). This pane IS the inbox: what needs an answer first,
-            then what the agents are saying, then the room. The launchers that
-            used to sit above it are console panes and tray items now; the
-            avatar controls moved to the avatar's own right-click menu. */}
-        <section className="deck-section" aria-label="Decisions">
-          <h2 className="deck-section-head">
-            <span className="deck-section-icon"><BellIcon /></span>
-            Decisions
-            {state.openCount > 0 ? <span className="deck-section-count">{state.openCount}</span> : null}
-          </h2>
-          {state.decisions.length === 0 ? (
-            <p className="deck-empty">Nothing waiting — every session is unblocked.</p>
-          ) : (
-            <CardFlipper
-              cards={state.decisions}
-              nowMs={nowMs}
-              onAnswer={handleAnswer}
-              onPopout={(id) => runAction('popout-card', id)}
-            />
-          )}
-          {state.decisions.length > 0 ? (
-            <button className="deck-row" title="Every waiting card in its own answer window" onClick={() => runAction('popup')}>
-              <span className="deck-row-icon"><TerminalIcon /></span>
-              <span className="deck-row-label">Answer window</span>
-            </button>
-          ) : null}
-        </section>
-
-        <WakesSection
-          wakes={state.wakes}
-          nowMs={nowMs}
-          notes={wakeNotes}
-          pending={wakePending}
-          onAction={handleWakeAction}
-        />
-
-        <RelaySection
-          relay={state.relay}
-          channel={state.relayChannel}
-          nowMs={nowMs}
-          onPost={(text) => runAction('relay-post', text)}
-        />
-
-        <SystemSection />
-
-        <section className="deck-section" aria-label="Avatars" hidden={!isCharacters}>
+        {dropsSection}
+        {/* The inbox (decisions, wakes, messages, awareness) is its own pane —
+            InboxPage below; this view is bodies only (owner, 2026-09-20). */}
+        <section className="deck-section" aria-label="Avatars">
           <h2 className="deck-section-head">
             <span className="deck-section-icon"><DeskIcon /></span>
             Avatars
@@ -1505,21 +1122,139 @@ export function Deck({ view = 'inbox' }: { view?: 'inbox' | 'characters' } = {})
           />
         ) : null}
 
-        {isCharacters ? (
-          <ModelsMarketSection
-            characters={state.characters}
-            characterModels={state.characterModels ?? {}}
-            activeCharacter={state.activeCharacter}
-            agentCharacters={state.agentCharacters}
-            onAction={runAction}
-          />
-        ) : null}
-
+        <ModelsMarketSection
+          characters={state.characters}
+          characterModels={state.characterModels ?? {}}
+          activeCharacter={state.activeCharacter}
+          agentCharacters={state.agentCharacters}
+          onAction={runAction}
+        />
       </div>
 
       <footer className="deck-footer">
-        inbox · {state.openCount} waiting · {state.relay.length} in {state.relayChannel}
+        characters · {state.slots.length} on stage · {state.characters.length} installed
       </footer>
+    </main>
+  );
+}
+
+/**
+ * The Inbox pane (`?deck=1`), redesigned 2026-09-23 (owner: "completely redesign
+ * all of this"). It showed "298 waiting · 1 of 302" and paged cards one at a
+ * time, with wakes, #agents and five identical awareness errors stacked under
+ * the card. Now: a page head with a one-line status, sub-tabs, and the
+ * Decisions LIST (search, facets, bulk, keyboard) owning the scroll; messages,
+ * wakes and awareness each behind their own tab.
+ */
+function InboxPage({
+  state,
+  nowMs,
+  tab,
+  onTab,
+  focusId,
+  bulk,
+  drag,
+  overlay,
+  drops,
+  wakes,
+  onAnswer,
+  onBulkDone,
+  runAction,
+}: {
+  state: DeckState;
+  nowMs: number;
+  tab: InboxTab;
+  onTab: (tab: InboxTab) => void;
+  focusId: string | null;
+  bulk: ReturnType<typeof bulkApi>;
+  drag: Pick<HTMLAttributes<HTMLElement>, 'onDragOver' | 'onDragLeave' | 'onDrop'>;
+  overlay: ReactNode;
+  drops: ReactNode;
+  wakes: ReactNode;
+  onAnswer: (id: string, choice: string) => void;
+  onBulkDone: (ids: string[]) => void;
+  runAction: (name: string, arg?: string) => void;
+}) {
+  const cards = state.decisions as DecisionCard[];
+  const status = useMemo(() => {
+    const fyi = (state.totalCount ?? 0) - state.openCount;
+    const today = cards.filter((c) => ageBucket(c.createdAt, nowMs) === 'today').length;
+    const oldest = cards.reduce((min, c) => (c.createdAt && c.createdAt < min ? c.createdAt : min), Infinity);
+    const parts = [state.openCount > 0 ? `${state.openCount} waiting` : 'all clear'];
+    if (fyi > 0) parts.push(`${fyi} FYI`);
+    if (cards.length > 0) parts.push(`${today} new today`);
+    if (Number.isFinite(oldest)) parts.push(`oldest ${formatAge(oldest, nowMs)}`);
+    return parts.join(' · ');
+  }, [cards, nowMs, state.openCount, state.totalCount]);
+
+  const tabs: Array<{ id: InboxTab; label: string; count: number; loud: boolean }> = [
+    { id: 'decisions', label: 'Decisions', count: cards.length, loud: state.openCount > 0 },
+    { id: 'messages', label: 'Messages', count: state.relay.length, loud: false },
+    { id: 'wakes', label: 'Wakes', count: state.wakes.failing || state.wakes.wakes.length, loud: state.wakes.failing > 0 },
+    { id: 'system', label: 'System', count: 0, loud: false },
+  ];
+
+  return (
+    <main className="dx-shell" {...drag}>
+      {overlay}
+      <header className="dx-head">
+        <h1>Decisions</h1>
+        <span className="dx-sub" role="status">{status}</span>
+        <span className="dx-grow" />
+        <button
+          type="button"
+          className="deck-close"
+          aria-label="Close panel"
+          title="Close the inbox (the bell, the tray badge and the console's Inbox tab reopen it)"
+          onClick={() => bridgeDeck()?.close()}
+        >
+          <CloseIcon />
+        </button>
+      </header>
+      <nav className="dx-tabs" role="tablist" aria-label="Inbox sections">
+        {tabs.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            role="tab"
+            className="dx-tab"
+            aria-selected={tab === t.id}
+            onClick={() => onTab(t.id)}
+          >
+            {t.label}
+            {t.count > 0 ? <span className={`dx-count${t.loud ? '' : ' is-quiet'}`}>{t.count}</span> : null}
+          </button>
+        ))}
+      </nav>
+      <div className="dx-body">
+        <div className="dx-stack">
+          {drops}
+          {tab === 'decisions' ? (
+            <DecisionsPage
+              cards={cards}
+              nowMs={nowMs}
+              focusId={focusId}
+              onAnswer={onAnswer}
+              onPopout={(id) => runAction('popout-card', id)}
+              onOpenQueue={() => runAction('popup')}
+              bulk={bulk}
+              onBulkDone={onBulkDone}
+            />
+          ) : null}
+          {tab === 'messages' ? (
+            <div className="dx-card">
+              <RelaySection
+                relay={state.relay}
+                channel={state.relayChannel}
+                nowMs={nowMs}
+                onPost={(text) => runAction('relay-post', text)}
+              />
+            </div>
+          ) : null}
+          {tab === 'wakes' ? <div className="dx-card">{wakes}</div> : null}
+          {tab === 'system' ? <SystemAwareness /> : null}
+        </div>
+      </div>
     </main>
   );
 }
