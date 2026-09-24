@@ -21,7 +21,7 @@
  * tree has a test file (stage-window.cjs, sessions-window.cjs, fleet-window.cjs
  * and command-window.cjs are all untested): `ipcMain.handle` is not reachable
  * without a real Electron process. `castHandlers(getImpl)` is pure -- no
- * electron import, no BrowserWindow -- so cast-window.test.cjs can drive
+ * electron import, no window -- so cast-window.test.cjs can drive
  * every verb headless by calling the returned functions directly, and
  * `ensureCastIpc` becomes a thin loop handing that SAME map to real
  * `ipcMain.handle` calls.
@@ -31,8 +31,6 @@
  * instance lock, which would make this module unrequirable from a second
  * process, i.e. unrequirable from `node --test`.
  */
-
-const path = require("node:path");
 
 // Same lazy-require rule as the other window modules: loadable under
 // `node --test` without Electron ever being imported at module scope.
@@ -194,52 +192,33 @@ function ensureCastIpc(impl) {
   }
 }
 
-let castWindow = null;
+// The window itself is presentation.cjs's route "cast" (slice 3, P2): its size,
+// title, preload (cast-preload.cjs), page (cast.html) and single-instance
+// show+focus live in ROUTE_WINDOWS.cast. This module keeps castHandlers and its
+// IPC; create/close/isOpen are wrappers.
+//
+// Required LAZILY, not at module scope: presentation.cjs requires THIS module at
+// its own top level, so a top-level require here would hand back presentation's
+// half-built exports (an empty object) whenever presentation loads first.
+function presentation() {
+  return require("./presentation.cjs");
+}
+
+const ROUTE = "cast";
 
 function createCastWindow() {
   ensureCastIpc();
-  const { BrowserWindow } = electron();
-  if (castWindow && !castWindow.isDestroyed()) {
-    castWindow.show();
-    castWindow.focus();
-    return castWindow;
-  }
-  castWindow = new BrowserWindow({
-    width: 860,
-    height: 680,
-    minWidth: 560,
-    minHeight: 460,
-    show: false,
-    title: "Aither Cast",
-    backgroundColor: "#0f1218",
-    autoHideMenuBar: true,
-    webPreferences: {
-      preload: path.join(__dirname, "cast-preload.cjs"),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-    },
-  });
-  // The same fence every other desk window carries.
-  castWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-  castWindow.webContents.on("will-navigate", (event) => event.preventDefault());
-  castWindow.once("ready-to-show", () => {
-    castWindow.show();
-    castWindow.focus();
-  });
-  castWindow.on("closed", () => {
-    castWindow = null;
-  });
-  void castWindow.loadFile(path.join(__dirname, "cast.html"));
-  return castWindow;
+  // Deny-open, no-navigate, show+focus on ready and the dropped handle on
+  // 'closed' are presentation's openRouteWindow -- the same fence every desk window carries.
+  return presentation().openRouteWindow(ROUTE, { electron: electron() });
 }
 
 function closeCastWindow() {
-  if (castWindow && !castWindow.isDestroyed()) castWindow.close();
+  presentation().closeRouteWindow(ROUTE);
 }
 
 function isCastWindowOpen() {
-  return Boolean(castWindow && !castWindow.isDestroyed());
+  return Boolean(presentation().routeWindow(ROUTE));
 }
 
 module.exports = { castHandlers, ensureCastIpc, createCastWindow, closeCastWindow, isCastWindowOpen };

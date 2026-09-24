@@ -3,7 +3,7 @@
 /**
  * presentation.cjs -- the desk's window plane: the route registry every console
  * pane detaches through, the deck and chat panels, the standalone file-page
- * windows (ROUTE_WINDOWS: the Command, Fleet, Sessions, Stage and Settings windows so far), openConsole, and the three
+ * windows (ROUTE_WINDOWS: the Command, Fleet, Sessions, Stage, Settings and Cast windows so far), openConsole, and the three
  * doors that land on those surfaces: openInbox, openTalkWindow and openModelBrowser.
  *
  * Moved out of main.cjs in slice 3 of docs/UX-REIMPLEMENTATION.md (step 12, plan
@@ -218,6 +218,23 @@ const ROUTE_WINDOWS = {
       minHeight: 380,
       show: false,
       title: "Aither Settings",
+      backgroundColor: "#0f1218",
+      autoHideMenuBar: true,
+    },
+  },
+  // The Cast window (P2, moved from cast-window.cjs): the Cast pane's detach target
+  // -- who appears, and how they sound. The module keeps castHandlers, its
+  // desk:cast-* IPC and the injected castImpl.
+  cast: {
+    file: "cast.html",
+    preload: "cast-preload.cjs",
+    window: {
+      width: 860,
+      height: 680,
+      minWidth: 560,
+      minHeight: 460,
+      show: false,
+      title: "Aither Cast",
       backgroundColor: "#0f1218",
       autoHideMenuBar: true,
     },

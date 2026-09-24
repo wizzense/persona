@@ -195,10 +195,12 @@ test("cast-window.cjs never requires main.cjs -- it must be requirable from a se
   assert.doesNotMatch(source, /require\(["']\.\/main\.cjs["']\)/);
 });
 
-test("cast.html and cast-preload.cjs exist and are what cast-window.cjs loads", () => {
-  const source = fs.readFileSync(path.join(HERE, "cast-window.cjs"), "utf8");
-  assert.match(source, /cast-preload\.cjs/);
-  assert.match(source, /cast\.html/);
+test("cast.html and cast-preload.cjs exist and are what the cast route loads", () => {
+  // The window moved behind presentation.cjs's route "cast" (slice 3, P2): the
+  // page and preload are its ROUTE_WINDOWS spec now, not cast-window.cjs's source.
+  const { ROUTE_WINDOWS } = require("./presentation.cjs");
+  assert.equal(ROUTE_WINDOWS.cast.preload, "cast-preload.cjs");
+  assert.equal(ROUTE_WINDOWS.cast.file, "cast.html");
   assert.ok(fs.existsSync(path.join(HERE, "cast.html")), "cast.html is missing");
   assert.ok(fs.existsSync(path.join(HERE, "cast-preload.cjs")), "cast-preload.cjs is missing");
 });

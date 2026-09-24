@@ -15,7 +15,6 @@ const { createPresentation } = require("./presentation.cjs");
  * moves, delete its entry -- this list may only shrink, never grow.
  */
 const STILL_OUTSIDE = {
-  "cast-window.cjs": 1, // P2
   "avatar-window.cjs": 1, // P3: the avatar overlay (left main.cjs in step 13)
   "detached-avatar-window.cjs": 1, // P3: the 'solo:<slot>' windows
   "living-desktop-window.cjs": 2, // P4: the overlay + the desktop app window
@@ -42,7 +41,90 @@ test("window constructions outside presentation.cjs are exactly the ones left fo
     "a window constructor appeared outside presentation.cjs, or one moved and its STILL_OUTSIDE entry was not deleted",
   );
   const total = Object.values(outside).reduce((a, b) => a + b, 0);
-  assert.equal(total, 6, "the ratchet only goes down: 13 before step 12, 11 after it, 10 once command moved, 9 once fleet moved, 8 once sessions moved, 7 once stage moved, 6 once settings moved");
+  assert.equal(total, 5, "the ratchet only goes down: 13 before step 12, 11 after it, 10 once command moved, 9 once fleet moved, 8 once sessions moved, 7 once stage moved, 6 once settings moved, 5 once cast moved");
+});
+
+test("cast-window.cjs never builds its own window again (P2: route 'cast')", () => {
+  const source = fs.readFileSync(path.join(__dirname, "cast-window.cjs"), "utf8");
+  assert.doesNotMatch(source, /\bBrowserWindow\b/, "cast-window.cjs names BrowserWindow again");
+  assert.match(source, /openRouteWindow\(ROUTE, \{ electron: electron\(\) \}\)/, "createCastWindow no longer opens through presentation");
+  // presentation.cjs requires cast-window.cjs at its top level, so a module-scope
+  // require back into presentation would read its half-built (empty) exports.
+  assert.doesNotMatch(source, /^const .*require\("\.\/presentation\.cjs"\)/m, "cast-window.cjs requires presentation at module scope (a cycle)");
+  const { ensureCastIpc, createCastWindow, closeCastWindow, isCastWindowOpen } = require("./cast-window.cjs");
+  for (const fn of [ensureCastIpc, createCastWindow, closeCastWindow, isCastWindowOpen]) {
+    assert.equal(typeof fn, "function", "the module's exported API is kept for main/console/command callers");
+  }
+  assert.equal(isCastWindowOpen(), false, "the wrapper reaches presentation's route handle");
+  closeCastWindow(); // no-op when absent
+});
+
+test("the cast route keeps the Cast window's exact options, single instance, and no navigation", () => {
+  const { ROUTE_WINDOWS, openRouteWindow, closeRouteWindow, routeWindow } = require("./presentation.cjs");
+  const built = [];
+  class FakeWindow {
+    constructor(options) {
+      this.options = options;
+      this.destroyed = false;
+      this.handlers = {};
+      this.shown = 0;
+      this.focused = 0;
+      this.navHandlers = [];
+      this.webContents = {
+        openHandler: null,
+        setWindowOpenHandler: (fn) => { this.webContents.openHandler = fn; },
+        on: (event, fn) => { if (event === "will-navigate") this.navHandlers.push(fn); },
+      };
+      built.push(this);
+    }
+    isDestroyed() { return this.destroyed; }
+    show() { this.shown += 1; }
+    focus() { this.focused += 1; }
+    once(event, fn) { this.handlers[event] = fn; }
+    on(event, fn) { this.handlers[event] = fn; }
+    loadFile(file) { this.file = file; return Promise.resolve(); }
+    close() { this.destroyed = true; if (this.handlers.closed) this.handlers.closed(); }
+  }
+  const electron = { BrowserWindow: FakeWindow };
+  assert.equal(routeWindow("cast"), null);
+  const win = openRouteWindow("cast", { electron });
+  assert.deepEqual(win.options, {
+    width: 860,
+    height: 680,
+    minWidth: 560,
+    minHeight: 460,
+    show: false,
+    title: "Aither Cast",
+    backgroundColor: "#0f1218",
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: path.join(__dirname, "cast-preload.cjs"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  assert.equal(ROUTE_WINDOWS.cast.file, "cast.html");
+  assert.equal(win.file, path.join(__dirname, "cast.html"));
+  assert.deepEqual(win.webContents.openHandler(), { action: "deny" });
+  let prevented = false;
+  win.navHandlers[0]({ preventDefault: () => { prevented = true; } }, "https://example.com/");
+  assert.equal(prevented, true, "a file page never navigates");
+  win.handlers["ready-to-show"]();
+  assert.equal(win.shown, 1);
+  assert.equal(win.focused, 1);
+  assert.equal(openRouteWindow("cast", { electron }), win, "single instance while it lives");
+  assert.equal(built.length, 1);
+  assert.equal(win.shown, 2);
+  assert.equal(win.focused, 2);
+  assert.equal(routeWindow("cast"), win);
+  assert.equal(routeWindow("settings"), null, "the cast window is not the settings route's handle");
+  const { isCastWindowOpen } = require("./cast-window.cjs");
+  assert.equal(isCastWindowOpen(), true, "the module's isOpen reads the route's handle");
+  closeRouteWindow("cast");
+  assert.equal(routeWindow("cast"), null, "the handle is dropped on 'closed'");
+  assert.equal(isCastWindowOpen(), false);
+  closeRouteWindow("cast"); // no-op when absent
 });
 
 test("settings-window.cjs never builds its own window again (P2: route 'settings')", () => {
