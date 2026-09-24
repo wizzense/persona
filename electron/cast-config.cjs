@@ -509,6 +509,12 @@ const INPUT_FIELDS = Object.freeze({
   micDeviceLabel: (v) => vString(v, { max: 200 }),
   micMuted: vBool,
   talkMode: (v) => vEnum(v, TALK_MODES),
+  // Owner, 2026-09-23: "cards popping up on my main screen while im playing games".
+  // doNotDisturb is the manual switch; quietWhenFullscreen (default ON) is the
+  // automatic one -- a full-screen game or presentation holds popups, speech and
+  // focus changes until it ends (quiet-mode.cjs).
+  doNotDisturb: vBool,
+  quietWhenFullscreen: vBool,
 });
 
 const BUILTIN_INPUT = Object.freeze({
@@ -516,6 +522,8 @@ const BUILTIN_INPUT = Object.freeze({
   micDeviceLabel: "",
   micMuted: false,
   talkMode: "toggle",
+  doNotDisturb: false,
+  quietWhenFullscreen: true,
 });
 
 // hotkeys{} is a dynamic id->accel map (command-registry ids), not a fixed
@@ -1447,6 +1455,8 @@ function resolveInput(snapshot) {
   pick("micDeviceLabel");
   pick("micMuted");
   pick("talkMode");
+  pick("doNotDisturb");
+  pick("quietWhenFullscreen");
   out.problems = problems;
   return out;
 }

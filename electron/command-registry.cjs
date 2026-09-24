@@ -281,6 +281,17 @@ const COMMANDS = Object.freeze([
     surfaces: ["tray", "avatar-menu", "palette", "jumplist"],
     label: (ctx = {}) => (ctx.voicesMuted ? "Unmute voices (narration is off)" : "Mute all voices"),
   }),
+  // Owner, 2026-09-23: cards "popping up on my main screen while im playing games".
+  // A full-screen game already silences the desk on its own (quiet-mode.cjs); this is
+  // the manual switch for everything else, and the label says why it is quiet now.
+  Object.freeze({
+    id: "attention.dnd", group: "talk", icon: "moon",
+    surfaces: ["tray", "avatar-menu", "palette", "jumplist"],
+    label: (ctx = {}) => {
+      if (ctx.doNotDisturb) return "Turn off Do not disturb";
+      return ctx.quietReason ? `Do not disturb (quiet now: ${ctx.quietReason})` : "Do not disturb";
+    },
+  }),
   // The other half of the same complaint: assigning a voice meant finding the
   // body's row in the Cast pane and typing an id. Right-click the body, pick one.
   Object.freeze({
