@@ -2832,6 +2832,26 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
     });
     // Plan: Aither World bricks -- the Updates section of Settings. adk bricks
     // (awdk) owns every decision; the desk only runs it (bricks-client.cjs).
+    // Account: link this machine to aitherium.com through `adk link` (awdk owns
+    // the device grant, the shared sign-in and the role-aware bundle).
+    ipcMain.handle("desk:link-status", async () => require("./link-client.cjs").linkStatus());
+    ipcMain.handle("desk:link-start", async () => {
+      const res = await require("./link-client.cjs").linkStart();
+      const url = res.ok && res.data && res.data.approve_url;
+      // Only an https link from Identity is opened; anything else is shown, not followed.
+      if (typeof url === "string" && /^https:\/\//.test(url)) void shell.openExternal(url);
+      return res;
+    });
+    ipcMain.handle("desk:link-poll", async (_event, deviceCode) => {
+      const res = await require("./link-client.cjs").linkPoll(String(deviceCode || ""));
+      const d = res.data || {};
+      if (d.status === "complete") {
+        const who = d.username || "you";
+        const said = d.role === "owner" ? `Linked. Welcome back, ${who}.` : `Linked as ${who}.`;
+        try { void speakAloud(said, undefined, undefined, "slot0", "service:awdesk-voice"); } catch { /* best-effort */ }
+      }
+      return res;
+    });
     ipcMain.handle("desk:bricks-list", async () => {
       const { listBricks } = require("./bricks-client.cjs");
       return listBricks();
