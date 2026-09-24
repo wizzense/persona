@@ -338,7 +338,11 @@ test("every command either has a handler or a dynamic submenu", () => {
   // The palette hands the argument through: run(id, arg) in main, (id, arg) on
   // the console IPC and the preload, so a `prompt` record is not a dead row.
   assert.match(body, /function runCommand\(id, arg/, "runCommand takes no argument -- prompt rows cannot work");
-  assert.match(main, /run: \(id, arg\) => runCommand\(id, arg/, "the palette runner drops the argument");
+  // openConsole (and so the palette runner) moved to presentation.cjs in slice-3
+  // step 12; main hands it runCommand with every argument.
+  const presentation = fs.readFileSync(path.join(__dirname, "presentation.cjs"), "utf8");
+  assert.match(presentation, /run: \(id, arg\) => runCommand\(id, arg/, "the palette runner drops the argument");
+  assert.match(main, /runCommand: \(\.\.\.args\) => runCommand\(\.\.\.args\)/, "main drops the palette's argument on the way in");
   const consoleWindow = fs.readFileSync(path.join(__dirname, "console-window.cjs"), "utf8");
   assert.match(consoleWindow, /"desk:console-command-run", async \(event, id, arg\)/);
   assert.match(consoleWindow, /commandsImpl\.run\(command, arg/);

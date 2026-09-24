@@ -214,22 +214,75 @@ test("the shell DESTROYS a reattached pane's placeholder, not just its class", (
   assert.match(html, /if \(!isDetached && stale\) stale\.remove\(\);/);
 });
 
-test("EVERY pane is reachable from main, both directions", () => {
+/** presentation.cjs (openConsole's home since slice-3 step 12) built on recording
+ *  stubs: `calls` is every dep invoked, in order; `shown` is showConsole's argument. */
+function stubPresentation() {
+  const calls = [];
+  let shown = null;
+  const rec = (name, ret) => (...args) => {
+    calls.push(name);
+    return typeof ret === "function" ? ret(...args) : ret;
+  };
+  const windowModule = (x) => ({
+    [`create${x}Window`]: rec(`create${x}Window`, null),
+    [`close${x}Window`]: rec(`close${x}Window`),
+    [`is${x}WindowOpen`]: rec(`is${x}WindowOpen`, false),
+    [`ensure${x}Ipc`]: rec(`ensure${x}Ipc`),
+  });
+  const presentation = require("./presentation.cjs").createPresentation({
+    electron: {},
+    rendererUrl: () => "http://127.0.0.1:5173/",
+    isAllowedRendererNavigation: () => true,
+    showConsole: (opts) => { calls.push("showConsole"); shown = opts; return "console"; },
+    focusPane: rec("focusPane", true),
+    closeConsole: rec("closeConsole"),
+    fleetWindow: { ...windowModule("Fleet"), setCloseFallback: rec("setFleetCloseFallback"), getControl: rec("getFleetControl", {}) },
+    commandWindow: { ...windowModule("Command"), setCloseFallback: rec("setCommandCloseFallback") },
+    sessionsWindow: windowModule("Sessions"),
+    stageWindow: windowModule("Stage"),
+    settingsWindow: windowModule("Settings"),
+    castWindow: windowModule("Cast"),
+    desktop: {
+      showDesktopApp: rec("showDesktopApp"),
+      closeDesktopApp: rec("closeDesktopApp"),
+      isAppOpen: rec("isAppOpen", false),
+      desktopAppUrl: "https://example.invalid/",
+      ensureDesktopSession: rec("ensureDesktopSession"),
+      portalLoginUrl: "https://example.invalid/login",
+    },
+    ensureHomeIpc: rec("ensureHomeIpc"),
+    stagePaneImpl: rec("stagePaneImpl", {}),
+    castPaneImpl: rec("castPaneImpl", {}),
+    commandRegistry: { paletteRows: () => [] },
+    commandContext: () => ({}),
+    runCommand: rec("runCommand"),
+  });
+  return { presentation, calls, shown: () => shown };
+}
+
+test("EVERY pane is reachable from the route registry, both directions", () => {
   // The rail is only honest if main really injected open/close/isOpen for each
   // pane id. A pane with no close is a detach button with no way back -- the exact
-  // failure the console exists to remove.
-  const main = read("main.cjs");
-  const block = main.slice(main.indexOf("function openConsole()"));
+  // failure the console exists to remove. openConsole moved to presentation.cjs,
+  // which DERIVES the map from its route registry; asserted on the map the console
+  // actually receives, not on source text.
+  const { presentation, shown } = stubPresentation();
+  presentation.openConsole();
+  const windows = shown().windows;
   for (const pane of PANES) {
-    const entry = block.slice(block.indexOf(`${pane.id}: {`));
-    assert.ok(block.includes(`${pane.id}: {`), `openConsole names no window for ${pane.id}`);
-    for (const verb of ["open:", "close:", "isOpen:"]) {
-      assert.ok(
-        entry.slice(0, 500).includes(verb),
+    assert.ok(windows[pane.id], `openConsole names no window for ${pane.id}`);
+    for (const verb of ["open", "close", "isOpen"]) {
+      assert.equal(
+        typeof windows[pane.id][verb], "function",
         `openConsole's ${pane.id} entry is missing ${verb}`,
       );
     }
   }
+  assert.deepEqual(Object.keys(windows), presentation.routes());
+  // And the source cannot drift back to a hand-written literal beside the registry.
+  const source = read("presentation.cjs");
+  const block = source.slice(source.indexOf("function openConsole()"));
+  assert.match(block.slice(0, block.indexOf("\n  }\n")), /windows: windowsMap\(\),/);
 });
 
 test("the console preload COMPOSES the pane preloads, never copies them", () => {
@@ -270,9 +323,10 @@ test("openConsole wires the pane handlers BEFORE it shows the window", () => {
   // console first gave a Fleet pane of em-dashes (identical to a fleet that is
   // genuinely down) and a Command pane that threw "No handler registered". Both
   // surfaces look finished and answer nothing, which is why this is asserted on
-  // ORDER and not merely on presence.
-  const main = read("main.cjs");
-  const block = main.slice(main.indexOf("function openConsole()"));
+  // ORDER and not merely on presence. openConsole lives in presentation.cjs since
+  // slice-3 step 12; asserted there on source AND on the calls it really makes.
+  const source = read("presentation.cjs");
+  const block = source.slice(source.indexOf("function openConsole()"));
   const show = block.indexOf("showConsole({");
   for (const call of ["ensureFleetIpc()", "ensureCommandIpc("]) {
     const at = block.indexOf(call);
@@ -283,6 +337,16 @@ test("openConsole wires the pane handlers BEFORE it shows the window", () => {
   // fallback it is a dead control that reports nothing.
   assert.ok(block.indexOf("setFleetCloseFallback(closeConsole)") < show);
   assert.ok(block.indexOf("setCommandCloseFallback(closeConsole)") < show);
+  // The same order, observed: every wiring call lands before showConsole runs.
+  const { presentation, calls } = stubPresentation();
+  presentation.openConsole();
+  const shownAt = calls.indexOf("showConsole");
+  assert.ok(shownAt !== -1, "openConsole never showed the console");
+  for (const call of ["ensureFleetIpc", "ensureCommandIpc", "ensureSessionsIpc", "ensureHomeIpc",
+    "ensureStageIpc", "setFleetCloseFallback", "setCommandCloseFallback"]) {
+    const at = calls.indexOf(call);
+    assert.ok(at !== -1 && at < shownAt, `${call} must run before showConsole`);
+  }
 });
 
 test("a hosted pane is hidden by a rect of NULL, not by being left painted", () => {

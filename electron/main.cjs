@@ -86,32 +86,23 @@ const commandRegistry = require("./command-registry.cjs");
 // harness daemon's /wakes window, so the desk, Discord, AitherDesktop and the
 // MCP tool share one reader and one semantics (see wakes-feed.cjs header).
 const wakesFeedClient = require("./wakes-feed.cjs");
+// The pane window modules are handed WHOLE to presentation.cjs (below), which owns
+// their detach verbs; main keeps only the names it calls itself.
+const fleetWindow = require("./fleet-window.cjs");
 const {
   createFleetWindow,
-  ensureFleetIpc,
-  setCloseFallback: setFleetCloseFallback,
-  closeFleetWindow,
-  isFleetWindowOpen,
   getControl: getFleetControl,
   fleetSummaryCached,
-} = require("./fleet-window.cjs");
+} = fleetWindow;
+const commandWindow = require("./command-window.cjs");
 const {
   createCommandWindow,
-  ensureCommandIpc,
-  setCloseFallback: setCommandCloseFallback,
-  closeCommandWindow,
-  isCommandWindowOpen,
   getAgent: getCommandAgent,
-} = require("./command-window.cjs");
+} = commandWindow;
 const { showConsole, focusPane, closeConsole, setInboxBadge } = require("./console-window.cjs");
 const { badgeBitmap, badgeTooltip, drawBadge } = require("./badge.cjs");
 const { voiceTrayItems } = require("./voice-tray-line.cjs");
-const {
-  ensureSessionsIpc,
-  createSessionsWindow,
-  closeSessionsWindow,
-  isSessionsWindowOpen,
-} = require("./sessions-window.cjs");
+const sessionsWindow = require("./sessions-window.cjs");
 // The company room, both halves: the awdk daemon room (local, fleet-independent)
 // and the relay channels (#command / #agents) that the poller executes from.
 // `steerEvent` is the pure envelope builder for an ADDRESSED steer (U18); the
@@ -162,38 +153,10 @@ const {
   portalLoginUrl,
 } = require("./living-desktop-window.cjs");
 const { openDetachedAvatar } = require("./detached-avatar-window.cjs");
-const {
-  ensureStageIpc,
-  createStageWindow,
-  closeStageWindow,
-  isStageWindowOpen,
-} = require("./stage-window.cjs");
-const {
-  createSettingsWindow,
-  closeSettingsWindow,
-  isSettingsWindowOpen,
-} = require("./settings-window.cjs");
-
-// U28 lands LAST and this plan's units build concurrently -- these two are
-// still in flight on this box as this unit lands. Guarded (not a top-level
-// destructure) so a peer unit's module landing AFTER this file does not
-// crash the whole desk at require() time; each is wired below ONLY when
-// present, and starts working with no further edit here once its own module
-// exists -- electron/*.cjs is read from disk at launch, so a restart is what
-// picks it up either way.
-let ensureCastIpc = null;
-let createCastWindow = null;
-let closeCastWindow = null;
-let isCastWindowOpen = null;
-try {
-  // U03: the Cast pane's window/IPC module -- names follow every OTHER
-  // *-window.cjs in this file (create<X>Window/close<X>Window/is<X>WindowOpen
-  // beside ensure<X>Ipc: stage-window.cjs, command-window.cjs, sessions-
-  // window.cjs, fleet-window.cjs all share this shape).
-  ({ ensureCastIpc, createCastWindow, closeCastWindow, isCastWindowOpen } = require("./cast-window.cjs"));
-} catch (error) {
-  console.warn("[desk] cast-window.cjs not present yet (U03) -- Cast pane unavailable:", error?.message || error);
-}
+const stageWindow = require("./stage-window.cjs");
+const settingsWindow = require("./settings-window.cjs");
+// The guarded cast-window.cjs require moved to presentation.cjs with openConsole,
+// its only consumer.
 // speakAloud (ONE path for every speech door) + its caption, behind the voice-resolve
 // gate and the safety funnel: speech.cjs. quietMode is a getter because it is built
 // further down and its own onChange speaks through speakAloud.
@@ -285,8 +248,6 @@ const protocolScheme = "desk";
 const debugEnabled = process.env.DESK_DEBUG === "1";
 
 let avatarWindow = null;
-let deckWindow = null;
-let chatWindow = null;
 let isQuitting = false;
 let latestEvent = null;
 let latestVoiceState = null;
@@ -352,6 +313,42 @@ const {
   getActiveCharacter,
   listCharacters,
   getAgentAvatar,
+  debugLog: (...args) => debugLog(...args),
+});
+
+// The window plane (presentation.cjs): the console's route registry, the deck and
+// chat panels, openConsole, and the inbox/talk/model-browser doors. Built before
+// every factory below that takes these by value; home-ipc is created further down,
+// and the avatar window is replaced, so both arrive through getters.
+const {
+  openConsole,
+  openInbox,
+  openTalkWindow,
+  openModelBrowser,
+  createDeckWindow,
+  createChatWindow,
+  getDeckWindow,
+  getChatWindow,
+} = require("./presentation.cjs").createPresentation({
+  electron: { BrowserWindow, screen },
+  rendererUrl,
+  isAllowedRendererNavigation,
+  getAvatarWindow: () => avatarWindow,
+  showConsole,
+  focusPane,
+  closeConsole,
+  fleetWindow,
+  commandWindow,
+  sessionsWindow,
+  stageWindow,
+  settingsWindow,
+  desktop: { showDesktopApp, closeDesktopApp, isAppOpen, desktopAppUrl, ensureDesktopSession, portalLoginUrl },
+  ensureHomeIpc: () => ensureHomeIpc(),
+  stagePaneImpl,
+  castPaneImpl: () => roomStageHost.castPaneImpl(roomStageDeps()),
+  commandRegistry,
+  commandContext: () => commandContext(),
+  runCommand: (...args) => runCommand(...args),
   debugLog: (...args) => debugLog(...args),
 });
 
@@ -781,63 +778,6 @@ function handleProtocolArgv(argv) {
   if (protocolUrl) handleProtocolUrl(protocolUrl);
 }
 
-/** Open the model browser — the deck panel's Models & Market section. */
-function openModelBrowser() {
-  // Owner-overruled 2026-08-25: the standalone python page (model-browser.py
-  // on :47836) was "still fucking lame" and its marketplace tab never
-  // existed — the deck panel's Models & Market section IS the browser now
-  // (search + roster characters + the live Aitherium marketplace feed).
-  const win = createDeckWindow();
-  // The deck opens at the TOP (quick actions first — the 2026-08-25 ordering
-  // fix), but Models & market sits below notifications and system awareness,
-  // so "Browse models" that only opens the deck read as a dead button
-  // (owner, 2026-08-27: "still unable to open model/avatar browser").
-  // Scroll the section into view; the renderer handles scroll-to-section.
-  const scrollToModels = () => {
-    if (win && !win.isDestroyed()) {
-      win.webContents.send("desk:event", {
-        type: "scroll-to-section",
-        section: "models",
-      });
-    }
-  };
-  if (win.webContents.isLoading()) {
-    win.webContents.once("did-finish-load", scrollToModels);
-  } else {
-    scrollToModels();
-  }
-  return win;
-}
-
-
-/** Open the talk surface. The deck panel IS the chat window: its relay section
- *  posts to #agents (the channel Aither and every connected session read and
- *  answer in) and shows the feed right there. The old behaviour — spawning a
- *  Windows Terminal tab running the `aither` CLI — was owner-overruled
- *  2026-08-25: "STILL just opens a terminal tab instead of a chat window right
- *  there". One chat surface, in the app, no terminal. */
-function openTalkWindow() {
-  // "Talk to Aither" used to open the deck panel — a list of buttons, not a
-  // conversation. The conversation is the console's Chat pane.
-  openConsole();
-  focusPane("chat");
-}
-
-/** The ONE way to the inbox (decision cards + agent messages): the detached
- *  Inbox window if the owner pulled it out, else the console on its Inbox pane.
- *  Every bell, badge and menu item lands here, so there is exactly one place a
- *  notification can be found (owner, 2026-09-13: "no proper notification area").
- *  A card id focuses that card. */
-function openInbox(cardId = null) {
-  if (deckWindow && !deckWindow.isDestroyed()) {
-    deckWindow.show();
-    deckWindow.focus();
-    return true;
-  }
-  openConsole();
-  return focusPane("cards", cardId);
-}
-
 /** Toggleable "invisible glass" boundary: a dashed edge + faint tint so the
  *  avatar window's borders are visible while arranging it (owner 2026-08-25).
  *  Persisted per-window; restored on every renderer load by ensureRendererLoadHook. */
@@ -1147,7 +1087,7 @@ const { register: registerDeckActions } = require("./deck-actions.cjs").createDe
   deckState,
   sendDeckState,
   createDeckWindow,
-  getDeckWindow: () => deckWindow,
+  getDeckWindow,
   getAvatarWindow: () => avatarWindow,
   buildCharacterMenu,
   applyCharacter,
@@ -1443,11 +1383,13 @@ function deckState() {
 /** Push fresh state to every window rendering the deck feed. */
 function sendDeckState() {
   const event = { type: "deck-state", ...deckState() };
+  const deckWindow = getDeckWindow();
   if (deckWindow && !deckWindow.isDestroyed()) {
     deckWindow.webContents.send("desk:event", event);
   }
   // The chat window renders the SAME feed; without this push a sent
   // message never appears in the list the sender is looking at.
+  const chatWindow = getChatWindow();
   if (chatWindow && !chatWindow.isDestroyed()) {
     chatWindow.webContents.send("desk:event", event);
   }
@@ -1462,125 +1404,6 @@ setDeskStateProvider(() => deckState());
 setInterval(() => {
   pushDeskState();
 }, 5000);
-
-/** The Desk panel — a frameless always-on-top window that opens beside the avatar
- *  on right-click. Same bundle as the avatar scene (`?deck=1`), same preload, so
- *  it shares the bridge and every future awdesk rename moves it along for free. */
-function createDeckWindow() {
-  if (deckWindow && !deckWindow.isDestroyed()) {
-    deckWindow.show();
-    deckWindow.focus();
-    return deckWindow;
-  }
-  const workArea = screen.getPrimaryDisplay().workArea;
-  const base =
-    avatarWindow && !avatarWindow.isDestroyed() ? avatarWindow.getBounds() : null;
-  const width = 460;
-  const height = 700;
-  let x = base ? base.x + base.width + 10 : workArea.x + workArea.width - width - 40;
-  let y = base ? base.y : workArea.y + 80;
-  // If the avatar sits against the right edge, open to its LEFT instead of off-screen.
-  if (x + width > workArea.x + workArea.width) {
-    x = Math.max(workArea.x + 8, base ? base.x - width - 10 : x);
-  }
-  y = Math.max(workArea.y + 8, Math.min(y, workArea.y + workArea.height - height - 8));
-
-  deckWindow = new BrowserWindow({
-    x,
-    y,
-    width,
-    height,
-    minWidth: 360,
-    minHeight: 480,
-    show: false,
-    frame: false,
-    transparent: true,
-    backgroundColor: "#00000000",
-    hasShadow: true,
-    autoHideMenuBar: true,
-    alwaysOnTop: true,
-    // In the taskbar on purpose: an always-on-top frameless panel the owner
-    // cannot find again once it loses focus is a trap, not a feature.
-    skipTaskbar: false,
-    title: "Desk",
-    webPreferences: {
-      preload: path.join(__dirname, "preload.cjs"),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-    },
-  });
-  deckWindow.setAlwaysOnTop(true, "floating");
-  deckWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-  const deckUrl = rendererUrl() + (rendererUrl().includes("?") ? "&" : "?") + "deck=1";
-  deckWindow.webContents.on("will-navigate", (event, targetUrl) => {
-    if (!isAllowedRendererNavigation(targetUrl, deckUrl)) event.preventDefault();
-  });
-  deckWindow.webContents.on("console-message", (event) => {
-    if (event.level >= 2) {
-      debugLog(`[deck console] ${event.sourceId}:${event.lineNumber} — ${event.message}`);
-    }
-  });
-  deckWindow.webContents.on("render-process-gone", (_event, details) => {
-    debugLog("DECK RENDERER PROCESS GONE", details.reason, details.exitCode);
-  });
-  deckWindow.once("ready-to-show", () => {
-    deckWindow.show();
-    deckWindow.focus();
-  });
-  deckWindow.on("closed", () => {
-    deckWindow = null;
-  });
-  void deckWindow.loadURL(deckUrl);
-  return deckWindow;
-}
-
-function createChatWindow() {
-  // The chat bead window (2026-08-25): the company-room relay + direct
-  // threads in a DEDICATED chat surface — not the deck, not a terminal.
-  if (chatWindow && !chatWindow.isDestroyed()) {
-    chatWindow.show();
-    chatWindow.focus();
-    return chatWindow;
-  }
-  const workArea = screen.getPrimaryDisplay().workArea;
-  const base =
-    avatarWindow && !avatarWindow.isDestroyed() ? avatarWindow.getBounds() : null;
-  const width = 420;
-  const height = 640;
-  let x = base ? base.x - width - 10 : workArea.x + 60;
-  let y = base ? base.y : workArea.y + 80;
-  if (x < workArea.x) {
-    x = Math.min(workArea.x + workArea.width - width - 8,
-      base ? base.x + base.width + 10 : x);
-  }
-  y = Math.max(workArea.y + 8, Math.min(y, workArea.y + workArea.height - height - 8));
-  chatWindow = new BrowserWindow({
-    x, y, width, height, minWidth: 340, minHeight: 420,
-    show: false, frame: false, transparent: true, alwaysOnTop: true,
-    skipTaskbar: false, title: "Desk chat",
-    webPreferences: {
-      preload: path.join(__dirname, "preload.cjs"),
-      contextIsolation: true, nodeIntegration: false, sandbox: true,
-    },
-  });
-  chatWindow.setAlwaysOnTop(true, "floating");
-  chatWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-  const chatUrl =
-    rendererUrl() + (rendererUrl().includes("?") ? "&" : "?") + "chat=1";
-  chatWindow.webContents.on("will-navigate", (event, targetUrl) => {
-    if (!isAllowedRendererNavigation(targetUrl, chatUrl)) event.preventDefault();
-  });
-  chatWindow.once("ready-to-show", () => {
-    chatWindow.show();
-    chatWindow.focus();
-  });
-  chatWindow.on("closed", () => {
-    chatWindow = null;
-  });
-  void chatWindow.loadURL(chatUrl);
-  return chatWindow;
-}
 
 // Home (console-window PANES "home"): one summary read, three verbs (home-ipc.cjs).
 // Registered once, from openConsole. The avatar window is replaced, so it is read
@@ -1605,137 +1428,6 @@ const { ensureHomeIpc } = require("./home-ipc.cjs").createHomeIpc({
   RELAY_CHANNEL,
   refreshRelayFeed: () => refreshRelayFeed(),
 });
-
-/**
- * The unified console: Command | Fleet | Cards | Chat in ONE window.
- *
- * Owner, 2026-09-08: "i would like a unified window with option to detach these
- * including the decision cards -- cant seem to get a wrangle on all of these pop
- * ups". Every creator below already existed; what did not exist was a host for
- * them. The console does not replace them -- it hands each pane BACK to its own
- * window on demand, and takes it back on reattach, which is why every entry
- * carries all three of open/close/isOpen. A detach with no way back would leave
- * the owner exactly where this started.
- */
-function openConsole() {
-  // 🚩 Wire the pane handlers FIRST. Both pages talk to main the moment they load
-  // -- fleet-control.html probes on load, command.html sends on the first Enter --
-  // and their handlers used to be installed only as a side effect of creating the
-  // standalone window. Opening the console without ever having opened those
-  // windows produced a Fleet pane of em-dashes (identical to a fleet that is down)
-  // and a Command pane that failed with "No handler registered for
-  // 'desk:command-send'". Both surfaces LOOK finished while answering nothing.
-  ensureFleetIpc();
-  ensureCommandIpc(getFleetControl(), { createFleetWindow });
-  ensureSessionsIpc();
-  ensureHomeIpc();
-  ensureStageIpc(stagePaneImpl());
-  // The Cast pane (U03/U07): who appears, and how they sound. Guarded --
-  // cast-window.cjs may not exist on this box yet (see the guarded require
-  // up top); the console still opens with every OTHER pane when it is absent.
-  if (ensureCastIpc) ensureCastIpc(roomStageHost.castPaneImpl(roomStageDeps()));
-  // And "close" inside a pane now closes the console, rather than looking for a
-  // standalone window that does not exist and silently doing nothing.
-  setFleetCloseFallback(closeConsole);
-  setCommandCloseFallback(closeConsole);
-  return showConsole({
-    rendererUrl,
-    // The palette reads the SAME registry the tray and the avatar menu render
-    // from, with labels resolved against live counts, so it can never offer a
-    // stale set -- and no capability is gesture-only again.
-    commands: {
-      // commandContext() -- the same facts the tray and a body's menu resolve
-      // against. The palette used to build its own four-field copy, so it never
-      // knew whether the overlay was open or which shortcuts were really bound.
-      list: () => commandRegistry.paletteRows(commandContext()),
-      // The palette awaits: a `prompt` record's typed argument rides along and
-      // an async verdict (blog verbs) comes back as {ok, message} to show.
-      run: (id, arg) => runCommand(id, arg, { surface: "palette" }),
-    },
-    windows: {
-      // Home has no window of its own (detachable:false) -- a pane, never a detach.
-      home: {
-        open: () => null,
-        close: () => {},
-        isOpen: () => false,
-      },
-      command: {
-        open: () => createCommandWindow(getFleetControl(), { createFleetWindow }),
-        close: closeCommandWindow,
-        isOpen: isCommandWindowOpen,
-      },
-      fleet: {
-        open: () => createFleetWindow(),
-        close: closeFleetWindow,
-        isOpen: isFleetWindowOpen,
-      },
-      sessions: {
-        open: () => createSessionsWindow(),
-        close: closeSessionsWindow,
-        isOpen: isSessionsWindowOpen,
-      },
-      cards: {
-        open: () => createDeckWindow(),
-        close: () => {
-          if (deckWindow && !deckWindow.isDestroyed()) deckWindow.close();
-        },
-        isOpen: () => Boolean(deckWindow && !deckWindow.isDestroyed()),
-      },
-      stage: {
-        open: () => createStageWindow(),
-        close: closeStageWindow,
-        isOpen: isStageWindowOpen,
-      },
-      // U03 guarded (see the require up top): no detach target exists on a
-      // box where cast-window.cjs has not landed yet -- open/close are then
-      // no-ops and isOpen stays false, matching sessions' own "no detach
-      // wiring yet" shape rather than throwing.
-      cast: {
-        open: () => (createCastWindow ? createCastWindow() : null),
-        close: () => { if (closeCastWindow) closeCastWindow(); },
-        isOpen: () => (isCastWindowOpen ? isCastWindowOpen() : false),
-      },
-      settings: {
-        open: () => createSettingsWindow(),
-        close: () => closeSettingsWindow(),
-        isOpen: () => isSettingsWindowOpen(),
-      },
-      chat: {
-        open: () => createChatWindow(),
-        close: () => {
-          if (chatWindow && !chatWindow.isDestroyed()) chatWindow.close();
-        },
-        isOpen: () => Boolean(chatWindow && !chatWindow.isDestroyed()),
-      },
-      // The Characters pane (owner, 2026-09-20): the inbox stopped carrying bodies, so the
-      // spawn chips and the Models & Market grid live here. It is the SAME renderer and the
-      // same deck window as the inbox -- one component with a view prop -- so detaching it
-      // reuses createDeckWindow rather than opening a second subscription to the same bridge.
-      characters: {
-        open: () => createDeckWindow(),
-        close: () => {
-          if (deckWindow && !deckWindow.isDestroyed()) deckWindow.close();
-        },
-        isOpen: () => Boolean(deckWindow && !deckWindow.isDestroyed()),
-      },
-      // The AitherDesktop shell -- the SAME aitherium.com desktop the standalone
-      // app window shows, hosted here on its own session partition so the two are
-      // one login rather than two. The OVERLAY is deliberately not a pane: it is a
-      // transparent, click-through surface over the whole Windows desktop, and a
-      // rectangle inside a window is not that. It stays a tray/protocol launcher.
-      desktop: {
-        open: () => showDesktopApp(),
-        close: () => closeDesktopApp(),
-        isOpen: () => isAppOpen(),
-      },
-    },
-    urls: { desktop: desktopAppUrl },
-    // The pane shares the overlay's partition; sign it in the way the overlay does
-    // BEFORE it loads, or it renders the apex signed-out -- the landing page.
-    prepare: { desktop: ensureDesktopSession },
-    signIn: { desktop: portalLoginUrl },
-  });
-}
 
 // A card asking to be SHOWN goes to the deck/console ladder (decisions-plane.cjs).
 wireWindowRouter();
