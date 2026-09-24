@@ -77,10 +77,13 @@ test("planHomeSet runs a toggle only where the live state differs from the asked
 test("Home's command allowlist is its own switches, and main enforces it", () => {
   assert.deepEqual([...HOME_COMMANDS].sort(), ["attention.dnd", "avatar.toggle", "voice.mute", "voice.silence"]);
   assert.ok(!HOME_COMMANDS.includes("quit"));
-  const main = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
-  const handler = main.slice(main.indexOf('ipcMain.handle("desk:home-run"'));
+  // The handlers live in home-ipc.cjs (moved out of main.cjs, slice 3); main wires it.
+  const homeIpc = fs.readFileSync(path.join(__dirname, "home-ipc.cjs"), "utf8");
+  const handler = homeIpc.slice(homeIpc.indexOf('ipcMain.handle("desk:home-run"'));
   assert.match(handler.slice(0, 400), /HOME_COMMANDS\.includes\(id\)/, "desk:home-run runs any registry id");
-  assert.match(main, /ipcMain\.handle\("desk:home-set"/, "no desired-state verb for Home's switches");
+  assert.match(homeIpc, /ipcMain\.handle\("desk:home-set"/, "no desired-state verb for Home's switches");
+  const main = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
+  assert.match(main, /require\("\.\/home-ipc\.cjs"\)\.createHomeIpc\(/, "main never wires home-ipc.cjs");
 });
 
 // ── home.html, run against a minimal DOM ────────────────────────────────────────
