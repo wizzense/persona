@@ -253,8 +253,12 @@ test("the beads are registry rows, and the deck-action door accepts an id", () =
   const beads = fs.readFileSync(path.join(__dirname, "..", "src", "components", "Beads.tsx"), "utf8");
   assert.match(beads, /commands\?\.\('beads'\)/, "the bead rail is a typed list again");
   assert.doesNotMatch(beads, /action\('talk'\)|action\('console'\)/, "a bead is sending a deck verb, not a command id");
+  // The deck-action door moved out of main.cjs into deck-actions.cjs (slice 3 of
+  // docs/UX-REIMPLEMENTATION.md); main wires that module.
   const main = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
-  assert.match(main, /if \(commandRegistry\.byId\(name\)\)/, "deck-action no longer accepts a registry id");
+  assert.match(main, /require\("\.\/deck-actions\.cjs"\)\.createDeckActions\(/, "main no longer wires the deck's doors");
+  const deck = fs.readFileSync(path.join(__dirname, "deck-actions.cjs"), "utf8");
+  assert.match(deck, /if \(commandRegistry\.byId\(name\)\)/, "deck-action no longer accepts a registry id");
   // slot-scoped rows never leak onto a surface with no body in hand
   assert.ok(!conformance().length);
   assert.ok(conformance([{ id: "x", label: "X", group: "x", scope: "slot", surfaces: ["tray", "avatar-menu"] }])
