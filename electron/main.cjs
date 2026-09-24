@@ -318,25 +318,36 @@ let isQuitting = false;
 let latestEvent = null;
 let latestVoiceState = null;
 let tray = null;
-let relayFeed = [];
-let relayFeedTimer = null;
-// The awrise wake snapshot the deck renders. `source` is "none" until the first
-// poll answers, then "daemon" or "stale" — the panel says which, because a
-// cached list presented as live is the failure this feed exists to prevent.
-let wakesFeed = wakesFeedClient.emptyFeed({ source: "none" });
-let wakesWatchStop = null;
-// Names with a mutation in flight, so a double-click cannot fire a wake twice
-// before the daemon's own 409 answers.
-const wakesPending = new Set();
-// The local room (awdk daemon :8362, works with the fleet down) and the relay
-// poller that turns messages typed anywhere in the relay into work orders.
-let roomFeed = [];
-let roomFeedTimer = null;
-let roomPublisher = null;
-/** cast.json <-> the owner's other machines (settings-sync.cjs). Null until
- *  app.whenReady; OFF unless cast.json's own `sync` section turns it on. */
-let settingsSync = null;
-let relayPoller = null;
+// The deck's live feeds (relay, wakes, local room) and the company-room wiring that
+// fills them -- RoomPublisher, RelayPoller, settings sync: feeds.cjs. Built here so
+// every later reader sees the getters; start() runs in app.whenReady, and
+// startRoomStage stays defined below (CAST004 reads it in this file).
+const {
+  refreshRelayFeed,
+  refreshWakesFeed,
+  refreshRoomFeed,
+  wakesPending,
+  start: startFeeds,
+  stop: stopFeeds,
+  getRelayFeed,
+  getWakesFeed,
+  getRoomFeed,
+  getRoomPublisher,
+  getRelayPoller,
+  getSettingsSync,
+} = require("./feeds.cjs").createFeeds({
+  fetchRelayHistory,
+  postRelayThreadReply,
+  RELAY_NICK,
+  wakesFeedClient,
+  RoomPublisher,
+  RelayPoller,
+  getCommandAgent,
+  getFleetControl,
+  sendDeckState: () => sendDeckState(),
+  startRoomStage: () => startRoomStage(),
+  debugLog: (...args) => debugLog(...args),
+});
 let hyprlandConfigured = false;
 let hyprlandConfiguring = false;
 let hyprlandConfigurationTimer = null;
@@ -705,7 +716,7 @@ function handleBridgeEvent(event) {
  *  CALL time (not at require time) is what makes that ordering safe. */
 function roomStageDeps() {
   return {
-    roomPublisher,
+    roomPublisher: getRoomPublisher(),
     spawnAvatarSlot,
     removeAvatarSlot,
     speakAloud,
@@ -719,7 +730,7 @@ function roomStageDeps() {
     log: (...args) => debugLog(...args),
     env: process.env,
     // Read at CALL time for the same reason roomPublisher is: null until ready.
-    syncStatus: () => (settingsSync ? settingsSync.status() : null),
+    syncStatus: () => (getSettingsSync() ? getSettingsSync().status() : null),
   };
 }
 
@@ -733,7 +744,7 @@ function roomStageDeps() {
  *  asserts statically can never happen again. room-stage-host.cjs (U07) owns
  *  the build; this is a delegation only. */
 function startRoomStage() {
-  if (!roomPublisher) return;
+  if (!getRoomPublisher()) return;
   roomStageHost.startRoomStage(roomStageDeps());
 }
 
@@ -1114,7 +1125,7 @@ const integrationDoors = require("./integration-doors.cjs").createIntegrationDoo
   getAvatarWindow: () => avatarWindow,
   getVoiceState: () => latestVoiceState,
   getListenerStatus: () => getListenerStatus(),
-  getWakesFeed: () => wakesFeed,
+  getWakesFeed: () => getWakesFeed(),
   holdWhileQuiet: () => holdWhileQuiet(),
   showOverlay: (...args) => showOverlay(...args),
   hideOverlay: (...args) => hideOverlay(...args),
@@ -1501,18 +1512,18 @@ function deckState() {
     // The relay channel the sessions coordinate on — the desk is the cockpit,
     // and a cockpit that cannot see #agents is a window onto half the fleet
     // (owner: "why would awask + awdesk not be integrated into awrelay").
-    relay: relayFeed,
+    relay: getRelayFeed(),
     relayChannel: RELAY_CHANNEL,
     // awrise's scheduled jobs + whether its clock is still ticking. A green job
     // list with no ticks is the failure that hides itself, so the liveness
     // fields ride on the same object the rows do.
-    wakes: wakesFeed,
+    wakes: getWakesFeed(),
     // The local room (awdk daemon): command requests/replies beside every
     // session's tool calls — the half of the company room that outlives the fleet.
-    room: roomFeed,
-    roomStatus: roomPublisher ? (roomPublisher.lastError || "ok") : "not started",
+    room: getRoomFeed(),
+    roomStatus: getRoomPublisher() ? (getRoomPublisher().lastError || "ok") : "not started",
     roomStage: roomStageHost.status(),
-    relayPoller: relayPoller ? relayPoller.status() : null,
+    relayPoller: getRelayPoller() ? getRelayPoller().status() : null,
   };
 }
 
@@ -1538,35 +1549,6 @@ setDeskStateProvider(() => deckState());
 setInterval(() => {
   pushDeskState();
 }, 5000);
-
-/** Poll #agents for the deck's relay section. [] on refusal — the section
- *  renders "relay unavailable" rather than pretending the channel is empty. */
-async function refreshRelayFeed() {
-  const rows = await fetchRelayHistory();
-  relayFeed = rows;
-  sendDeckState();
-}
-
-/** Pull the wake list from the harness daemon. Keeps the previous snapshot so
- *  an unreachable daemon renders as "stale, showing X from N ago" instead of an
- *  empty list that reads as "no jobs configured". */
-async function refreshWakesFeed() {
-  const before = wakesFeedClient.feedSignature(wakesFeed);
-  wakesFeed = await wakesFeedClient.fetchWakes({ previous: wakesFeed, nowMs: Date.now() });
-  if (wakesFeedClient.feedSignature(wakesFeed) !== before) sendDeckState();
-}
-
-/** The local room's chat-like rows (command requests/replies, agent messages)
- *  from the awdk daemon — the half of the company room that does not need the
- *  fleet. [] when the daemon is down; the chat window says so. */
-async function refreshRoomFeed() {
-  if (!roomPublisher) return;
-  const rows = await roomPublisher.recentChat({ limit: 60 });
-  const changed = rows.length !== roomFeed.length || (rows.length && rows[rows.length - 1].id !== roomFeed[roomFeed.length - 1]?.id);
-  roomFeed = rows;
-  if (changed) sendDeckState();
-}
-
 
 /** The Desk panel — a frameless always-on-top window that opens beside the avatar
  *  on right-click. Same bundle as the avatar scene (`?deck=1`), same preload, so
@@ -2328,6 +2310,8 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
         // follow-up, not wired here — see this unit's own report).
         case "room-steer": {
           if (typeof arg !== "string" || !arg.trim()) return false;
+          // Set once in app.whenReady (feeds.cjs) and never cleared.
+          const roomPublisher = getRoomPublisher();
           let parsed;
           try {
             parsed = JSON.parse(arg);
@@ -2436,73 +2420,11 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
       if (p?.phase === "end") refreshTrayMenu();
     });
 
-    // Watch the decision-card store: tray label + tooltip and the deck badge
-    // track the open queue. Native notifications are REMOVED (2026-08-31,
-    // owner decision) — a toast presented under the PowerShell app id with a
-    // click that led nowhere is worse than no toast; the tray, deck and
-    // Discord fanout are the bells. Relay feed for the deck: first pull
-    // immediately, then every 60s. A cockpit feed lags the channel by design
-    // — it is a summary, not a client.
-    void refreshRelayFeed();
-    relayFeedTimer = setInterval(() => void refreshRelayFeed(), 60_000);
-    relayFeedTimer.unref?.();
-
-    // awrise wakes: poll the daemon every 30 s and push only when something
-    // moved (the feed signature excludes fetched_at, so a stable list does not
-    // re-render every tick; it INCLUDES source/stale_since so the chip flips
-    // the moment the daemon goes away).
-    wakesWatchStop = wakesFeedClient.watch({
-      onChange: (feed) => {
-        wakesFeed = feed;
-        sendDeckState();
-      },
-    }).stop;
-
-    // The company room, wired both ways (owner, 2026-09-08: "full integration
-    // into aitherrelay + aitherroom ... so I can just chat in there and have
-    // things get done"). One CommandAgent executes; this makes every surface
-    // reach it and every outcome land where it was asked:
-    //  - RoomPublisher: each request/reply becomes an event in the awdk daemon
-    //    room "main" (host process — works while the fleet is DOWN), beside the
-    //    tool calls of every Claude Code tab; awsh /room and adk read it.
-    //  - RelayPoller: a message in #command, or "@desk …" in #agents, runs
-    //    through the same agent and is acked in-thread on the relay.
-    const commandAgent = getCommandAgent(getFleetControl());
-    roomPublisher = new RoomPublisher();
-    startRoomStage();
-    // Never awaited and never able to throw into launch: offline is the normal
-    // state of a laptop, and a sync that can delay the desk coming up is worse
-    // than no sync. The Cast pane shows whatever it ended with.
-    try {
-      const { createSettingsSync } = require("./settings-sync.cjs");
-      settingsSync = createSettingsSync({
-        castFile: () => require("./cast-config.cjs").CAST_FILE(),
-        settings: () => require("./desk-settings.cjs").current(),
-        log: (...args) => debugLog(...args),
-      });
-      void settingsSync.start().catch((error) => debugLog("settings sync start failed", error?.message || error));
-    } catch (error) {
-      debugLog("settings sync unavailable", error?.message || error);
-    }
-    roomPublisher.attach(commandAgent, {
-      actorFor: (p) => (/^relay:/.test(String(p.source || ""))
-        ? { kind: "human", id: RELAY_NICK, name: RELAY_NICK }
-        : { kind: "human", id: "owner", name: "owner" }),
-    });
-    relayPoller = new RelayPoller({
-      agent: commandAgent,
-      fetchHistory: (channel, limit) => fetchRelayHistory(channel, limit),
-      postThreadReply: (channel, id, text) => postRelayThreadReply(channel, id, text),
-    });
-    relayPoller.on("executed", (r) => {
-      console.log(`[desk] relay order ${r.channel} ${r.id} -> ${r.result?.ok === false ? "FAILED" : "ok"}${r.posted ? "" : ` (ack not posted: ${r.postDetail || "refused"})`}`);
-      void refreshRelayFeed();
-    });
-    relayPoller.start();
-    void refreshRoomFeed();
-    roomFeedTimer = setInterval(() => void refreshRoomFeed(), 15_000);
-    roomFeedTimer.unref?.();
-    commandAgent.on("complete", () => void refreshRoomFeed());
+    // Native card notifications are REMOVED (2026-08-31, owner decision) — the
+    // tray, deck and Discord fanout are the bells. The deck's feeds and the
+    // company room (relay feed, wakes watch, RoomPublisher + startRoomStage,
+    // settings sync, RelayPoller, room feed): feeds.cjs, same order as before.
+    startFeeds();
 
     // Quiet mode, then the card watcher: badges, deck, and the spoken prompt for
     // a card that needs the owner (decisions-plane.cjs).
@@ -2547,10 +2469,8 @@ app.on("before-quit", () => {
   quietMode.stop();
   isQuitting = true;
   clearTimeout(hyprlandConfigurationTimer);
-  if (relayFeedTimer) clearInterval(relayFeedTimer);
-  wakesWatchStop?.();
+  stopFeeds();
   stopDecisionWatch();
-  settingsSync?.stop();
   stopAudioListener();
   globalShortcut.unregisterAll();
   integrationDoors.closeBridge();
