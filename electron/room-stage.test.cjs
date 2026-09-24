@@ -429,7 +429,11 @@ test("RoomStage: past the body cap a newcomer is heard through the resident, not
     { seq: 8, agent: true, author: "hydra", actorKind: "adk_agent", actorId: "h1", kind: "agent_message", text: "three" },
   ];
   await h.stage.tick();
-  await new Promise((r) => setTimeout(r, 40));
+  // Wait for the THIRD line to be spoken, not a fixed 40 ms: under load (1 run in 4
+  // on 2026-09-23, with two workflows busy) the drain had only reached lyra's line.
+  for (let waited = 0; waited < 2000 && !h.calls.speak.some((c) => c[0] === "hydra says: three"); waited += 10) {
+    await new Promise((r) => setTimeout(r, 10));
+  }
   assert.equal(h.calls.spawn.length, 2, "only two bodies");
   const last = h.calls.speak[h.calls.speak.length - 1];
   assert.equal(last[2], "slot0");
