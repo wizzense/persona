@@ -70,10 +70,8 @@ const GROUPS = Object.freeze({
  * ITEMS are one list; only the reading order differs.
  */
 const LAYOUT = Object.freeze({
-  // 2026-09-23 redesign: where to go, then what you HEAR (voices, mic), then the
-  // avatar, then the nested places. Voice controls sat seventh, under five submenus.
-  tray: Object.freeze(["go", "talk", "avatar", "desktop", "window-size", "stage", "fleet", "arc", "blog", "app"]),
-  "avatar-menu": Object.freeze(["talk", "body", "avatar", "stage", "window-size", "slot", "desktop", "go"]),
+  tray: Object.freeze(["go", "desktop", "avatar", "window-size", "talk", "stage", "fleet", "arc", "blog", "app"]),
+  "avatar-menu": Object.freeze(["talk", "body", "stage", "window-size", "avatar", "slot", "desktop", "go"]),
   // The rail reads top to bottom: what is waiting, where to go, who to talk to,
   // the desktop. The bell stays on top -- it is the one bead read without a click.
   beads: Object.freeze(["go", "talk", "desktop"]),
@@ -123,13 +121,13 @@ const COMMANDS = Object.freeze([
     label: (ctx = {}) => {
       const waiting = Number(ctx.decisionsWaiting || 0);
       const total = Number(ctx.decisionsTotal || 0);
-      if (waiting > 0) return `Decisions — ${waiting} waiting`;
-      if (total > 0) return `Decisions — ${total} card${total === 1 ? "" : "s"}`;
-      return "Decisions";
+      if (waiting > 0) return `Inbox — ${waiting} decision${waiting === 1 ? "" : "s"} waiting`;
+      if (total > 0) return `Inbox — ${total} card${total === 1 ? "" : "s"}`;
+      return "Inbox";
     },
   }),
   Object.freeze({
-    id: "console.open", label: "Open Aither…", group: "go", icon: "grid",
+    id: "console.open", label: "Aither Console…", group: "go", icon: "grid",
     surfaces: ["tray", "avatar-menu", "palette", "beads", "jumplist"],
   }),
   // 🚩 AitherOS Online -- the Living Desktop held over the real one. It is what the
@@ -280,17 +278,6 @@ const COMMANDS = Object.freeze([
     id: "voice.silence", group: "talk", accel: "Ctrl+Alt+M", icon: "volume-off",
     surfaces: ["tray", "avatar-menu", "palette", "jumplist"],
     label: (ctx = {}) => (ctx.voicesMuted ? "Unmute voices (narration is off)" : "Mute all voices"),
-  }),
-  // Owner, 2026-09-23: cards "popping up on my main screen while im playing games".
-  // A full-screen game already silences the desk on its own (quiet-mode.cjs); this is
-  // the manual switch for everything else, and the label says why it is quiet now.
-  Object.freeze({
-    id: "attention.dnd", group: "talk", icon: "moon",
-    surfaces: ["tray", "avatar-menu", "palette", "jumplist"],
-    label: (ctx = {}) => {
-      if (ctx.doNotDisturb) return "Turn off Do not disturb";
-      return ctx.quietReason ? `Do not disturb (quiet now: ${ctx.quietReason})` : "Do not disturb";
-    },
   }),
   // The other half of the same complaint: assigning a voice meant finding the
   // body's row in the Cast pane and typing an id. Right-click the body, pick one.
