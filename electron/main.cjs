@@ -88,10 +88,6 @@ const { connectSnapshot } = require("./connect-client.cjs");
 // ONE inventory of what Desk can do and which menus carry it. Menus are rendered
 // from it; nothing lists a capability by hand (docs/UX-REIMPLEMENTATION.md).
 const commandRegistry = require("./command-registry.cjs");
-// The registry's `blog` records: gateway blog_* MCP tools via gateway-mcp.cjs.
-// Machine paths create DRAFTS; `blog.publish` opens the Veil editor for a human
-// (owner ruling 2026-09-19, .claude/rules/blog-voice.md).
-const { runBlogCommand } = require("./blog-commands.cjs");
 // awrise wakes (scheduled jobs) — read and mutated ONLY through the awdk
 // harness daemon's /wakes window, so the desk, Discord, AitherDesktop and the
 // MCP tool share one reader and one semantics (see wakes-feed.cjs header).
@@ -1387,6 +1383,27 @@ const { voicesMuted, toggleVoiceSilence, buildVoiceMenu } = require("./voice-con
   debugLog: (...args) => debugLog(...args),
 });
 
+// The runners behind fleet/ARC, blog and About registry rows, and the one
+// command-agent entry (command-actions.cjs). runCommand stays here.
+const {
+  runFleetCommand,
+  runBlogMenuCommand,
+  fleetAction,
+  commandAction,
+  showAboutDesk,
+} = require("./command-actions.cjs").createCommandActions({
+  app,
+  dialog,
+  shell,
+  commandRegistry,
+  getTray: () => tray,
+  createFleetWindow,
+  getFleetControl,
+  fleetSummaryCached,
+  createCommandWindow,
+  getCommandAgent,
+});
+
 // The MCP handler and the loopback bridge server (the doors other programs use).
 // Built here, after quietMode and voiceAsk exist; started in app.whenReady.
 const integrationDoors = require("./integration-doors.cjs").createIntegrationDoors({
@@ -1732,33 +1749,6 @@ function runCommand(id, arg, { surface = "menu", slotId = null } = {}) {
   }
 }
 
-function showAboutDesk() {
-  // No bundled character since 2026-09-10 (owner decision): the About surface
-  // says where a model comes from instead of crediting one, and points at a real
-  // window rather than restating a license.
-  void dialog
-    .showMessageBox({
-      type: "info",
-      title: "About Desk",
-      message: `Desk ${app.getVersion()}`,
-      detail: [
-        "The AitherOS desktop hub — avatar presence, decision cards, model & agent browsing, relay.",
-        "",
-        "Desk ships no character models. Add your own — VRoid Hub is the guided path;",
-        "any VRM 1.0 file you have the rights to works. Your models stay on this machine.",
-        "Full asset policy: ASSET_LICENSES.md.",
-      ].join("\n"),
-      buttons: ["Browse VRoid Hub…", "Close"],
-      defaultId: 1,
-      cancelId: 1,
-    })
-    .then(({ response }) => {
-      if (response === 0) {
-        void shell.openExternal("https://hub.vroid.com/en/");
-      }
-    });
-}
-
 /** Everything the deck panel renders, in one object — the panel is a VIEW over
  *  main's state, so the tray and the deck can never disagree about what is
  *  waiting or which avatars exist (the one-source-of-truth class). */
@@ -2008,91 +1998,6 @@ function createChatWindow() {
   });
   void chatWindow.loadURL(chatUrl);
   return chatWindow;
-}
-
-/** ONE entry point for every fleet surface (window buttons, tray, bridge
- *  /fleet/*, MCP fleet_control, `game`): the verb lands on the single
- *  FleetControl so nothing can race a second mask/unmask pass. */
-/** A menu row that changes the fleet: destructive verbs confirm first (a tray
- *  menu has no second click to arm), every verb raises the Fleet window so the
- *  outcome is SEEN, and the verdict lands in the tray tooltip. */
-async function runFleetCommand(command) {
-  const verb = command.fleet;
-  if (command.destructive) {
-    const { response } = await dialog.showMessageBox({
-      type: "warning",
-      buttons: ["Cancel", commandRegistry.labelOf(command)],
-      defaultId: 0,
-      cancelId: 0,
-      message: commandRegistry.labelOf(command),
-      detail: verb === "arc-stop"
-        ? "Stops the ARC solver. The world model stays up; training pauses until ARC is started again."
-        : "Stops the GPU models and routine runners. The rest of the fleet stays up.",
-    });
-    if (response !== 1) return;
-  }
-  const verdict = await fleetAction(verb, { fresh: verb === "arc-status" });
-  if (verb.startsWith("arc-")) {
-    const wm = verdict.world_model || {};
-    const unitState = verdict.units && verdict.units["aither-arcsolver"];
-    const summary = verdict.cannotJudge
-      ? `ARC: could not look (${verdict.error || "no answer"})`
-      : `ARC: ${verdict.verdict || (verdict.ok ? "OK" : "DEGRADED")}`
-        + (unitState ? ` · solver ${typeof unitState === "string" ? unitState : (unitState.active || unitState.state || "?")}` : "")
-        + (wm.train_steps != null ? ` · steps ${wm.train_steps}` : "")
-        + ((verdict.problems || []).length ? ` · ${verdict.problems.join("; ")}` : "");
-    console.log(`[desk] ${verb}: ${summary}`);
-    tray?.setToolTip(summary);
-    if (verb === "arc-status" && !command.destructive) {
-      void dialog.showMessageBox({ type: verdict.ok ? "info" : "warning", message: summary,
-        detail: (verdict.problems || []).join("\n") || undefined });
-    }
-  }
-  return verdict;
-}
-
-/** A blog record from a menu or the palette. The verdict goes back to the
- *  caller; a tray click (nothing awaits it) gets a dialog instead. Nothing here
- *  publishes -- see blog-commands.cjs. */
-async function runBlogMenuCommand(command, arg, { surface = "menu" } = {}) {
-  const verdict = await runBlogCommand(command, arg, {
-    openExternal: (url) => shell.openExternal(url),
-  });
-  console.log(`[desk] ${command.id}: ${verdict.message}`);
-  if (surface !== "palette") {
-    void dialog.showMessageBox({
-      type: verdict.ok ? "info" : "warning",
-      title: commandRegistry.labelOf(command),
-      message: verdict.message || (verdict.ok ? "Done" : "Failed"),
-    });
-  }
-  return verdict;
-}
-
-async function fleetAction(action, { fresh = false } = {}) {
-  const control = getFleetControl();
-  if (action === "open_panel" || action === "open") {
-    createFleetWindow();
-    return { ok: true, opened: true, summary: fleetSummaryCached() };
-  }
-  if (action === "status") {
-    const verdict = await control.status(fresh ? { maxAgeMs: 0 } : {});
-    return { ...verdict, summary: fleetSummaryCached() };
-  }
-  if (!Object.prototype.hasOwnProperty.call(require("./fleet-control.cjs").ACTIONS, action)) {
-    return { ok: false, unknown: true, error: `unknown fleet action "${action}"` };
-  }
-  // Raise the window so the owner SEES a fleet-changing action an agent started.
-  if (action !== "status") createFleetWindow();
-  return control.run(action);
-}
-
-/** ONE entry point for every command surface (window, bridge, MCP): the request
- *  lands on the single CommandAgent so history and queue are consistent. */
-async function commandAction(text, { source = "unknown" } = {}) {
-  createCommandWindow(getFleetControl(), { createFleetWindow });
-  const agentInstance = getCommandAgent(getFleetControl());
-  return agentInstance.run(text, { source });
 }
 
 /**
