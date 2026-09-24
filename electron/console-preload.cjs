@@ -21,19 +21,32 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 const href = String(globalThis.location?.href || "");
 
-if (href.includes("settings.html")) {
+// A pane is its EXACT file name on a file: URL. A substring match handed the
+// Home bridge to any frame whose URL merely contained "home.html" -- the CSP
+// lets the console frame http://localhost:* (review #10).
+function paneFile(raw) {
+  try {
+    const url = new URL(raw);
+    return url.protocol === "file:" ? decodeURIComponent(url.pathname).split("/").pop() : "";
+  } catch {
+    return "";
+  }
+}
+const pane = paneFile(href);
+
+if (pane === "settings.html") {
   require("./settings-preload.cjs");
-} else if (href.includes("command.html")) {
+} else if (pane === "command.html") {
   require("./command-preload.cjs");
-} else if (href.includes("fleet-control.html")) {
+} else if (pane === "fleet-control.html") {
   require("./fleet-preload.cjs");
-} else if (href.includes("sessions.html")) {
+} else if (pane === "sessions.html") {
   require("./sessions-preload.cjs");
-} else if (href.includes("stage.html")) {
+} else if (pane === "stage.html") {
   require("./stage-preload.cjs");
-} else if (href.includes("home.html")) {
+} else if (pane === "home.html") {
   require("./home-preload.cjs");
-} else if (href.includes("cast.html")) {
+} else if (pane === "cast.html") {
   require("./cast-preload.cjs");
 } else if (!href.includes("console.html")) {
   // The renderer bundle: ?deck=1 and ?chat=1 both live here. Loaded ONLY for
@@ -76,7 +89,21 @@ ipcRenderer.on("desk:appearance-changed", (_event, a) => { lastAppearance = a; p
 if (doc.readyState === "loading") doc.addEventListener("DOMContentLoaded", paint);
 else paint();
 
-contextBridge.exposeInMainWorld("aitherConsole", {
+// 🚩 The SHELL's bridge only. This preload runs in every pane frame too, and this
+// bridge carries runCommand -- which ran any registry id, quit included -- so a page
+// in a pane (or anything a localhost frame loads) could close the desk or park the
+// fleet (review 2026-09-23, finding #10). No pane page uses it; main also checks the
+// sender frame (console-window.cjs fromShell), so this is one of two locks.
+const isShell = (() => {
+  try {
+    const url = new URL(href);
+    return url.protocol === "file:" && /\/console\.html$/i.test(url.pathname) && globalThis.top === globalThis.self;
+  } catch {
+    return false;
+  }
+})();
+
+if (isShell) contextBridge.exposeInMainWorld("aitherConsole", {
   /** { theme, uiScale, themes[] } -- the family's eleven, generated from Veil's. */
   appearance: () => ipcRenderer.invoke("desk:appearance-get"),
   setAppearance: (patch) => ipcRenderer.invoke("desk:appearance-set", patch || {}),

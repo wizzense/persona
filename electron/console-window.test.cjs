@@ -309,3 +309,98 @@ test("a pane asked for while the console is cold-opening is HELD, not replaced b
     "start() must honour the held request before falling back to the first pane");
   assert.doesNotMatch(start, /\n {2}if \(panes\.length\) select\(panes\[0\]\.id\);/, "start() selects the first pane unconditionally again");
 });
+
+/** Lift named top-level functions out of console.html so they RUN here, not just
+ *  match a regex. Brace-counted; the shell's functions keep braces out of strings. */
+function shellFunctions(names, sandbox) {
+  const html = read("console.html");
+  const bodies = names.map((name) => {
+    const at = html.indexOf(`\nfunction ${name}(`);
+    assert.ok(at !== -1, `console.html has no function ${name}`);
+    let depth = 0;
+    for (let i = html.indexOf("{", at); i < html.length; i += 1) {
+      if (html[i] === "{") depth += 1;
+      else if (html[i] === "}" && (depth -= 1) === 0) return html.slice(at, i + 1);
+    }
+    throw new Error(`unbalanced ${name}`);
+  });
+  const vm = require("node:vm");
+  vm.createContext(sandbox);
+  vm.runInContext(bodies.join("\n"), sandbox);
+  return sandbox;
+}
+
+/** Just enough DOM for frameFor/applyFocus: elements are found by id once appended. */
+function fakeDom() {
+  const byId = new Map();
+  const element = (tag) => ({
+    tagName: tag.toUpperCase(), id: "", src: "", className: "",
+    setAttribute() {}, append() {}, appendChild() {},
+    remove() { byId.delete(this.id); },
+  });
+  return {
+    byId,
+    document: { getElementById: (id) => byId.get(id) || null, createElement: element },
+    stage: { appendChild: (node) => byId.set(node.id, node) },
+  };
+}
+
+test("Open on card B opens card B -- card= is never stacked onto the pane's src", () => {
+  // Owner-facing: Home is panes[0], so the Decisions frame usually did not exist yet.
+  // Focusing card A rewrote pane.src to "...&card=A" for good; card B then loaded
+  // "...&card=A&card=B" and Deck's get('card') read A. Same again after a reattach.
+  const dom = fakeDom();
+  const base = "file:///desk/dist/index.html?deck=1";
+  const panes = [{ id: "home", src: "home.html" }, { id: "cards", label: "Decisions", src: base }];
+  const shell = shellFunctions(["frameFor", "applyFocus"], {
+    panes, document: dom.document, stage: dom.stage,
+    select(id) { shell.frameFor(panes.find((p) => p.id === id)); },
+  });
+  const cardsFrame = () => dom.byId.get("pane-cards");
+  const cardsIn = (src) => new URL(src).searchParams.getAll("card");
+
+  shell.applyFocus({ pane: "cards", param: "A" });   // no frame yet
+  assert.deepEqual(cardsIn(cardsFrame().src), ["A"]);
+  shell.applyFocus({ pane: "cards", param: "B" });
+  assert.deepEqual(cardsIn(cardsFrame().src), ["B"], cardsFrame().src);
+  assert.equal(panes[1].src, base, "pane.src is the base every card link is built from");
+
+  // Detach destroys the frame; the next card must build on the base, not on B.
+  cardsFrame().remove();
+  shell.applyFocus({ pane: "cards", param: "C" });
+  assert.deepEqual(cardsIn(cardsFrame().src), ["C"], cardsFrame().src);
+  // ...and a plain rebuild (reattach, no card asked for) is the plain pane.
+  cardsFrame().remove();
+  shell.frameFor(panes[1]);
+  assert.equal(cardsFrame().src, base);
+});
+
+test("a detached pane is marked on its PLACE row, and a detached inbox shows no count", () => {
+  // The per-pane "detached" badge sits in #subtabs, which is hidden for one-pane
+  // places (Decisions, Fleet, Settings, Online) and for every place but the current
+  // one -- so detaching Fleet left no trace in the rail.
+  const panes = PANES.map((p) => ({ id: p.id, place: p.place }));
+  const rows = [...new Set(panes.map((p) => p.place || p.id))].map((place) => {
+    const badge = { textContent: "", classes: new Set(),
+      classList: { toggle(name, on) { if (on) badge.classes.add(name); else badge.classes.delete(name); } } };
+    return { dataset: { place }, badge, setAttribute() {}, querySelector: () => badge };
+  });
+  const shell = shellFunctions(["placeOf", "renderPlaces"], {
+    panes, selected: "home", detached: new Set(["fleet", "cards"]), inboxCount: 3,
+    subtabs: { hidden: false, querySelectorAll: () => [] },
+    document: { querySelectorAll: () => rows },
+  });
+  shell.renderPlaces();
+  const badgeOf = (place) => rows.find((r) => r.dataset.place === place).badge;
+  assert.equal(badgeOf("fleet").textContent, "detached");
+  assert.equal(badgeOf("decisions").textContent, "detached", "a detached inbox still showed its count");
+  assert.equal(badgeOf("decisions").classes.has("count"), false);
+  assert.equal(badgeOf("home").textContent, "");
+
+  // Back in the console: the count returns, the marker goes.
+  shell.detached = new Set();
+  shell.renderPlaces();
+  assert.equal(badgeOf("decisions").textContent, "3");
+  assert.equal(badgeOf("decisions").classes.has("count"), true);
+  assert.equal(badgeOf("fleet").textContent, "");
+});

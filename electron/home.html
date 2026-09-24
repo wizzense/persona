@@ -53,6 +53,7 @@
           <div><div class="big" id="d-stale">–</div><div class="ui-meta">older than a week</div></div>
         </div>
         <div id="d-list" class="ui-list"></div>
+        <div class="ui-note" id="d-error" role="status"></div>
       </section>
 
       <section class="ui-card">
@@ -69,6 +70,10 @@
           <div class="line">
             <span class="ui-grow"><b>Avatar</b><div class="ui-note" id="v-avatar-note"></div></span>
             <label class="ui-switch"><input type="checkbox" id="v-avatar" /></label>
+          </div>
+          <div class="line">
+            <span class="ui-grow"><b>Do not disturb</b><div class="ui-note" id="v-dnd-note"></div></span>
+            <label class="ui-switch"><input type="checkbox" id="v-dnd" /></label>
           </div>
           <div class="ui-row">
             <button class="ui-btn ui-small" data-open="cast">Voices…</button>
@@ -101,20 +106,31 @@ const el = (tag, cls, text) => {
   return node;
 };
 let busy = false;
+// Cards answered HERE, hidden until a summary stops listing them (or 60 s pass):
+// the summary can still carry a card awask just closed, and re-drawing it with
+// live buttons invited a second answer (review #4).
+const answered = new Map();
+const ANSWERED_TTL_MS = 60000;
+let lastDecisions = null;
 
 function renderDecisions(d) {
+  lastDecisions = d;
+  const now = Date.now();
+  const listed = new Set(d.top.map((card) => card.id));
+  for (const [id, at] of answered) if (!listed.has(id) || now - at > ANSWERED_TTL_MS) answered.delete(id);
+  const top = d.top.filter((card) => !answered.has(card.id));
   $("d-waiting").textContent = String(d.waiting);
   $("d-today").textContent = String(d.today);
   $("d-stale").textContent = String(d.stale);
   const list = $("d-list");
   list.replaceChildren();
-  if (!d.top.length) {
+  if (!top.length) {
     const empty = el("div", "ui-empty");
     empty.append(el("strong", null, "Nothing needs you"), el("span", null, d.total ? `${d.total} cards are informational.` : "The inbox is clear."));
     list.appendChild(empty);
     return;
   }
-  for (const card of d.top) {
+  for (const card of top) {
     const row = el("div", "card-row");
     const top = el("div", "top");
     const dot = el("span", "ui-dot " + (card.urgency === "critical" || card.urgency === "high" ? "ui-bad" : "ui-warn"));
@@ -128,17 +144,30 @@ function renderDecisions(d) {
     if (card.summary) row.appendChild(el("div", "sum", card.summary));
     if (card.options.length) {
       const opts = el("div", "ui-row");
+      const buttons = [];
       for (const option of card.options) {
         const button = el("button", "ui-btn ui-small" + (option.recommended ? " ui-primary" : ""), option.label);
         button.addEventListener("click", async () => {
-          button.disabled = true;
-          const result = await api.answer(card.id, option.key);
-          if (!result || result.ok === false) {
-            button.disabled = false;
-            $("stamp").textContent = (result && result.error) || "could not answer";
+          for (const b of buttons) b.disabled = true;
+          let result;
+          try {
+            result = await api.answer(card.id, option.key);
+          } catch (error) {
+            result = { ok: false, error: String((error && error.message) || error) };
           }
+          if (!result || result.ok === false) {
+            // Left where refresh() does not write, and no refresh: the stamp line
+            // used to be overwritten with "updated HH:MM" before anyone read it.
+            for (const b of buttons) b.disabled = false;
+            $("d-error").textContent = `Could not answer "${card.title}": ${(result && result.error) || "no verdict"}`;
+            return;
+          }
+          $("d-error").textContent = "";
+          answered.set(card.id, Date.now());
+          if (lastDecisions) renderDecisions(lastDecisions);
           void refresh();
         });
+        buttons.push(button);
         opts.appendChild(button);
       }
       row.appendChild(opts);
@@ -182,6 +211,8 @@ function renderVoice(v, a) {
   $("v-avatar").checked = a.shown;
   $("v-avatar-note").textContent = (a.shown ? "Shown" : "Hidden") + (a.character ? ` · ${a.character}` : "")
     + (a.bodies ? ` · ${a.bodies} on stage` : "");
+  $("v-dnd").checked = Boolean(v.doNotDisturb);
+  $("v-dnd-note").textContent = v.doNotDisturb ? "Card popups and speech held until you turn it off" : "Cards may pop up";
 }
 
 async function refresh() {
@@ -203,10 +234,18 @@ async function refresh() {
   }
 }
 
-// Each switch runs the SAME registry command as the tray, the avatar menu and Ctrl+K.
-$("v-voices").addEventListener("change", async () => { await api.run("voice.silence"); void refresh(); });
-$("v-mic").addEventListener("change", async () => { await api.run("voice.mute"); void refresh(); });
-$("v-avatar").addEventListener("change", async () => { await api.run("avatar.toggle"); void refresh(); });
+// Each switch sends the state it now SHOWS; main runs the tray's own toggle only
+// when the live state differs. Sending "toggle" flipped the REAL state, so a
+// switch drawn before a tray mute un-muted on the owner's "mute" click (review #3).
+const bindSwitch = (id, key, invert) => $(id).addEventListener("change", async () => {
+  const on = $(id).checked;
+  await api.set({ [key]: invert ? !on : on });
+  void refresh();
+});
+bindSwitch("v-voices", "voicesMuted", true);
+bindSwitch("v-mic", "micMuted", true);
+bindSwitch("v-avatar", "avatarShown", false);
+bindSwitch("v-dnd", "doNotDisturb", false);
 for (const button of document.querySelectorAll("[data-open]")) {
   button.addEventListener("click", () => api.open(button.dataset.open));
 }

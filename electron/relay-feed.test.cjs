@@ -2,6 +2,9 @@
 
 const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 const test = require("node:test");
 
 const {
@@ -18,7 +21,29 @@ const {
   DOOR_PRESENT_URL,
   DOOR_HEADER,
 } = require("./relay-feed.cjs");
-const { sharedBridge, _resetSharedForTests } = require("./relay-room-bridge.cjs");
+const {
+  RelayRoomBridge,
+  sharedBridge,
+  _resetSharedForTests,
+} = require("./relay-room-bridge.cjs");
+
+// fetchHistory/post mirror through sharedBridge(), whose default statusFile is the
+// REAL ~/.aither/relay-room-bridge.json -- every run used to overwrite the live
+// desk's bridge trace with fixture state. Build the shared bridge on a tmp file
+// first; the LAST test fails if any status write went anywhere else.
+const BRIDGE_STATUS = path.join(
+  fs.mkdtempSync(path.join(os.tmpdir(), "desk-relay-feed-")), "relay-room-bridge.json");
+function resetBridge() {
+  _resetSharedForTests();
+  sharedBridge({ statusFile: BRIDGE_STATUS });
+}
+resetBridge();
+const statusWrites = [];
+const realWriteStatus = RelayRoomBridge.prototype.writeStatus;
+RelayRoomBridge.prototype.writeStatus = function recorded(file) {
+  statusWrites.push(path.resolve(file || this.statusFile));
+  return realWriteStatus.call(this, file);
+};
 
 function fakeSpawn(handler) {
   return (_cmd, args) => {
@@ -240,7 +265,7 @@ test("postThreadReply replies over HTTP and reports the verdict", async () => {
 
 test("post surfaces the relay's id from message.id and hands it to noteOurs", async () => {
   _resetJoinForTests();
-  _resetSharedForTests();
+  resetBridge();
   const req = fakeRequest((_m, urlPath) => {
     if (urlPath === "/v1/agent/join") return { status: 200, body: '{"is_agent":true}' };
     return { status: 200, body: '{"success":true,"message":{"id":"msg-abc"}}' };
@@ -257,7 +282,7 @@ test("post surfaces the relay's id from message.id and hands it to noteOurs", as
 
 test("post surfaces the relay's id from a bare id or message_id, never from a body with neither", async () => {
   _resetJoinForTests();
-  _resetSharedForTests();
+  resetBridge();
   const bareId = fakeRequest((_m, urlPath) => {
     if (urlPath === "/v1/agent/join") return { status: 200, body: '{"is_agent":true}' };
     return { status: 200, body: '{"id":"bare-1"}' };
@@ -282,7 +307,7 @@ test("post surfaces the relay's id from a bare id or message_id, never from a bo
 
 test("postThreadReply surfaces the relay's id from reply.id", async () => {
   _resetJoinForTests();
-  _resetSharedForTests();
+  resetBridge();
   const req = fakeRequest((_m, urlPath) => {
     if (urlPath === "/v1/agent/join") return { status: 200, body: '{"is_agent":true}' };
     return { status: 200, body: '{"success":true,"reply":{"id":"reply-9"},"thread_info":{}}' };
@@ -486,4 +511,11 @@ test("door: a plain 403 (no door in the reason) never knocks", async () => {
   assert.match(r.detail, /agent-only channel/);
   assert.equal(w.log.filter((e) => e.kind === "knock").length, 0);
   _resetDoorForTests();
+});
+
+// LAST on purpose: node:test runs a file's top-level tests in order.
+test("isolation: every bridge status write in this file went to the tmp file", () => {
+  assert.ok(statusWrites.length > 0, "no status write recorded -- the mirror path was not exercised");
+  assert.deepEqual([...new Set(statusWrites)], [path.resolve(BRIDGE_STATUS)],
+    "a test wrote the owner's real ~/.aither/relay-room-bridge.json");
 });

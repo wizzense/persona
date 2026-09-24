@@ -104,6 +104,11 @@
     "files": [
       "dist/**/*",
       "electron/**/*.cjs",
+      "electron/**/*.html",
+      "electron/**/*.css",
+      "electron/**/*.json",
+      "electron/**/*.png",
+      "electron/**/*.svg",
       "!electron/**/*.test.cjs",
       "build/icon.png",
       "LICENSE",

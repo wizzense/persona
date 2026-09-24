@@ -153,6 +153,36 @@ async function run() {
     JSON.stringify(rail.names));
   check("the pane asked for lights up its PLACE", rail.on === "avatars", `selected place = ${rail.on}`);
 
+  // 🚩 Open on card A, then card B, with no Decisions frame yet (Home is panes[0],
+  // so that is the usual state). The first focus used to rewrite the pane's src for
+  // good, B then loaded "?deck=1&card=A&card=B", and Deck read the FIRST card -- A.
+  const cardsFrameBefore = await win.webContents.executeJavaScript(
+    "Boolean(document.getElementById('pane-cards'))");
+  win.webContents.send("desk:console-focus", { pane: "cards", param: "card-A" });
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  win.webContents.send("desk:console-focus", { pane: "cards", param: "card-B" });
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  const cardsSrc = await win.webContents.executeJavaScript(
+    "(document.getElementById('pane-cards') || {}).src || ''");
+  const cardParams = cardsSrc ? new URL(cardsSrc).searchParams.getAll("card") : [];
+  check("Open on card A then card B loads card=B exactly once",
+    cardsFrameBefore === false && cardParams.length === 1 && cardParams[0] === "card-B",
+    `frame before = ${cardsFrameBefore} · src = ${cardsSrc.slice(-50) || "(no frame)"}`);
+
+  // The rail row of a detached ONE-pane place must say so: its pane tab (the only
+  // other "detached") sits in a subtab strip that is hidden for that place.
+  const fleetRow = "document.querySelector('#place-fleet .badge').textContent";
+  // The shell's own detach()/reattach() -- the path the buttons take -- while the
+  // SELECTED pane is cards, so Fleet's subtab strip is not what is showing.
+  await win.webContents.executeJavaScript("detach('fleet')");
+  await new Promise((resolve) => setTimeout(resolve, 900));
+  const fleetRowOut = await win.webContents.executeJavaScript(fleetRow);
+  await win.webContents.executeJavaScript("reattach('fleet')");
+  await new Promise((resolve) => setTimeout(resolve, 900));
+  const fleetRowBack = await win.webContents.executeJavaScript(fleetRow);
+  check("a detached Fleet says so on its rail row, and stops saying it on reattach",
+    fleetRowOut === "detached" && fleetRowBack === "", `out = "${fleetRowOut}" · back = "${fleetRowBack}"`);
+
   // 2. Each framed pane loads AND sees its own bridge. This is the assertion no
   //    static test can make: nodeIntegrationInSubFrames either injected the
   //    preload into that frame or the pane is a rectangle with no error.

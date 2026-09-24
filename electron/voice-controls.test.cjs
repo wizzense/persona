@@ -70,6 +70,32 @@ test("the Voice picker names the body's current voice and writes only that actor
   });
 });
 
+test("a presence-quiet body reads silenced, and 'Let this one speak' lifts it through the cast pane", async () => {
+  await withCast({ version: 1, actors: { "claude_code:q": { presence: "quiet" }, "claude_code:c": { presence: "chatty", speak: false } } }, (file) => {
+    const real = require("./room-stage-host.cjs").castPaneImpl({ castFile: file, env: {}, listCharacters: () => [] });
+    const snapshot = () => JSON.parse(fs.readFileSync(file, "utf8"));
+    const pane = {
+      describe: () => ({
+        onStage: [
+          { slotId: "slot2", origin: "claude_code:q", resolution: { voice: "nova", presence: "quiet", speak: true, voiced: false } },
+          { slotId: "slot3", origin: "claude_code:c", resolution: { voice: "nova", presence: "chatty", speak: false, voiced: false } },
+        ],
+        snapshot: snapshot(),
+      }),
+      unsilence: real.unsilence,
+    };
+    const { controls } = harness({ castPane: () => pane });
+    const labels = (slot) => controls.buildVoiceMenu(slot).map((row) => row.label);
+    assert.ok(labels("slot2").includes("Let this one speak"), "quiet is a silence the menu can lift");
+    assert.equal(labels("slot2").includes("Silence this one"), false);
+
+    controls.buildVoiceMenu("slot2").find((row) => row.label === "Let this one speak").click();
+    controls.buildVoiceMenu("slot3").find((row) => row.label === "Let this one speak").click();
+    assert.equal(snapshot().actors["claude_code:q"].presence, "normal");
+    assert.deepEqual(snapshot().actors["claude_code:c"], { presence: "chatty" }, "speak:false lifted, chatty kept");
+  });
+});
+
 test("a body the stage does not know gets one honest disabled row, not an empty menu", () => {
   const { controls } = harness();
   const menu = controls.buildVoiceMenu("slot9");

@@ -171,6 +171,12 @@ function castHandlers(getImpl) {
     "desk:cast-reveal": (_event, key) =>
       invalidArg("reveal", key, "key") ||
       call("reveal", () => impl().reveal?.({ key: String(key) })),
+
+    // The Speaks switch's ON: lifts only the silence that applies (speak:false
+    // or presence off/quiet), so a chatty presence survives an Off -> On.
+    "desk:cast-unsilence": (_event, key) =>
+      invalidArg("unsilence", key, "key") ||
+      call("unsilence", () => impl().unsilence?.({ key: String(key) })),
   };
 }
 

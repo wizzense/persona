@@ -10,7 +10,10 @@ import {
   facetCounts,
   filterCards,
   groupCards,
+  enterTogglesCursor,
+  defaultsSummary,
   hasDefault,
+  kindChips,
   moveCursor,
   orderedChoices,
   pagesToReveal,
@@ -20,7 +23,8 @@ import {
   type DecisionCard,
 } from './model';
 import { awarenessRows } from './awareness';
-import { bulkResultNote } from './bridge';
+import { bulkResultNote, deckStateFromPush } from './bridge';
+import { EMPTY_DECK_STATE, normalizeWakes, type DeckState } from '../../deck/deck-types';
 
 // Local-time noon, so "today" is TZ-independent.
 const NOW = new Date(2026, 8, 23, 12, 0, 0).getTime();
@@ -79,6 +83,30 @@ describe('filtering and facets', () => {
     expect(facets.kinds).toEqual([{ kind: 'credential', count: 1 }]);
   });
 
+  it('the active kind keeps its chip when a query pushes it out of the top', () => {
+    // Two 'deploy' decisions outrank the one 'blocked' card once the query is typed.
+    const pool = [
+      ...cards,
+      card('d', { title: 'deploy one' }),
+      card('e', { title: 'deploy two' }),
+      card('f', { title: 'deploy three', kind: 'blocked' }),
+    ];
+    const filters = { ...EMPTY_FILTERS, kind: 'blocked', query: 'deploy' };
+    expect(filterCards(pool, filters, NOW).map((c) => c.id)).toEqual(['f']);
+    const facets = facetCounts(pool, filters, NOW);
+    expect(facets.kinds.slice(0, 1).map((k) => k.kind)).toEqual(['decision']);
+    expect(kindChips(facets.kinds, 'blocked', 1)).toEqual([
+      { kind: 'decision', count: 2 },
+      { kind: 'blocked', count: 1 },
+    ]);
+    // A query that matches none of that kind still leaves a chip to turn it off.
+    expect(kindChips([{ kind: 'decision', count: 2 }], 'blocked', 6))
+      .toEqual([{ kind: 'decision', count: 2 }, { kind: 'blocked', count: 0 }]);
+    // No active kind, or one already in the top: just the top.
+    expect(kindChips(facets.kinds, null, 1)).toEqual([{ kind: 'decision', count: 2 }]);
+    expect(kindChips(facets.kinds, 'decision', 1)).toEqual([{ kind: 'decision', count: 2 }]);
+  });
+
   it('sorts newest first', () => {
     expect(sortNewestFirst(cards).map((c) => c.id)).toEqual(['a', 'b', 'c']);
   });
@@ -132,6 +160,34 @@ describe('answers and keyboard', () => {
     expect(moveCursor(0, 1, 0)).toBe(-1);
   });
 
+  it('Enter on a focused button is that button, not the cursor toggle', () => {
+    const el = (tagName: string, role: string | null = null) =>
+      ({ tagName, getAttribute: () => role }) as unknown as EventTarget;
+    // The option/Pop out/Dismiss/"Something else…" buttons, links and tabs keep Enter.
+    expect(enterTogglesCursor(el('BUTTON'), 'd-1')).toBe(false);
+    expect(enterTogglesCursor(el('A'), 'd-1')).toBe(false);
+    expect(enterTogglesCursor(el('DIV', 'tab'), 'd-1')).toBe(false);
+    // Body (nothing focused) and plain elements still toggle the cursor card.
+    expect(enterTogglesCursor(el('BODY'), 'd-1')).toBe(true);
+    expect(enterTogglesCursor(el('DIV'), 'd-1')).toBe(true);
+    expect(enterTogglesCursor(null, 'd-1')).toBe(true);
+    expect(enterTogglesCursor(el('BODY'), null)).toBe(false);
+    expect(enterTogglesCursor(el('DIV', 'Button'), 'd-1')).toBe(false); // roles compare case-insensitively
+  });
+
+  it('Enter on a row header button still opens the CURSOR row (click A, press j, press Enter)', () => {
+    const rowMain = { tagName: 'BUTTON', getAttribute: () => null, classList: { contains: (c: string) => c === 'dx-row-main' } } as unknown as EventTarget;
+    expect(enterTogglesCursor(rowMain, 'd-2')).toBe(true);
+  });
+
+  it('the bulk confirm names the answers it will send, most common first', () => {
+    const card = (id: string, label: string) =>
+      ({ id, defaultKey: 'k', options: [{ key: 'k', label }] }) as unknown as Parameters<typeof defaultsSummary>[0][number];
+    const cards = [card('a', 'Defer'), card('b', 'Keep owner-only'), card('c', 'Keep owner-only'), card('d', 'Noted'), card('e', 'Retry')];
+    expect(defaultsSummary(cards)).toBe('Keep owner-only ×2, Defer ×1, Noted ×1, +1 more');
+    expect(defaultsSummary([])).toBe('');
+  });
+
   it('paging grows to reveal a deep-linked card', () => {
     const ids = Array.from({ length: 180 }, (_, i) => `d${i}`);
     expect(pagesToReveal(ids, 'd10')).toBe(PAGE_SIZE);
@@ -181,6 +237,28 @@ describe('awareness collapse', () => {
     });
     const voice = rows.find((r) => r.label === 'Voice');
     expect(voice).toMatchObject({ failing: true, text: 'the MCP gateway is not answering (:8182)' });
+  });
+});
+
+describe('deckStateFromPush', () => {
+  it('keeps every field main pushes, totalCount included', () => {
+    const full: DeckState = {
+      ...EMPTY_DECK_STATE,
+      openCount: 12,
+      totalCount: 298,
+      deskVisible: true,
+      agents: ['lyra'],
+      characters: ['aria'],
+      characterModels: { aria: 'file:///aria.vrm' },
+      activeCharacter: 'aria',
+      agentCharacters: { lyra: 'aria' },
+      relayChannel: '#ops',
+      roomStatus: 'live',
+      wakes: normalizeWakes(EMPTY_DECK_STATE.wakes),
+    };
+    // Every DeckState key must survive the push, or the header differs pull vs push.
+    expect(deckStateFromPush({ type: 'deck-state', ...full })).toEqual(full);
+    expect(deckStateFromPush({ type: 'deck-state', openCount: 3 }).totalCount).toBeUndefined();
   });
 });
 

@@ -127,6 +127,20 @@ export function facetCounts(cards: DecisionCard[], filters: DecisionFilters, now
   return { age, kinds };
 }
 
+/** The kind chips to render: the top `limit` kinds, plus the ACTIVE kind even
+ *  when a query pushed it out of the top or to zero — otherwise the list stays
+ *  filtered with no chip showing the filter or turning it off. */
+export function kindChips(
+  kinds: FacetCounts['kinds'],
+  activeKind: string | null,
+  limit: number,
+): FacetCounts['kinds'] {
+  const top = kinds.slice(0, limit);
+  if (!activeKind || top.some((k) => k.kind === activeKind)) return top;
+  const count = kinds.find((k) => k.kind === activeKind)?.count ?? 0;
+  return [...top, { kind: activeKind, count }];
+}
+
 export interface CardGroup<T extends DecisionCard = DecisionCard> {
   key: string;
   label: string;
@@ -167,6 +181,20 @@ export function defaultLabel(card: DecisionCard): string {
   return card.options.find((o) => o.key === card.defaultKey)?.label ?? '';
 }
 
+/** "Keep owner-only ×8, Defer ×4": what a bulk answer-with-default will SEND, so the
+ *  confirm step shows the answers, not just a count (review #8). */
+export function defaultsSummary(cards: DecisionCard[], limit = 3): string {
+  const counts = new Map<string, number>();
+  for (const card of cards) {
+    const label = defaultLabel(card);
+    if (label) counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  const rows = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  const shown = rows.slice(0, limit).map(([label, n]) => `${label} ×${n}`);
+  if (rows.length > limit) shown.push(`+${rows.length - limit} more`);
+  return shown.join(', ');
+}
+
 /** Every option in button order: the primary one first, then the rest — the
  *  order the 1-9 keys pick in, so the digit on screen is the digit you press. */
 export function orderedChoices(card: DecisionCard): Array<{ key: string; label: string; primary: boolean }> {
@@ -186,6 +214,28 @@ export function moveCursor(index: number, delta: number, length: number): number
   if (length <= 0) return -1;
   if (index < 0) return delta > 0 ? 0 : length - 1;
   return Math.min(length - 1, Math.max(0, index + delta));
+}
+
+const ENTER_ACTIVATES_TAGS = new Set(['BUTTON', 'A', 'SUMMARY']);
+const ENTER_ACTIVATES_ROLES = new Set(['button', 'link', 'tab', 'menuitem', 'option']);
+
+/** Whether the list's Enter shortcut may toggle the cursor card. Enter on a
+ *  focused button IS its click; preventDefault on that keydown swallowed the
+ *  click, so Tab-to-"Approve"-then-Enter collapsed the card and sent nothing. */
+export function enterTogglesCursor(target: EventTarget | null, cursorId: string | null): boolean {
+  if (!cursorId) return false;
+  const el = target as {
+    tagName?: unknown;
+    getAttribute?: (name: string) => string | null;
+    classList?: { contains: (name: string) => boolean };
+  } | null;
+  if (!el || typeof el.tagName !== 'string') return true;
+  // A row's OWN header button keeps focus after a click while j/k move only the
+  // cursor, so Enter there means "open the cursor row", not "re-click row A".
+  if (el.classList && typeof el.classList.contains === 'function' && el.classList.contains('dx-row-main')) return true;
+  if (ENTER_ACTIVATES_TAGS.has(el.tagName.toUpperCase())) return false;
+  const role = typeof el.getAttribute === 'function' ? el.getAttribute('role') : null;
+  return !(role && ENTER_ACTIVATES_ROLES.has(role.toLowerCase()));
 }
 
 /** How many rows must be shown for `id` to be on screen (paging), or null. */

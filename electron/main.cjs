@@ -349,6 +349,11 @@ let tray = null;
 // 2026-08-31 (owner decision) — the tray badge, deck and Discord fanout carry
 // the push; DTOAST001 gates the notify.py twins against Windows toasts.
 let openDecisions = [];
+// Cards a desk surface answered/dismissed that the 15 s watcher still lists:
+// every surface reads visibleDecisions(), so a push between the write and the
+// next poll does not bring them back (review #1). TTL-bound in decision-cards.
+const pendingRemovals = decisionCards.createPendingRemovals();
+const visibleDecisions = () => pendingRemovals.filter(openDecisions);
 let relayFeed = [];
 let relayFeedTimer = null;
 // The awrise wake snapshot the deck renders. `source` is "none" until the first
@@ -2062,16 +2067,17 @@ function showAboutDesk() {
  * Every surface reads THIS now, so "waiting" means one thing.
  */
 function inboxCounts() {
+  const visible = visibleDecisions();
   return {
-    waiting: decisionCards.actionableCount(openDecisions),
-    total: openDecisions.length,
+    waiting: decisionCards.actionableCount(visible),
+    total: visible.length,
   };
 }
 
 function deckState() {
   const counts = inboxCounts();
   return {
-    decisions: openDecisions,
+    decisions: visibleDecisions(),
     openCount: counts.waiting,
     totalCount: counts.total,
     deskVisible: Boolean(
@@ -2401,7 +2407,7 @@ let homeIpcWired = false;
 function ensureHomeIpc() {
   if (homeIpcWired) return;
   homeIpcWired = true;
-  const { buildHomeSummary } = require("./home-summary.cjs");
+  const { buildHomeSummary, HOME_COMMANDS, planHomeSet } = require("./home-summary.cjs");
   ipcMain.handle("desk:home-summary", async () => {
     const { listSessions } = require("./sessions-client.cjs");
     const [sessions, gateway] = await Promise.all([
@@ -2409,11 +2415,12 @@ function ensureHomeIpc() {
       probeGateway(),
     ]);
     return buildHomeSummary({
-      cards: openDecisions,
+      cards: visibleDecisions(),
       triage: (card) => decisionCards.triageCard(card),
       sessions,
       gateway,
-      voice: { voicesMuted: voicesMuted(), micMuted: micMuted(), talkMode: talkMode() },
+      voice: { voicesMuted: voicesMuted(), micMuted: micMuted(), talkMode: talkMode(),
+        doNotDisturb: Boolean(inputPrefs().doNotDisturb) },
       avatars: {
         shown: Boolean(avatarWindow && !avatarWindow.isDestroyed() && avatarWindow.isVisible()),
         bodies: avatarSlots.size,
@@ -2422,18 +2429,43 @@ function ensureHomeIpc() {
     });
   });
   ipcMain.handle("desk:home-run", (_event, id) => {
-    if (!commandRegistry.byId(id)) return { ok: false, error: `unknown command ${id}` };
+    // Home's own switches only: not tray-only `quit`, not fleet verbs (review #10).
+    if (!HOME_COMMANDS.includes(id) || !commandRegistry.byId(id)) return { ok: false, error: `Home cannot run ${id}` };
     runCommand(id, undefined, { surface: "home" });
     return { ok: true };
+  });
+  // The DESIRED state, read against the live one here, so a stale switch cannot
+  // invert the owner's click (review #3).
+  ipcMain.handle("desk:home-set", (_event, desired) => {
+    const live = {
+      voicesMuted: voicesMuted(),
+      micMuted: micMuted(),
+      avatarShown: Boolean(avatarWindow && !avatarWindow.isDestroyed() && avatarWindow.isVisible()),
+      doNotDisturb: Boolean(inputPrefs().doNotDisturb),
+    };
+    const ran = planHomeSet(desired, live);
+    for (const id of ran) runCommand(id, undefined, { surface: "home" });
+    return { ok: true, ran };
   });
   ipcMain.handle("desk:home-open", (_event, paneId, param) => {
     focusPane(paneId, param || null);
     return { ok: true };
   });
-  ipcMain.handle("desk:home-answer", (_event, id, choice) => {
-    const ok = decisionCards.answerCard(id, choice);
-    if (ok) void postToRelay(RELAY_CHANNEL, `answered ${id}: ${choice} (via desk)`).then(() => refreshRelayFeed());
-    return ok ? { ok: true } : { ok: false, error: "awask refused the answer" };
+  ipcMain.handle("desk:home-answer", async (_event, id, choice) => {
+    // The renderer names the card and the option; main checks both against its
+    // own open list, and #agents hears "answered" only once awask accepted it (review #9).
+    const card = visibleDecisions().find((c) => c && c.id === id);
+    if (!card) return { ok: false, error: "that card is no longer open" };
+    if (!(card.options || []).some((o) => o && o.key === choice)) return { ok: false, error: `"${choice}" is not an option on that card` };
+    pendingRemovals.add(id);
+    const verdict = await decisionCards.answerCardConfirmed(id, choice);
+    if (!verdict.ok) {
+      pendingRemovals.delete(id);
+      return { ok: false, error: verdict.error || "awask refused the answer" };
+    }
+    sendDeckState();
+    void postToRelay(RELAY_CHANNEL, `answered ${id}: ${choice} (via desk)`).then(() => refreshRelayFeed());
+    return { ok: true };
   });
 }
 
@@ -2780,19 +2812,30 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
     });
     // The Decisions page's bulk bar: 298 cards cannot be triaged one click at a time.
     // ONE relay line per batch, not one per card (decisions-bulk.cjs builds it).
+    // Each write is awaited to awask's exit (review #9) and hidden as pending
+    // until the watcher confirms it; a refused one comes straight back (#1).
+    const confirmedWrite = (id, write) => {
+      pendingRemovals.add(id);
+      return write().then((verdict) => {
+        if (!verdict.ok) pendingRemovals.delete(id);
+        return verdict;
+      });
+    };
     ipcMain.handle("desk:deck-bulk", async (_event, payload) => {
       const result = await require("./decisions-bulk.cjs").handleBulk(payload, {
-        listOpen: () => openDecisions,
-        answerCard: (id, key, note) => decisionCards.answerCard(id, key, note),
-        cancelCard: (id, note) => decisionCards.cancelCard(id, note),
+        listOpen: () => visibleDecisions(),
+        answerCard: (id, key, note) => confirmedWrite(id, () => decisionCards.answerCardConfirmed(id, key, note)),
+        cancelCard: (id, note) => confirmedWrite(id, () => decisionCards.cancelCardConfirmed(id, note)),
       });
+      sendDeckState();
       if (result && result.summary) void postToRelay(RELAY_CHANNEL, result.summary).then(() => refreshRelayFeed());
       return result;
     });
-    ipcMain.handle("desk:deck-answer", (_event, payload) => {
+    ipcMain.handle("desk:deck-answer", async (_event, payload) => {
       const { id, choice } = payload || {};
-      const ok = decisionCards.answerCard(id, choice);
+      const ok = (await confirmedWrite(id, () => decisionCards.answerCardConfirmed(id, choice))).ok;
       if (ok) {
+        sendDeckState();
         // The loop closes only if the SESSIONS see the answer: post it to the
         // coordination channel the fleet already reads. Best-effort — a quiet
         // relay must never make the answer look undone.
@@ -3779,9 +3822,10 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
     await quietMode.ready();
     decisionWatchStop = decisionCards.watch({
       onChange: (cards) => {
+        pendingRemovals.reconcile(cards);
         openDecisions = cards;
         refreshTrayMenu();
-        refreshNotificationBadges(cards);
+        refreshNotificationBadges(visibleDecisions());
         sendDeckState();
         sendDecisionBadge();
 

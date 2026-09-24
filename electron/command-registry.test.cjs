@@ -334,7 +334,7 @@ test("every command either has a handler or a dynamic submenu", () => {
   assert.match(body, /function runCommand\(id, arg/, "runCommand takes no argument -- prompt rows cannot work");
   assert.match(main, /run: \(id, arg\) => runCommand\(id, arg/, "the palette runner drops the argument");
   const consoleWindow = fs.readFileSync(path.join(__dirname, "console-window.cjs"), "utf8");
-  assert.match(consoleWindow, /"desk:console-command-run", async \(_event, id, arg\)/);
+  assert.match(consoleWindow, /"desk:console-command-run", async \(event, id, arg\)/);
   assert.match(consoleWindow, /commandsImpl\.run\(command, arg/);
   const preload = fs.readFileSync(path.join(__dirname, "console-preload.cjs"), "utf8");
   assert.match(preload, /runCommand: \(id, arg\)/);

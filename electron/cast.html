@@ -173,8 +173,10 @@ const VOICE_CHOICES = [
 ];
 const VOICE_LABEL = new Map(VOICE_CHOICES);
 const OTHER_VOICE = "__other__";
-// "Other…" accepts any edge-tts English neural id; the service passes it straight through.
-const NEURAL_ID = /^en-[A-Za-z]{2,3}-[A-Za-z]+Neural$/;
+// "Other…" accepts any edge-tts neural id in ANY locale (ja-JP-NanamiNeural,
+// zh-CN-liaoning-XiaobeiNeural); the service passes it straight through, and
+// cast.json / the preview door take up to 40 chars, so the page asks no more.
+const NEURAL_ID = /^(?=.{1,40}$)[a-z]{2,3}(?:-[A-Za-z]{2,8})+-[A-Za-z]+Neural$/;
 
 // Mirrors cast-config.cjs's BUILTIN_STAGE / BUILTIN_VOICE -- placeholders only,
 // never sent unless the owner actually edits the field.
@@ -274,7 +276,7 @@ function voiceLabel(id) {
  * The named-voice dropdown. Value = the voice id cast.json stores; label = the
  * person you will hear. A custom id already in the file is kept as its own
  * option so the control shows the truth, and "Other…" reveals a text box for any
- * en-*Neural id. `chosen()` is what ▶ Preview should play right now.
+ * edge-tts *Neural id, any locale. `chosen()` is what ▶ Preview should play right now.
  */
 function voicePicker({ current, unsetLabel, onPick, name }) {
   const wrap = el("div", "voice-pick");
@@ -319,7 +321,7 @@ function voicePicker({ current, unsetLabel, onPick, name }) {
     const id = customInput.value.trim();
     if (!id) return;
     if (!NEURAL_ID.test(id)) {
-      say(`"${id}" is not an English neural voice id (e.g. en-US-JennyNeural)`);
+      say(`"${id}" is not a neural voice id (e.g. en-US-JennyNeural, ja-JP-NanamiNeural)`);
       return;
     }
     onPick(id);
@@ -558,12 +560,14 @@ function speakerRow(sp) {
   if (res.volumeFrom) volCell.appendChild(el("div", "ui-note", `from ${res.volumeFrom}`));
   tr.appendChild(volCell);
 
-  // OFF = muteOrigin (speak:false, the body stays); ON = reveal, which also
-  // lifts a presence off/quiet grant -- one switch, both kinds of silence.
+  // OFF = muteOrigin (speak:false, the body stays); ON = unsilence, which drops
+  // a speak:false ONLY and lifts presence off/quiet to "normal" -- one switch,
+  // both kinds of silence, and a chatty presence survives Off -> On. The rule
+  // lives in main (room-stage-host unsilencePatch), shared with the right-click menu.
   const speaks = speaksNow(sp);
   const speakCell = el("td");
   speakCell.appendChild(switchEl(speaks ? "Speaks" : "Silenced", speaks, (on) => {
-    void save(on ? window.aitherCast.reveal(sp.key) : window.aitherCast.muteOrigin(sp.key), on ? "Unmute" : "Silence");
+    void save(on ? window.aitherCast.unsilence(sp.key) : window.aitherCast.muteOrigin(sp.key), on ? "Unmute" : "Silence");
   }));
   tr.appendChild(speakCell);
 

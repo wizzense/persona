@@ -165,6 +165,14 @@ const PLACES = Object.freeze([
 ]);
 
 let consoleWindow = null;
+
+/** True when an IPC came from the console's own top frame, not a pane inside it.
+ *  No console window (the unit tests' fake ipc) means there is no frame to confuse. */
+function fromShell(event) {
+  if (!consoleWindow || consoleWindow.isDestroyed()) return true;
+  const frame = event && event.senderFrame;
+  return !frame || frame === consoleWindow.webContents.mainFrame;
+}
 let wired = false;
 /** { <paneId>: { open(), close(), isOpen() } } — injected by main.cjs. */
 let windowsImpl = {};
@@ -478,7 +486,10 @@ function wireIpc() {
   // `arg` is the typed argument of a row that declared `prompt` (a title, a
   // slug); undefined otherwise. A runner that answers a promise is AWAITED so
   // its verdict ({ok, message}) reaches the palette instead of a bare "ran".
-  ipcMain.handle("desk:console-command-run", async (_event, id, arg) => {
+  ipcMain.handle("desk:console-command-run", async (event, id, arg) => {
+    // The palette lives in the SHELL. A pane frame (every one of them gets this
+    // preload) must not run registry commands -- quit, fleet parking -- through it.
+    if (!fromShell(event)) return { ok: false, error: "commands run from the console shell only" };
     const command = String(id || "");
     if (!commandsImpl || typeof commandsImpl.run !== "function") {
       return { ok: false, error: "no command runner wired" };
