@@ -279,7 +279,10 @@ test("RoomStage: utterances are serialised — one at a time, in order", async (
     { seq: 7, agent: true, author: "atlas", actorKind: "adk_agent", actorId: "a1", kind: "agent_message", text: "b" },
   ];
   await h.stage.tick();
-  await new Promise((r) => setTimeout(r, 120));
+  // Poll for the fourth event rather than a fixed 120 ms (flaked under load, 09-23).
+  for (let waited = 0; waited < 3000 && order.length < 4; waited += 10) {
+    await new Promise((r) => setTimeout(r, 10));
+  }
   assert.deepEqual(order, ["start a", "end a", "start b", "end b"]);
 });
 

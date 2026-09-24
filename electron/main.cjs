@@ -713,6 +713,14 @@ function sendToAvatar(type, payload = {}) {
 
 function handleBridgeEvent(event) {
   if (event.type !== "audio-level" || event.level > 0.025) debugLog("event", event);
+  // Bridge /events come from scripts (the escalator's GREETING, a listener's audio
+  // level). While a game is full-screen they animate a body that is already up,
+  // but never bring a hidden avatar back over the game.
+  if (quietMode.isQuiet()) {
+    if (event.type === "state") latestVoiceState = event.state;
+    emitToRenderer(event);
+    return;
+  }
   if (event.type === "state") {
     latestVoiceState = event.state;
     if (event.state.phase === "starting" || event.state.phase === "active") {
@@ -910,10 +918,12 @@ function handleListenerStatus(status) {
 }
 
 async function handleMcpWindowAction(action) {
-  if (action === "show") showOverlay({ focus: true });
+  // An AGENT asked (MCP). While quiet it may show the avatar but never take focus.
+  const focus = !quietMode.isQuiet();
+  if (action === "show") showOverlay({ focus });
   else if (action === "hide") await hideOverlay();
   else if (avatarWindow?.isVisible()) await hideOverlay();
-  else showOverlay({ focus: true });
+  else showOverlay({ focus });
   return avatarWindow?.isVisible() ?? false;
 }
 
@@ -938,6 +948,17 @@ function listAvailableAnimations() {
 function handleProtocolUrl(rawUrl) {
   const commands = parseProtocolUrl(rawUrl, protocolScheme);
   if (!commands) return false;
+  // desk:// is how scripts and other apps reach the desk. While a game is
+  // full-screen nothing they send may open or focus a window; hide and bare
+  // events still pass (neither can cover the game).
+  if (quietMode.isQuiet()) {
+    for (const command of commands) {
+      if (command.type === "hide") void hideOverlay();
+      else if (command.type === "event") handleBridgeEvent(command.event);
+      else if (command.type === "console") heldWhileQuiet += 1;
+    }
+    return true;
+  }
   for (const command of commands) {
     if (command.type === "show") showOverlay({ focus: true });
     else if (command.type === "hide") void hideOverlay();
@@ -2692,7 +2713,7 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
       showDesktopApp();
       return;
     }
-    if (!handled && !argv.includes("--background")) showOverlay({ focus: true });
+    if (!handled && !argv.includes("--background")) showOverlay({ focus: !quietMode.isQuiet() });
   });
 
   app.on("open-url", (event, url) => {
@@ -3652,6 +3673,13 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
         },
       },
       consoleHandler: (pane) => {
+        // POST /console/open is the escalation ladder's desk rung (and any script).
+        // While quiet it is HELD and says so, so the caller retries after the game
+        // instead of marking the rung delivered.
+        if (quietMode.isQuiet()) {
+          heldWhileQuiet += 1;
+          return { ok: false, held: true, reason: `quiet: ${quietMode.state().reason}`, pane };
+        }
         if (pane === "inbox" || pane === "cards") return { ok: openInbox() !== false, pane: "inbox" };
         openConsole();
         return { ok: focusPane(pane) !== false, pane };
@@ -3664,6 +3692,9 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
           ? avatarWindow.getBounds()
           : null,
       desktopHandler: (mode) => {
+        if (mode !== "status" && quietMode.isQuiet()) {
+          return { ok: false, held: true, reason: `quiet: ${quietMode.state().reason}`, ...desktopStatus() };
+        }
         if (mode === "overlay") showLivingDesktop();
         else if (mode === "app") showDesktopApp();
         return { ok: true, opened: mode === "status" ? null : mode, ...desktopStatus() };
@@ -3674,6 +3705,7 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
         } else if (req.action === "send") {
           return commandAction(req.text, { source: "bridge" });
         } else if (req.action === "open") {
+          if (quietMode.isQuiet()) return { ok: false, held: true, reason: `quiet: ${quietMode.state().reason}` };
           // `game command` / `adk desk command --open` raise the window for the owner.
           createCommandWindow(getFleetControl(), { createFleetWindow });
           return { ok: true, opened: true };
@@ -3809,7 +3841,9 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
               try {
                 _cp.spawn(require("./command-agent.cjs").resolveBin("python", "AWDESK_PYTHON_BIN"), ["-m", "awask.popup", String(c.id)], {
                   detached: true, stdio: "ignore",
-                  env: { ...process.env, AITHER_DECISIONS_POPUP: "1" },
+                  // No forced AITHER_DECISIONS_POPUP=1: the owner's own off switches
+                  // (.popup-off, the env var) and awask's quiet gate must apply here too.
+                  env: { ...process.env },
                 }).unref();
               } catch { /* best-effort */ }
             }

@@ -71,3 +71,28 @@ test("off Windows the probe never starts and the desk is simply not quiet", () =
   assert.equal(spawned, false);
   assert.equal(quiet.isQuiet(), false);
 });
+
+test("every door that can put something on screen or in the ears asks quietMode first", () => {
+  // The sweep of 2026-09-23 found these doors in main.cjs; a door that loses its
+  // check is a popup over a game again. Source-level on purpose: main.cjs cannot be
+  // loaded in a unit test (it takes the running desk's single-instance lock).
+  const main = require("node:fs").readFileSync(require("node:path").join(__dirname, "main.cjs"), "utf8");
+  const bodyOf = (marker, span = 1400) => {
+    const at = main.indexOf(marker);
+    assert.ok(at >= 0, `door not found: ${marker}`);
+    return main.slice(at, at + span);
+  };
+  for (const marker of [
+    "function handleBridgeEvent(",
+    "async function handleMcpWindowAction(",
+    "function handleProtocolUrl(",
+    "consoleHandler: (pane) =>",
+    "desktopHandler: (mode) =>",
+    "const announceDecisions = (list, isBacklog) =>",
+    "decisionCards.setWindowRouter(",
+    "async function speakAloud(",
+  ]) {
+    assert.match(bodyOf(marker), /quietMode\.isQuiet\(\)/, `${marker} does not ask quietMode`);
+  }
+  assert.doesNotMatch(main, /AITHER_DECISIONS_POPUP:\s*"1"/, "the desk must not force popups past the owner's off switch");
+});
