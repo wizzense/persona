@@ -318,9 +318,10 @@
     const d = st.data || {};
     if (d.linked) {
       const who = d.username || "your account";
+      const where = d.tenant_name ? ` on ${d.tenant_name} (${d.portal})` : "";
       linkStateEl.textContent = d.role === "owner"
-        ? `Linked as ${who} — platform owner (full endpoint and vault map)`
-        : `Linked as ${who}`;
+        ? `Linked as ${who} — platform owner (full endpoint and vault map)${where}`
+        : `Linked as ${who}${where}`;
       linkBtn.textContent = "Re-link";
     } else {
       linkStateEl.textContent = d.signed_in
