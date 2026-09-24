@@ -1,7 +1,6 @@
 "use strict";
 
 const path = require("node:path");
-const { pathToFileURL } = require("node:url");
 const {
   app,
   BrowserWindow,
@@ -22,7 +21,7 @@ const {
 // occlusion tracker judged the overlay covered (it sits under/over other
 // windows all day) or the renderer "backgrounded". On screen that is the avatar
 // freezing for a second at a time. The window-level half is
-// `backgroundThrottling: false` on the avatar BrowserWindow below.
+// `backgroundThrottling: false` on the avatar BrowserWindow (avatar-window.cjs).
 app.commandLine.appendSwitch("disable-features", "CalculateNativeWinOcclusion");
 // How frames reach the screen (software present + the integrated adapter on
 // Windows): the measurement and the knobs live in present-policy.cjs.
@@ -167,73 +166,6 @@ const { speakAloud } = require("./speech.cjs").createSpeech({
   debugLog,
 });
 
-// Measured: 430x680 on a 3840x2112 4K display reads as "trapped in a tiny box" —
-// it's genuinely small on a real screen, independent of camera framing. Kept
-// the same ~0.63 aspect ratio, just bigger. Still user-resizable (min 320x480).
-const WINDOW_WIDTH = 600;
-const WINDOW_HEIGHT = 950;
-
-// D-2xxx: `resizable` defaults true, but the window is frameless + transparent
-// and the three.js canvas covers the whole surface capturing every pointer
-// event for camera controls (see the drag-window IPC below, which exists for
-// the identical reason: there is no OS-visible edge left to grab). Native
-// edge-resize is therefore unreachable in practice — "resizable: true" was
-// true and useless. Fixed the same way window MOVE already is: menu items +
-// shortcuts driving setBounds() directly, not relying on an edge nobody can
-// click. Size is persisted so it survives a restart instead of resetting to
-// the measured default every time.
-// The presets themselves live in command-registry.cjs, as commands: the palette
-// lists them one per row while the menus nest them, and a second copy of the
-// numbers here is how one surface ends up offering a size another does not.
-const SIZE_STATE_PATH = () => path.join(app.getPath("userData"), "window-size.json");
-
-function loadSavedSize() {
-  try {
-    const raw = fs.readFileSync(SIZE_STATE_PATH(), "utf-8");
-    const parsed = JSON.parse(raw);
-    if (Number.isFinite(parsed?.width) && Number.isFinite(parsed?.height)) {
-      return { width: parsed.width, height: parsed.height };
-    }
-  } catch {
-    /* no saved size yet, or file is corrupt — fall back to the default */
-  }
-  return { width: WINDOW_WIDTH, height: WINDOW_HEIGHT };
-}
-
-function saveSize(width, height) {
-  try {
-    fs.mkdirSync(path.dirname(SIZE_STATE_PATH()), { recursive: true });
-    fs.writeFileSync(SIZE_STATE_PATH(), JSON.stringify({ width, height }), "utf-8");
-  } catch {
-    /* best-effort — a failed save just means the next launch uses the old size */
-  }
-}
-
-/** Resize the overlay in place (top-left corner stays put), clamped to the
- *  display's work area so a saved size from a bigger monitor can't put the
- *  window partly off-screen on a smaller one. */
-function setWindowSize(width, height) {
-  if (!avatarWindow || avatarWindow.isDestroyed()) return;
-  const bounds = avatarWindow.getBounds();
-  const area = screen.getDisplayMatching(bounds).workAreaSize;
-  const w = Math.max(320, Math.min(Math.round(width), area.width));
-  const h = Math.max(480, Math.min(Math.round(height), area.height));
-  avatarWindow.setBounds({ x: bounds.x, y: bounds.y, width: w, height: h });
-  saveSize(w, h);
-}
-
-function growWindow(factor = 1.15) {
-  if (!avatarWindow || avatarWindow.isDestroyed()) return;
-  const { width, height } = avatarWindow.getBounds();
-  setWindowSize(width * factor, height * factor);
-}
-
-function shrinkWindow(factor = 1.15) {
-  if (!avatarWindow || avatarWindow.isDestroyed()) return;
-  const { width, height } = avatarWindow.getBounds();
-  setWindowSize(width / factor, height / factor);
-}
-
 const startInBackground = process.argv.includes("--background");
 /** "Open the Desk panel at startup" — the owner's quick path into the panel, and a
  *  deterministic way to verify the deck live (restart with this flag, screenshot). */
@@ -247,11 +179,43 @@ const smokeIsRequested = process.argv.includes("--smoke");
 const protocolScheme = "desk";
 const debugEnabled = process.env.DESK_DEBUG === "1";
 
-let avatarWindow = null;
 let isQuitting = false;
-let latestEvent = null;
 let latestVoiceState = null;
 let tray = null;
+// The avatar overlay window (avatar-window.cjs): construction, saved size + the
+// resize verbs, Hyprland placement, show/hide/toggle, the renderer event queue,
+// outline/reset and the --smoke boot. The window is REPLACED over the desk's life,
+// so main never holds it: every reader calls getAvatarWindow() at call time.
+const {
+  getAvatarWindow,
+  getLatestEvent,
+  // One bundle for every renderer: presentation.cjs loads it for its panels too.
+  rendererUrl,
+  createWindow,
+  showOverlay,
+  hideOverlay,
+  toggleOverlay,
+  setWindowSize,
+  growWindow,
+  shrinkWindow,
+  emitToRenderer,
+  sendToAvatar,
+  toggleWindowOutline,
+  resetAvatarLayout,
+  runSmokeTest,
+  stop: stopAvatarWindow,
+} = require("./avatar-window.cjs").createAvatarWindow({
+  electron: { BrowserWindow, screen, ipcMain },
+  app,
+  configureHyprlandWindow,
+  getHyprlandWindowPlacement,
+  isAllowedRendererNavigation,
+  isQuitting: () => isQuitting,
+  getTray: () => tray,
+  refreshTrayMenu: () => refreshTrayMenu(),
+  onContextMenu: () => createDeckWindow(),
+  debugLog: (...args) => debugLog(...args),
+});
 // The deck's live feeds (relay, wakes, local room) and the company-room wiring that
 // fills them -- RoomPublisher, RelayPoller, settings sync: feeds.cjs. Built here so
 // every later reader sees the getters; start() runs in app.whenReady, and
@@ -282,12 +246,6 @@ const {
   startRoomStage: () => startRoomStage(),
   debugLog: (...args) => debugLog(...args),
 });
-let hyprlandConfigured = false;
-let hyprlandConfiguring = false;
-let hyprlandConfigurationTimer = null;
-let hyprlandLastPosition = null;
-let rendererLoadHookAttached = false;
-const pendingRendererEvents = new Map();
 // The extra bodies on the stage -- the slot map, spawn/remove/detach, the Stage
 // pane's view, addressForSlot, the deck's spawn-agent verb and the reload replay:
 // avatar-slots.cjs. avatarSlots is the module's own Map, read live below.
@@ -301,7 +259,7 @@ const {
   spawnAgent,
   replaySlots,
 } = require("./avatar-slots.cjs").createAvatarSlots({
-  getAvatarWindow: () => avatarWindow,
+  getAvatarWindow,
   showOverlay: (...args) => showOverlay(...args),
   sendToAvatar: (...args) => sendToAvatar(...args),
   sendDeckState: () => sendDeckState(),
@@ -333,7 +291,7 @@ const {
   electron: { BrowserWindow, screen },
   rendererUrl,
   isAllowedRendererNavigation,
-  getAvatarWindow: () => avatarWindow,
+  getAvatarWindow,
   showConsole,
   focusPane,
   closeConsole,
@@ -376,308 +334,6 @@ try {
 
 function debugLog(...values) {
   if (debugEnabled) console.error("[desk]", ...values);
-}
-
-function positionWindow(window) {
-  const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
-  const bounds = window.getBounds();
-  const margin = 24;
-  window.setPosition(
-    Math.round(display.workArea.x + display.workArea.width - bounds.width - margin),
-    Math.round(display.workArea.y + display.workArea.height - bounds.height - margin),
-    false,
-  );
-}
-
-function scheduleHyprlandWindowConfiguration({
-  attempt = 0,
-  force = false,
-  position = null,
-  reposition = !hyprlandConfigured,
-} = {}) {
-  if (
-    (hyprlandConfigured && !force) ||
-    hyprlandConfiguring ||
-    !avatarWindow ||
-    avatarWindow.isDestroyed()
-  ) {
-    return;
-  }
-  clearTimeout(hyprlandConfigurationTimer);
-  const delays = [0, 80, 200, 500, 1000];
-  hyprlandConfigurationTimer = setTimeout(async () => {
-    hyprlandConfigurationTimer = null;
-    if (!avatarWindow || avatarWindow.isDestroyed()) return;
-    hyprlandConfiguring = true;
-    hyprlandConfigured = await configureHyprlandWindow({
-      pid: process.pid,
-      width: WINDOW_WIDTH,
-      height: WINDOW_HEIGHT,
-      onDebug: debugLog,
-      position,
-      reposition,
-    });
-    hyprlandConfiguring = false;
-    if (!hyprlandConfigured && attempt + 1 < delays.length) {
-      scheduleHyprlandWindowConfiguration({
-        attempt: attempt + 1,
-        force: true,
-        position,
-        reposition,
-      });
-    }
-  }, delays[attempt] ?? delays.at(-1));
-  hyprlandConfigurationTimer.unref?.();
-}
-
-function showOverlay({ focus = false } = {}) {
-  const window = createWindow();
-  if (window.isMinimized()) window.restore();
-  if (focus) {
-    if (!window.isVisible()) window.show();
-    window.focus();
-  } else if (!window.isVisible()) {
-    window.showInactive();
-  }
-  scheduleHyprlandWindowConfiguration();
-  // The tray's "Hide avatar / Show avatar" line reads the window state when the
-  // menu is BUILT, so a toggle left it saying the wrong thing until something
-  // else rebuilt the menu (owner, 2026-09-18: "the hide avatar button doesn't
-  // change to unhide"). Rebuild on every show/hide.
-  if (tray) refreshTrayMenu();
-}
-
-async function hideOverlay() {
-  debugLog("hide overlay");
-  const placement = await getHyprlandWindowPlacement(process.pid);
-  if (placement) {
-    hyprlandLastPosition = { x: placement.x, y: placement.y };
-  }
-  avatarWindow?.hide();
-  if (tray) refreshTrayMenu();
-}
-
-function toggleOverlay() {
-  if (avatarWindow?.isVisible()) void hideOverlay();
-  else showOverlay({ focus: true });
-}
-
-/** One bundle, three modes: the default avatar scene, `?solo=<model>` detached windows,
- *  and `?deck=1` the Desk panel (see createDeckWindow). */
-function rendererUrl() {
-  return (
-    process.env.VITE_DEV_SERVER_URL ||
-    pathToFileURL(path.join(__dirname, "..", "dist", "index.html")).href
-  );
-}
-
-function createWindow() {
-  if (avatarWindow && !avatarWindow.isDestroyed()) return avatarWindow;
-
-  const savedSize = loadSavedSize();
-  avatarWindow = new BrowserWindow({
-    width: savedSize.width,
-    height: savedSize.height,
-    minWidth: 320,
-    minHeight: 480,
-    show: false,
-    frame: false,
-    transparent: true,
-    backgroundColor: "#00000000",
-    hasShadow: false,
-    roundedCorners: false,
-    autoHideMenuBar: true,
-    alwaysOnTop: true,
-    skipTaskbar: true,
-    title: "Desk",
-    webPreferences: {
-      preload: path.join(__dirname, "preload.cjs"),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-      // Never throttle the overlay's animation loop (see the switches at the top).
-      backgroundThrottling: false,
-    },
-  });
-
-  avatarWindow.setAlwaysOnTop(true, "floating");
-  avatarWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-  avatarWindow.setOpacity(1);
-  avatarWindow.once("ready-to-show", () => {
-    positionWindow(avatarWindow);
-    scheduleHyprlandWindowConfiguration();
-  });
-  avatarWindow.on("show", () => {
-    avatarWindow.setAlwaysOnTop(true, "floating");
-    avatarWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-    avatarWindow.setOpacity(1);
-    scheduleHyprlandWindowConfiguration({
-      force: true,
-      position: hyprlandLastPosition,
-      reposition: !hyprlandConfigured || hyprlandLastPosition != null,
-    });
-  });
-  avatarWindow.on("close", (event) => {
-    if (isQuitting) return;
-    event.preventDefault();
-    void hideOverlay();
-  });
-  avatarWindow.on("closed", () => {
-    clearTimeout(hyprlandConfigurationTimer);
-    hyprlandConfigurationTimer = null;
-    hyprlandConfigured = false;
-    hyprlandConfiguring = false;
-    rendererLoadHookAttached = false;
-    avatarWindow = null;
-  });
-
-  const homeUrl = rendererUrl();
-  avatarWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-  avatarWindow.webContents.on("will-navigate", (event, targetUrl) => {
-    if (!isAllowedRendererNavigation(targetUrl, homeUrl)) event.preventDefault();
-  });
-  // Nothing previously listened for either of these. A renderer crash left the window
-  // showing whatever was on screen at the moment it died (often just black/blank) with
-  // `windowVisible: true` still reported correctly by get_status (that flag reflects the
-  // WINDOW, not the page inside it) and no signal anywhere that anything had gone wrong.
-  // A JS exception in React reads identically from every existing check: healthy process,
-  // healthy MCP server, "visible" window, nothing on screen.
-  avatarWindow.webContents.on("render-process-gone", (_event, details) => {
-    debugLog("RENDERER PROCESS GONE", details.reason, details.exitCode);
-  });
-  // Electron 39's console-message event passes ONE object, not five positional args —
-  // the five-arg form still fires (nothing breaks) but logs a deprecation warning on
-  // every single message, which would have buried the real signal this listener exists
-  // to surface under noise about itself.
-  avatarWindow.webContents.on("console-message", (event) => {
-    // level 2 = error, 3 = warning in Electron's ConsoleMessageLevel; only surface those,
-    // not every console.log — this is a crash/error signal, not a firehose.
-    if (event.level >= 2) {
-      debugLog(`[renderer console] ${event.sourceId}:${event.lineNumber} — ${event.message}`);
-    }
-  });
-  // Right-click the avatar opens the DESK PANEL (the bead deck), not a native
-  // menu — owner redesign 2026-08-25: "move away from nested menus... on right
-  // click a full ui/ux opens up". Right-DRAG still pans the camera; the menu
-  // only pops on release. The renderer's camera controls preventDefault() the
-  // contextmenu event, so the preload relays it over IPC — keep the native
-  // handler too as a fallback. All the old submenus (decisions, talk, models,
-  // Aitheros Online, avatar slots, size) are now deck sections, one click deep
-  // instead of three.
-  avatarWindow.webContents.on("context-menu", () => createDeckWindow());
-  ipcMain.removeAllListeners("desk:context-menu");
-  ipcMain.on("desk:context-menu", () => createDeckWindow());
-
-  // Measured: middle-mouse-drag window move (preload.cjs sends these). Tracks
-  // the mouse's screen position at drag start against the window's own
-  // position at drag start, then repositions by the same delta on every
-  // move — works from anywhere on the avatar, doesn't touch left/right
-  // click at all so OrbitControls and the context menu stay untouched.
-  let dragOrigin = null;
-  ipcMain.removeAllListeners("desk:drag-start");
-  ipcMain.removeAllListeners("desk:drag-move");
-  ipcMain.removeAllListeners("desk:drag-end");
-  ipcMain.on("desk:drag-start", (event, { x, y }) => {
-    // The window that SENT the drag — the preload runs in the avatar,
-    // deck AND chat windows, and moving the avatar from the chat window
-    // was the measured "you can't even move it" bug (2026-08-25).
-    const win = BrowserWindow.fromWebContents(event.sender);
-    if (!win) return;
-    const [winX, winY] = win.getPosition();
-    dragOrigin = { mouseX: x, mouseY: y, winX, winY, win };
-  });
-  ipcMain.on("desk:drag-move", (_event, { x, y }) => {
-    if (!dragOrigin || dragOrigin.win.isDestroyed()) return;
-    dragOrigin.win.setPosition(
-      Math.round(dragOrigin.winX + (x - dragOrigin.mouseX)),
-      Math.round(dragOrigin.winY + (y - dragOrigin.mouseY)),
-      false,
-    );
-  });
-  ipcMain.on("desk:drag-end", () => {
-    dragOrigin = null;
-  });
-
-  // Sender-scoped window controls: any window (deck, chat) can minimize or
-  // close ITSELF — the chat window shipped frameless with no way out,
-  // which read as half-done (2026-08-25).
-  ipcMain.on("desk:window-minimize", (event) => {
-    const win = BrowserWindow.fromWebContents(event.sender);
-    if (win) win.minimize();
-  });
-  ipcMain.on("desk:window-close", (event) => {
-    const win = BrowserWindow.fromWebContents(event.sender);
-    if (win) win.close();
-  });
-  // NOTE: rendererUrl is a FUNCTION — call it. Passing the function itself to
-  // loadURL throws "Error processing argument at index 0, conversion failure"
-  // (a rename collision, caught 2026-08-25), which aborts the whenReady chain:
-  // blank avatar, never shown, deck never created.
-  void avatarWindow.loadURL(rendererUrl());
-  return avatarWindow;
-}
-
-function flushPendingRendererEvents() {
-  rendererLoadHookAttached = false;
-  if (!avatarWindow || avatarWindow.isDestroyed() || avatarWindow.webContents.isLoading()) return;
-  for (const event of pendingRendererEvents.values()) {
-    avatarWindow.webContents.send("desk:event", event);
-  }
-  pendingRendererEvents.clear();
-}
-
-function ensureRendererLoadHook() {
-  if (
-    rendererLoadHookAttached ||
-    !avatarWindow ||
-    avatarWindow.isDestroyed() ||
-    !avatarWindow.webContents.isLoading()
-  ) {
-    return;
-  }
-  rendererLoadHookAttached = true;
-  avatarWindow.webContents.once("did-finish-load", () => {
-    flushPendingRendererEvents();
-    // Re-apply the toggleable window boundary if it was left on (the overlay
-    // div dies with every page load; the flag in localStorage survives it).
-    void avatarWindow.webContents.executeJavaScript(
-      "(() => {"
-      + "if (localStorage.getItem('desk.window-outline') === '1'"
-      + " && !document.getElementById('desk-window-outline')) {"
-      + "const d = document.createElement('div');"
-      + "d.id = 'desk-window-outline';"
-      + "d.style.cssText = 'position:fixed;inset:0;border:2px dashed"
-      + " rgba(120,160,255,.5);pointer-events:none;z-index:9999;"
-      + "background:rgba(120,160,255,.06);box-sizing:border-box;"
-      + "border-radius:10px;';"
-      + "document.body.appendChild(d);"
-      + "}"
-      + "true;"
-      + "})();").catch(() => {});
-  });
-}
-
-function emitToRenderer(event) {
-  latestEvent = event;
-  pendingRendererEvents.set(event.type, event);
-  if (!avatarWindow || avatarWindow.isDestroyed()) return;
-  if (avatarWindow.webContents.isLoading()) {
-    ensureRendererLoadHook();
-    return;
-  }
-  avatarWindow.webContents.send("desk:event", event);
-  pendingRendererEvents.delete(event.type);
-}
-
-/** Fire-and-forget event at the avatar window (menus, stage arrangements).
- *  Module level, because a stage command can come from the tray or the palette
- *  as well as from a body's own menu -- as a local it was a ReferenceError the
- *  moment the arrangement was picked anywhere but the menu (caught by eslint,
- *  no-undef, before it ever ran). */
-function sendToAvatar(type, payload = {}) {
-  if (avatarWindow && !avatarWindow.isDestroyed()) {
-    avatarWindow.webContents.send("desk:event", { type, ...payload });
-  }
 }
 
 function handleBridgeEvent(event) {
@@ -778,43 +434,6 @@ function handleProtocolArgv(argv) {
   if (protocolUrl) handleProtocolUrl(protocolUrl);
 }
 
-/** Toggleable "invisible glass" boundary: a dashed edge + faint tint so the
- *  avatar window's borders are visible while arranging it (owner 2026-08-25).
- *  Persisted per-window; restored on every renderer load by ensureRendererLoadHook. */
-function toggleWindowOutline() {
-  if (!avatarWindow || avatarWindow.isDestroyed()) return;
-  void avatarWindow.webContents.executeJavaScript(
-    "(() => {"
-    + "const KEY = 'desk.window-outline';"
-    + "const on = localStorage.getItem(KEY) !== '1';"
-    + "localStorage.setItem(KEY, on ? '1' : '0');"
-    + "document.getElementById('desk-window-outline')?.remove();"
-    + "if (on) {"
-    + "const d = document.createElement('div');"
-    + "d.id = 'desk-window-outline';"
-    + "d.style.cssText = 'position:fixed;inset:0;border:2px dashed"
-    + " rgba(120,160,255,.5);pointer-events:none;z-index:9999;"
-    + "background:rgba(120,160,255,.06);box-sizing:border-box;"
-    + "border-radius:10px;';"
-    + "document.body.appendChild(d);"
-    + "}"
-    + "return on;"
-    + "})();")
-    .catch(() => {});
-}
-
-/** Drop the persisted per-slot transforms (every invisible-avatar artifact of
- *  2026-08-25 lived in that key — and the 2026-09-13 floating hair was its
- *  SCALE, since fixed in applySpringScale) and reload the avatar window, which
- *  re-frames with the default placement. Owner: "need like a reset button". */
-function resetAvatarLayout() {
-  if (!avatarWindow || avatarWindow.isDestroyed()) return;
-  void avatarWindow.webContents
-    .executeJavaScript("localStorage.removeItem('desk.avatar-layout.v1'); true;")
-    .finally(() => avatarWindow.reloadIgnoringCache());
-}
-
-
 // The roster as the desk shows it: Characters/Agents menus, switching, the adult
 // gate's on-screen enforcement, the rater's capture and the thumbnail IPC.
 const {
@@ -835,7 +454,7 @@ const {
   dialog,
   ipcMain,
   shell,
-  getAvatarWindow: () => avatarWindow,
+  getAvatarWindow,
   sendToAvatar: (...args) => sendToAvatar(...args),
   showOverlay: (...args) => showOverlay(...args),
   hideOverlay: (...args) => hideOverlay(...args),
@@ -865,7 +484,7 @@ const {
 } = require("./voice-input.cjs").createVoiceInput({
   ipcMain,
   app,
-  getAvatarWindow: () => avatarWindow,
+  getAvatarWindow,
   getTray: () => tray,
   showOverlay: (...args) => showOverlay(...args),
   sendToAvatar: (...args) => sendToAvatar(...args),
@@ -904,7 +523,7 @@ const {
   nativeImage,
   ipcMain,
   getTray: () => tray,
-  getAvatarWindow: () => avatarWindow,
+  getAvatarWindow,
   setInboxBadge,
   badgeBitmap,
   badgeTooltip,
@@ -961,7 +580,7 @@ const integrationDoors = require("./integration-doors.cjs").createIntegrationDoo
   roomStageHost,
   mainLag,
   presentState,
-  getAvatarWindow: () => avatarWindow,
+  getAvatarWindow,
   getVoiceState: () => latestVoiceState,
   getListenerStatus: () => getListenerStatus(),
   getWakesFeed: () => getWakesFeed(),
@@ -1028,6 +647,7 @@ function popupAvatarMenu(slotId) {
       },
     ),
   ];
+  const avatarWindow = getAvatarWindow();
   if (avatarWindow && !avatarWindow.isDestroyed()) {
     Menu.buildFromTemplate(template).popup({ window: avatarWindow });
   }
@@ -1088,7 +708,7 @@ const { register: registerDeckActions } = require("./deck-actions.cjs").createDe
   sendDeckState,
   createDeckWindow,
   getDeckWindow,
-  getAvatarWindow: () => avatarWindow,
+  getAvatarWindow,
   buildCharacterMenu,
   applyCharacter,
   enrollNewestDownloadChecked,
@@ -1139,10 +759,17 @@ const { register: registerDeckActions } = require("./deck-actions.cjs").createDe
   debugLog,
 });
 
+/** Is the avatar on screen? The tray/palette context, the deck and Home read this
+ *  one fact, through the getter -- the window is replaced over the desk's life. */
+function isAvatarShown() {
+  const avatarWindow = getAvatarWindow();
+  return Boolean(avatarWindow && !avatarWindow.isDestroyed() && avatarWindow.isVisible());
+}
+
 function commandContext() {
   const desktop = desktopStatus().overlay;
   return {
-    avatarShown: Boolean(avatarWindow && !avatarWindow.isDestroyed() && avatarWindow.isVisible()),
+    avatarShown: isAvatarShown(),
     decisionsWaiting: inboxCounts().waiting,
     decisionsTotal: inboxCounts().total,
     listening: listeningNow(),
@@ -1336,9 +963,7 @@ function deckState() {
     decisions: visibleDecisions(),
     openCount: counts.waiting,
     totalCount: counts.total,
-    deskVisible: Boolean(
-      avatarWindow && !avatarWindow.isDestroyed() && avatarWindow.isVisible(),
-    ),
+    deskVisible: isAvatarShown(),
     slots: [...avatarSlots.entries()].map(([slotId, info]) => ({
       slotId,
       name: info.name,
@@ -1418,7 +1043,7 @@ const { ensureHomeIpc } = require("./home-ipc.cjs").createHomeIpc({
   micMuted: () => micMuted(),
   talkMode: () => talkMode(),
   inputPrefs: () => inputPrefs(),
-  isAvatarShown: () => Boolean(avatarWindow && !avatarWindow.isDestroyed() && avatarWindow.isVisible()),
+  isAvatarShown: () => isAvatarShown(),
   avatarBodies: () => avatarSlots.size,
   getActiveCharacter,
   runCommand: (...args) => runCommand(...args),
@@ -1442,37 +1067,6 @@ function createTray() {
   tray.on("click", toggleOverlay);
   // The console is the front door; the tray is the doorbell.
   tray.on("double-click", () => openConsole());
-}
-
-/** `--smoke`: boot the REAL overlay window against the built renderer, then exit.
- *  Prints one SMOKE-OK / SMOKE-FAIL line; exits 1 on createWindow throw, load
- *  failure, renderer crash, or a 30 s timeout. The single-instance lock is
- *  skipped in smoke so an already-running Desk cannot turn this into a FALSE
- *  PASS — a second instance normally quits 0 without ever booting a window. */
-function runSmokeTest() {
-  const fail = (reason) => {
-    console.error(`SMOKE-FAIL desk: ${reason}`);
-    app.exit(1);
-  };
-  const timer = setTimeout(() => fail("timed out after 30s"), 30000);
-  let window;
-  try {
-    window = createWindow();
-  } catch (error) {
-    clearTimeout(timer);
-    fail(`createWindow threw: ${error?.message || error}`);
-    return;
-  }
-  const contents = window.webContents;
-  contents.once("did-fail-load", (_event, code, description, url) =>
-    fail(`did-fail-load ${code} ${description} ${url}`));
-  contents.once("render-process-gone", (_event, details) =>
-    fail(`render-process-gone ${details?.reason || "unknown"}`));
-  contents.once("did-finish-load", () => {
-    clearTimeout(timer);
-    console.log(`SMOKE-OK desk ${app.getVersion()}`);
-    app.exit(0);
-  });
 }
 
 if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
@@ -1558,6 +1152,7 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
       // the time this handler runs the listener exists — a push from here
       // cannot race the subscription (a push from did-finish-load can).
       // The renderer de-dupes by slotId, so a second pull cannot double-spawn.
+      const avatarWindow = getAvatarWindow();
       if (avatarWindow && !avatarWindow.isDestroyed()) {
         replaySlots();
         // A fresh renderer has no mic open; open mic survives a reload.
@@ -1567,8 +1162,9 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
       // before the physics replay below, which goes through emitToRenderer and
       // would otherwise overwrite it with a tune-avatar the renderer's
       // `type === "state"` check ignores -- leaving the voice state unset.
-      const snapshot = latestEvent;
-      if (avatarWindow && !avatarWindow.isDestroyed()) {
+      const snapshot = getLatestEvent();
+      const liveWindow = getAvatarWindow();
+      if (liveWindow && !liveWindow.isDestroyed()) {
         // The physics knobs live only in cast.json + this process (never in
         // the renderer's storage), so a fresh renderer is told them here, for
         // the resident and every slot just replayed. Same no-race argument.
@@ -1657,7 +1253,7 @@ app.on("activate", () => showOverlay({ focus: true }));
 app.on("before-quit", () => {
   quietMode.stop();
   isQuitting = true;
-  clearTimeout(hyprlandConfigurationTimer);
+  stopAvatarWindow();
   stopFeeds();
   stopDecisionWatch();
   stopAudioListener();

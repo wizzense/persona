@@ -21,7 +21,7 @@ const STILL_OUTSIDE = {
   "sessions-window.cjs": 1, // P2
   "settings-window.cjs": 1, // P2
   "stage-window.cjs": 1, // P2
-  "main.cjs": 1, // P3 / step 13 (avatar-window.cjs): the avatar overlay
+  "avatar-window.cjs": 1, // P3: the avatar overlay (left main.cjs in step 13)
   "detached-avatar-window.cjs": 1, // P3: the 'solo:<slot>' windows
   "living-desktop-window.cjs": 2, // P4: the overlay + the desktop app window
   "console-window.cjs": 1, // P5: the console itself
@@ -54,6 +54,85 @@ test("the deck and chat panels are no longer built in main.cjs", () => {
   const main = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
   assert.doesNotMatch(main, /function createDeckWindow\(|function createChatWindow\(|function openConsole\(/);
   assert.match(main, /require\("\.\/presentation\.cjs"\)\.createPresentation\(/, "main no longer wires the window plane");
+});
+
+test("main.cjs constructs no window and never holds the avatar window (step 13)", () => {
+  const main = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
+  assert.equal(main.split("new BrowserWindow(").length - 1, 0, "a window is built in main.cjs again");
+  assert.match(main, /require\("\.\/avatar-window\.cjs"\)\.createAvatarWindow\(/, "main no longer wires the avatar window");
+  // The overlay is replaced over the desk's life (closed -> null -> rebuilt), so a
+  // module-level copy, or a dep that captures one, goes stale. Readers ask the getter.
+  assert.doesNotMatch(main, /^(let|var) avatarWindow\b/m, "main keeps its own avatar-window variable again");
+  assert.doesNotMatch(main, /getAvatarWindow:\s*\(\)\s*=>\s*avatarWindow/, "a dep captures main's copy, not the getter");
+  assert.doesNotMatch(main, /\blatestEvent\b|\bhyprlandConfigur/, "avatar-window state leaked back into main");
+});
+
+/** Just enough of Electron for avatar-window.cjs: the overlay's setters, IPC, userData. */
+function fakeAvatarElectron() {
+  const built = [];
+  class FakeWindow {
+    constructor(options) {
+      this.options = options;
+      this.destroyed = false;
+      this.visible = false;
+      this.handlers = {};
+      this.webContents = {
+        sent: [],
+        setWindowOpenHandler: () => {},
+        on: () => {},
+        once: () => {},
+        isLoading: () => false,
+        send: (channel, payload) => this.webContents.sent.push([channel, payload]),
+      };
+      built.push(this);
+    }
+    static fromWebContents() { return null; }
+    setAlwaysOnTop() {}
+    setVisibleOnAllWorkspaces() {}
+    setOpacity() {}
+    isDestroyed() { return this.destroyed; }
+    isMinimized() { return false; }
+    isVisible() { return this.visible; }
+    showInactive() { this.visible = true; }
+    show() { this.visible = true; }
+    focus() {}
+    hide() { this.visible = false; }
+    once(event, fn) { this.handlers[event] = fn; }
+    on(event, fn) { this.handlers[event] = fn; }
+    loadURL(url) { this.loaded = url; return Promise.resolve(); }
+    destroy() { this.destroyed = true; if (this.handlers.closed) this.handlers.closed(); }
+  }
+  const ipcMain = { removeAllListeners: () => {}, on: () => {} };
+  const app = { getPath: () => require("node:os").tmpdir() };
+  return { electron: { BrowserWindow: FakeWindow, screen: {}, ipcMain }, app, built };
+}
+
+test("getAvatarWindow follows the replaced overlay, and the last event survives for the snapshot", () => {
+  const { createAvatarWindow } = require("./avatar-window.cjs");
+  const { electron, app, built } = fakeAvatarElectron();
+  const avatar = createAvatarWindow({
+    electron,
+    app,
+    configureHyprlandWindow: async () => true,
+    getHyprlandWindowPlacement: async () => null,
+    isAllowedRendererNavigation: () => true,
+  });
+  assert.equal(avatar.getAvatarWindow(), null, "no window before the first show");
+  avatar.emitToRenderer({ type: "state", state: { phase: "idle" } });
+  avatar.showOverlay();
+  const first = avatar.getAvatarWindow();
+  assert.equal(first, built[0]);
+  assert.equal(first.visible, true);
+  assert.equal(avatar.createWindow(), first, "single instance while it lives");
+  first.destroy();
+  assert.equal(avatar.getAvatarWindow(), null, "the getter drops a closed window");
+  avatar.showOverlay();
+  assert.equal(built.length, 2);
+  assert.equal(avatar.getAvatarWindow(), built[1], "the getter returns the REPLACEMENT");
+  avatar.sendToAvatar("focus-avatar", { slotId: null });
+  assert.deepEqual(built[1].webContents.sent, [["desk:event", { type: "focus-avatar", slotId: null }]]);
+  assert.deepEqual(avatar.getLatestEvent(), { type: "state", state: { phase: "idle" } });
+  avatar.stop();
 });
 
 /** A BrowserWindow stand-in: records construction, show/focus/close and events. */
