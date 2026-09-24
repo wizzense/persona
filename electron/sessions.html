@@ -4,93 +4,67 @@
 <meta charset="utf-8" />
 <title>Sessions</title>
 <link rel="stylesheet" href="aither-tokens.css" />
+<link rel="stylesheet" href="aither-ui.css" />
 <style>
-  /* Colours, type and scrollbars come from aither-tokens.css -- GENERATED from Veil's
-     tokens by AitherOS/dev/tools/gen_desk_tokens.py. This pane used to re-declare its
-     own --bg/--panel/--line/--fg palette by hand; five panes did, none matched the
-     family. What stays here is only what this pane MEANS by a colour. */
-  :root {
-    --amber: var(--warning);
-    --red: var(--destructive);
-    --green: var(--success);
-  }
-  * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
-    font: 13px/1.45 var(--font-sans); }
-  body { display: grid; grid-template-rows: 44px 1fr; height: 100vh; }
+  /* Components (buttons, badges, empty states, section captions) come from
+     aither-ui.css, colours and type from aither-tokens.css (GENERATED from Veil's
+     tokens by AitherOS/dev/tools/gen_desk_tokens.py). This sheet only lays the pane
+     out: a session list on the left, the live transcript on the right. */
 
-  .bar { display: flex; align-items: center; gap: 10px; padding: 0 14px;
-    border-bottom: 1px solid var(--line); }
   /* ONE chrome. Inside the console the shell's bar already names this pane, so the
      pane's own title is the double header from the owner's 2026-09-20 screenshots.
      console-preload.cjs sets .embedded per frame; detached into its own window the
      page is not embedded and keeps its title, because there it is the only one. */
   .embedded .bar .title { display: none; }
-  .bar .title { font-weight: 600; }
-  .bar .state { color: var(--muted); font-size: 12px; flex: 1; min-width: 0;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .chip { appearance: none; border: 1px solid var(--line); background: var(--btn);
-    color: var(--muted); border-radius: 6px; padding: 5px 10px; cursor: pointer; }
-  .chip:hover { background: var(--btn-hi); color: var(--fg); }
+  .bar .ui-sub { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ui-head.bar { border-bottom: 1px solid var(--line); }
 
-  main { display: grid; grid-template-columns: minmax(320px, 34%) 1fr; min-height: 0; }
+  main { display: grid; grid-template-columns: minmax(320px, 34%) 1fr; }
   #list { border-right: 1px solid var(--line); overflow-y: auto; overflow-x: hidden; min-height: 0; }
   /* Sessions are grouped by what they need from YOU, because that is the question
      the pane exists to answer. It used to be one flat list in directory order. */
-  .group { position: sticky; top: 0; z-index: 1; background: var(--bg-deep); color: var(--surface-400);
-    font-size: 10px; font-weight: 650; letter-spacing: .09em; text-transform: uppercase;
-    padding: 8px 12px 6px; border-bottom: 1px solid var(--line); display: flex; gap: 8px; }
-  .group .n { color: var(--muted); font-weight: 500; }
+  .group { position: sticky; top: 0; z-index: 1; background: var(--bg-sunk);
+    padding: 10px 14px 6px; display: flex; align-items: center; gap: 8px; }
   .group.needs { color: var(--warn); }
-  .row { padding: 9px 12px; border-bottom: 1px solid var(--btn); cursor: pointer;
-    display: grid; gap: 3px; }
-  .row:hover { background: var(--btn); }
-  .row.sel { background: var(--panel); border-left: 2px solid var(--brand); padding-left: 10px; }
+  .row { padding: 9px 14px; border-bottom: 1px solid var(--line); cursor: pointer;
+    display: grid; gap: 4px; border-left: 2px solid transparent; }
+  .row:hover { background: var(--surface-900); }
+  .row.sel { background: var(--panel); border-left-color: var(--brand); }
   .row .top { display: flex; align-items: baseline; gap: 8px; }
   /* The name is WHAT the session is about, and it wraps. Every row used to open with
      the same "AitherOS-Fresh develop 07:34 - waiting for you - " and then cut off --
      eighteen rows that read identically, behind a horizontal scrollbar. */
   .row .name { font-weight: 600; flex: 1; min-width: 0; overflow: hidden; line-height: 1.35;
     display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-  .row .age { color: var(--muted); font-size: 11px; }
-  .row .sum { color: var(--muted); font-size: 11px; overflow: hidden;
-    text-overflow: ellipsis; white-space: nowrap; }
-  .pill { font-size: 10px; border-radius: 999px; padding: 1px 7px; border: 1px solid var(--line);
-    color: var(--muted); white-space: nowrap; }
-  .pill.working { color: var(--brand); border-color: color-mix(in oklch, var(--brand), var(--background) 60%); }
-  .pill.waiting { color: var(--amber); border-color: color-mix(in oklch, var(--warn), var(--background) 60%); }
-  .pill.exited { opacity: .55; }
-  .pill.steer { color: var(--green); border-color: color-mix(in oklch, var(--ok), var(--background) 62%); }
-  .pill.steer.turn { color: var(--amber); border-color: color-mix(in oklch, var(--warn), var(--background) 60%); }
-  .pill.steer.none { color: var(--muted); opacity: .7; }
+  .row .sum { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ui-badge.exited { opacity: .55; }
 
-  #side { display: grid; grid-template-rows: 34px 1fr; min-height: 0; }
-  #tailBar { display: flex; align-items: center; gap: 10px; padding: 0 12px;
-    border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12px; }
-  #tailBar .grow { flex: 1; }
-  #tail { margin: 0; padding: 10px 14px; overflow: auto; min-height: 0; white-space: pre-wrap;
+  #side { display: grid; grid-template-rows: auto 1fr; min-height: 0; }
+  #tailBar { padding: 8px 14px; border-bottom: 1px solid var(--line); }
+  #tailWho { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #tail { margin: 0; padding: 12px 16px; overflow: auto; min-height: 0; white-space: pre-wrap;
     word-break: break-word; font: 12px/1.5 var(--font-mono); }
+  #tail > div { padding: 2px 0; }
   #tail .role { color: var(--brand); }
-  #tail .tool { color: var(--amber); }
+  #tail .tool { color: var(--warn); }
   #tail .dim { color: var(--muted); }
-  .placeholder { color: var(--muted); padding: 24px; text-align: center; }
 </style>
 </head>
-<body>
-  <div class="bar">
-    <span class="title">Sessions</span>
-    <span class="state" id="state">loading…</span>
-    <button class="chip" id="refresh">Refresh</button>
-  </div>
-  <main>
-    <div id="list"><div class="placeholder">loading sessions…</div></div>
+<body class="ui">
+  <header class="ui-head bar">
+    <h1 class="title">Sessions</h1>
+    <span class="ui-sub" id="state">loading…</span>
+    <span class="ui-grow"></span>
+    <button class="ui-btn ui-small" id="refresh">Refresh</button>
+  </header>
+  <main class="ui-body ui-flush">
+    <div id="list"><div class="ui-empty">loading sessions…</div></div>
     <div id="side">
-      <div id="tailBar">
-        <span id="tailWho">No session selected</span>
-        <span class="grow"></span>
-        <span id="tailNote"></span>
+      <div id="tailBar" class="ui-row">
+        <span id="tailWho" class="ui-grow">No session selected</span>
+        <span id="tailNote" class="ui-note"></span>
       </div>
-      <pre id="tail" class="placeholder">Pick a session to watch its transcript live.</pre>
+      <pre id="tail" class="ui-empty">Pick a session to watch its transcript live.</pre>
     </div>
   </main>
 
@@ -125,23 +99,23 @@ function ageOf(ts) {
 
 function pill(text, cls) {
   const el = document.createElement("span");
-  el.className = "pill" + (cls ? " " + cls : "");
+  el.className = "ui-badge" + (cls ? " " + cls : "");
   el.textContent = text;
   return el;
 }
 
 function statusClass(status) {
   const s = String(status || "");
-  if (s === "working") return "working";
-  if (s.startsWith("waiting")) return "waiting";
+  if (s === "working") return "working ui-ok";
+  if (s.startsWith("waiting")) return "waiting ui-warn";
   if (s === "exited") return "exited";
   return "";
 }
 
 function steerPill(cap) {
   const c = String(cap || "none");
-  if (c === "full") return pill("steerable", "steer");
-  if (c === "turn-boundary") return pill("steer @ turn", "steer turn");
+  if (c === "full") return pill("steerable", "steer ui-ok");
+  if (c === "turn-boundary") return pill("steer @ turn", "steer turn ui-warn");
   return pill("watch only", "steer none");
 }
 
@@ -173,7 +147,7 @@ function renderList() {
   listEl.textContent = "";
   if (!sessions.length) {
     const ph = document.createElement("div");
-    ph.className = "placeholder";
+    ph.className = "ui-empty";
     ph.textContent = "No sessions in the directory.";
     listEl.appendChild(ph);
     return;
@@ -185,12 +159,12 @@ function renderList() {
     if (group !== lastGroup) {
       lastGroup = group;
       const heading = document.createElement("div");
-      heading.className = "group" + (group === "needs" ? " needs" : "");
+      heading.className = "group ui-section" + (group === "needs" ? " needs" : "");
       const count = ordered.filter((entry) => entry.group === group).length;
       heading.innerHTML = "";
       heading.append(document.createTextNode(GROUP_LABELS[group]));
       const n = document.createElement("span");
-      n.className = "n";
+      n.className = "n " + (group === "needs" ? "ui-count" : "ui-badge");
       n.textContent = String(count);
       heading.appendChild(n);
       listEl.appendChild(heading);
@@ -205,11 +179,11 @@ function renderList() {
     name.textContent = split.about || String(s.id || "").slice(0, 8);
     name.title = (s.cwd || "") + (s.harness_label ? " · " + s.harness_label : "") + (s.origin ? " · " + s.origin : "");
     const age = document.createElement("span");
-    age.className = "age";
+    age.className = "age ui-note";
     age.textContent = ageOf(s.last_activity_at);
     top.append(name, pill(String(s.status || "?"), statusClass(s.status)), age);
     const sum = document.createElement("div");
-    sum.className = "sum";
+    sum.className = "sum ui-meta ui-note";
     sum.textContent = [split.where, s.last_activity_summary || s.cwd || ""].filter(Boolean).join("  ·  ");
     row.append(top, sum);
     const badges = document.createElement("div");
@@ -254,11 +228,11 @@ function formatLine(raw) {
 }
 
 function renderTail(result) {
-  tailEl.classList.remove("placeholder");
+  tailEl.classList.remove("ui-empty");
   tailEl.textContent = "";
   if (!result || result.ok !== true) {
     tailNote.textContent = "";
-    tailEl.classList.add("placeholder");
+    tailEl.classList.add("ui-empty");
     tailEl.textContent = (result && result.note) || "cannot read the transcript";
     return;
   }

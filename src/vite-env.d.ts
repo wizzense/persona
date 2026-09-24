@@ -87,6 +87,7 @@ type AvatarBridgeEvent =
   // `volume` is cast.json's master x actor fader, already multiplied (0..2).
   // Optional: an absent value plays at full volume (see speech-gain.ts).
   | { type: 'speak'; audioBase64: string; slotId?: string; volume?: number }
+  | { type: 'hush' }
   // The words over the speaker's head. Arrives WITH a speak event when there is
   // audio, and ALONE when there is none (muted, or the voice service is down):
   // `muted` means "there is no clip to time this against".

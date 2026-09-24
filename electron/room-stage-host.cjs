@@ -714,11 +714,31 @@ function castPaneImpl(deps = {}) {
     });
   }
 
-  return { describe, setActor, clearActor, setStage, setVoice, setDefaults, setSection, setChannel, captureStage, muteOrigin, reveal };
+  /**
+   * preview — say a sample line in `voice` so the owner hears a voice BEFORE
+   * assigning it. Spoken through the resident (slot0) under the desk's own
+   * "service:awdesk-preview" origin: gated like every speaker (a muted room stays
+   * muted), never mistaken for an agent talking, and the ONE origin whose asked-for
+   * voice beats an authored default -- otherwise every preview played the default
+   * voice (main.cjs PREVIEW_ORIGIN). Returns speakAloud's verdict.
+   */
+  async function preview({ voice, text } = {}) {
+    const id = typeof voice === "string" ? voice.trim() : "";
+    if (!id) return { ok: false, error: "preview: voice is required" };
+    if (typeof deps.speakAloud !== "function") return { ok: false, error: "preview: the voice service is not wired" };
+    const line = typeof text === "string" && text.trim() ? text.trim() : PREVIEW_TEXT;
+    return deps.speakAloud(line, id, undefined, "slot0", "service:awdesk-preview");
+  }
+
+  return { describe, setActor, clearActor, setStage, setVoice, setDefaults, setSection, setChannel, captureStage, muteOrigin, reveal, preview };
 }
+
+/** What a voice preview says. */
+const PREVIEW_TEXT = "Hi, this is how I sound.";
 
 module.exports = {
   DEFAULT_PLACE,
+  PREVIEW_TEXT,
   buildResolver,
   castPaneImpl,
   evictSlot,

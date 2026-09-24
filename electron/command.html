@@ -5,99 +5,76 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' file:; script-src 'unsafe-inline'; img-src data:;" />
 <title>Aither Command</title>
 <link rel="stylesheet" href="aither-tokens.css" />
+<link rel="stylesheet" href="aither-ui.css" />
 <style>
-  /* Colours, type and scrollbars come from aither-tokens.css -- GENERATED from Veil's
-     tokens by AitherOS/dev/tools/gen_desk_tokens.py. This pane used to re-declare its
-     own --bg/--panel/--line/--fg palette by hand; five panes did, none matched the
-     family. What stays here is only what this pane MEANS by a colour. */
-  :root {
-    --agent: var(--pastel-sky);
-    --fleet: var(--surface-300);
-  }
-  * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
-    font: 14px/1.4 var(--font-sans); }
-  body { display: grid; grid-template-rows: auto 1fr auto auto; height: 100vh; }
-  header { display: flex; align-items: center; gap: 12px; padding: 14px 18px 8px; }
+  /* Components (buttons, the input, badges, notes) come from aither-ui.css, colours
+     and type from aither-tokens.css (GENERATED from Veil's tokens by
+     AitherOS/dev/tools/gen_desk_tokens.py). What stays here is the conversation's
+     own layout: a scrolling history above, a composer pinned below. */
+
   /* ONE chrome. Inside the console the shell's bar already names this pane, so the
      pane's own title is the double header from the owner's 2026-09-20 screenshots.
      console-preload.cjs sets .embedded per frame; detached into its own window the
      page is not embedded and keeps its title, because there it is the only one. */
   .embedded header h1 { display: none; }
-  header h1 { font-size: 16px; margin: 0; font-weight: 600; letter-spacing: .02em; }
-  header .sub { color: var(--muted); font-size: 12px; }
-  #queue { margin-left: auto; color: var(--muted); font-size: 12px; }
-  #queue.active { color: var(--warn); font-weight: 600; }
-  #transcript { display: flex; flex-direction: column; gap: 8px; padding: 10px 18px; overflow-y: auto;
-    background: var(--bg-sunk); margin: 10px 18px; border: 1px solid var(--line); border-radius: 10px; }
+
+  #transcript { height: 100%; overflow-y: auto; display: flex; flex-direction: column; gap: 10px;
+    padding: 12px max(24px, calc((100% - 880px) / 2)) 16px; }
   /* A conversation, not a ledger. Every turn used to be a FULL-WIDTH bar, so your own
      two-word command ("gpu quiet") rendered as an empty slab with text pinned to the
      far right edge (owner screenshot, 2026-09-20). A bubble is as wide as what it
      says: yours on the right in the theme colour, the answer on the left. */
   .message { padding: 9px 13px; border-radius: 12px; width: fit-content; max-width: min(78%, 760px);
     white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.45; user-select: text; }
-  .message.request { align-self: flex-end; color: var(--fg); border-bottom-right-radius: 4px;
+  .message.request { align-self: flex-end; border-bottom-right-radius: 4px;
     background: color-mix(in oklch, var(--brand), var(--background) 62%); }
   .message.progress, .message.reply, .message.fleet-reply, .message.error {
-    align-self: flex-start; border-bottom-left-radius: 4px; border: 1px solid var(--line); }
-  .message.progress { background: var(--btn); color: var(--muted);
-    font-family: var(--font-mono); font-size: 12px; }
-  .message.reply { background: var(--panel); color: var(--fg); }
-  .message.fleet-reply { background: var(--panel); color: var(--fg); }
-  .message.error { background: color-mix(in oklch, var(--bad), var(--background) 82%);
-    border-color: color-mix(in oklch, var(--bad), var(--background) 55%); color: var(--fg); }
-  .message .verdict { display: inline-block; font-size: 10px; font-weight: 650; letter-spacing: .06em;
-    text-transform: uppercase; border-radius: 999px; padding: 1px 8px; margin-right: 8px;
-    background: var(--surface-800); color: var(--surface-200); }
-  .message .verdict.bad { background: var(--bad); color: var(--background); }
-  .message .verdict.ok { background: var(--ok); color: var(--background); }
+    align-self: flex-start; border-bottom-left-radius: 4px; border: 1px solid var(--line);
+    background: var(--panel); }
+  .message.progress { color: var(--muted); font-family: var(--font-mono); font-size: 12px;
+    background: none; border-style: dashed; }
+  .message.error { border-color: color-mix(in oklch, var(--bad), var(--background) 55%); }
+  .message .verdict { margin-right: 8px; text-transform: uppercase; }
   .message details { margin-top: 6px; }
   .message summary { cursor: pointer; color: var(--muted); font-size: 11px; }
-  .message pre { margin: 6px 0 0; font: 11px/1.5 var(--font-mono); color: var(--surface-300);
+  .message pre { margin: 6px 0 0; font: 11px/1.5 var(--font-mono); color: var(--muted);
     white-space: pre-wrap; overflow-wrap: anywhere; }
-  #transcript:empty::before { content: "Say what you want in a sentence -- \201Cis ARC solving?\201D, \201Cquiet the GPU\201D, \201Cwhat is on the fleet?\201D -- or pick an action below."; color: var(--muted); font-size: 12px; margin: auto; text-align: center; max-width: 420px; line-height: 1.6; }
-  .input-group { display: grid; grid-template-columns: 1fr; gap: 10px; padding: 10px 18px 0; }
-  textarea { appearance: none; border: 1px solid var(--line); background: var(--panel); color: var(--fg);
-    border-radius: 8px; padding: 10px 12px; font: 13px/1.4 var(--font-sans); resize: vertical;
-    min-height: 50px; max-height: 150px; }
-  textarea:focus { outline: none; border-color: var(--brand); }
-  .buttons { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 18px 8px; }
-  .chip { appearance: none; border: 1px solid var(--line); background: var(--btn); color: var(--muted);
-    border-radius: 6px; padding: 8px 10px; font: 12px/1.2 var(--font-sans); cursor: pointer;
-    transition: background .12s, border-color .12s, color .12s; }
-  .chip:hover { background: var(--btn-hi); color: var(--fg); }
-  .chip:disabled { opacity: .45; cursor: not-allowed; }
-  .footer { padding: 8px 18px 12px; color: var(--muted); font-size: 11px; display: flex; gap: 12px; }
-  .footer a { color: var(--brand); text-decoration: none; cursor: pointer; }
-  .footer a:hover { text-decoration: underline; }
+  #transcript:empty::before { content: "Say what you want in a sentence -- \201Cis ARC solving?\201D, \201Cquiet the GPU\201D, \201Cwhat is on the fleet?\201D -- or pick a suggestion below."; color: var(--muted); font-size: 12px; margin: auto; text-align: center; max-width: 420px; line-height: 1.6; }
+
+  .composer { flex: none; display: flex; flex-direction: column; gap: 8px;
+    padding: 10px max(24px, calc((100% - 880px) / 2)) 14px; border-top: 1px solid var(--line); }
+  .composer .box { display: flex; align-items: flex-end; gap: 8px; }
+  .composer textarea { resize: none; min-height: 40px; max-height: 150px; }
 </style>
 </head>
-<body>
-  <header>
+<body class="ui">
+  <header class="ui-head">
     <div>
       <h1>Aither Command</h1>
-      <div class="sub">Type a sentence or choose a quick action</div>
+      <div class="ui-sub">Ask in a sentence; the fleet answers here</div>
     </div>
-    <div id="queue" title="commands queued and waiting">–</div>
+    <span class="ui-grow"></span>
+    <span id="queue" class="ui-badge" title="commands queued and waiting">–</span>
+    <button class="chip ui-btn ui-small ui-ghost" id="chip-open-fleet" data-action="open-fleet">Open Fleet window</button>
   </header>
 
-  <div id="transcript"></div>
+  <main class="ui-body ui-flush">
+    <div id="transcript"></div>
+  </main>
 
-  <div class="buttons">
-    <button class="chip" id="chip-fleet-status" data-text="fleet status">Fleet status</button>
-    <button class="chip" id="chip-fleet-down" data-text="fleet down">Fleet down</button>
-    <button class="chip" id="chip-fleet-up" data-text="fleet up">Fleet up</button>
-    <button class="chip" id="chip-gpu-quiet" data-text="gpu quiet">GPU quiet</button>
-    <button class="chip" id="chip-gpu-resume" data-text="gpu resume">GPU resume</button>
-    <button class="chip" id="chip-open-fleet" data-action="open-fleet">Open Fleet window</button>
-  </div>
-
-  <div class="input-group">
-    <textarea id="input" placeholder="Type a command or sentence…" spellcheck="false"></textarea>
-  </div>
-
-  <div class="footer">
-    <span id="help">Shift+Enter for newline, Enter to send, Esc to close</span>
+  <div class="composer">
+    <div class="ui-row" aria-label="suggestions">
+      <button class="chip ui-btn ui-small" id="chip-fleet-status" data-text="fleet status">Fleet status</button>
+      <button class="chip ui-btn ui-small" id="chip-fleet-down" data-text="fleet down">Fleet down</button>
+      <button class="chip ui-btn ui-small" id="chip-fleet-up" data-text="fleet up">Fleet up</button>
+      <button class="chip ui-btn ui-small" id="chip-gpu-quiet" data-text="gpu quiet">GPU quiet</button>
+      <button class="chip ui-btn ui-small" id="chip-gpu-resume" data-text="gpu resume">GPU resume</button>
+    </div>
+    <div class="box">
+      <textarea id="input" class="ui-input" rows="1" placeholder="Message Aither…" spellcheck="false"></textarea>
+      <button id="send" class="ui-btn ui-primary" title="Send (Enter)">Send</button>
+    </div>
+    <span id="help" class="ui-note">Enter to send · Shift+Enter for a newline · Esc to close</span>
   </div>
 
 <script>
@@ -105,6 +82,7 @@
   const $ = (id) => document.getElementById(id);
   const transcript = $("transcript");
   const input = $("input");
+  const sendBtn = $("send");
   const queueIndicator = $("queue");
   const chips = [...document.querySelectorAll(".chip")];
   let queueLength = 0;
@@ -138,11 +116,11 @@
       if (parsed.verdict) {
         const chip = document.createElement("span");
         const bad = /cannot|error|fail|down|dead/i.test(parsed.verdict);
-        chip.className = "verdict " + (bad ? "bad" : /ok|up|clean|pass/i.test(parsed.verdict) ? "ok" : "");
+        chip.className = "verdict ui-badge" + (bad ? " ui-bad" : /ok|up|clean|pass/i.test(parsed.verdict) ? " ui-ok" : "");
         chip.textContent = parsed.verdict;
         msg.appendChild(chip);
       }
-      msg.appendChild(document.createTextNode(parsed.head + (parsed.reason ? " \u2014 " + parsed.reason : "")));
+      msg.appendChild(document.createTextNode(parsed.head + (parsed.reason ? " — " + parsed.reason : "")));
       const more = document.createElement("details");
       const summary = document.createElement("summary");
       summary.textContent = "raw result";
@@ -156,20 +134,30 @@
     transcript.scrollTop = transcript.scrollHeight;
   }
 
+  /** The composer grows with what is typed, up to its max-height, like any chat box. */
+  function grow() {
+    input.style.height = "auto";
+    input.style.height = `${input.scrollHeight + 2}px`;
+  }
+
   function updateQueue(len) {
     queueLength = len;
     queueIndicator.textContent = len > 0 ? `${len} queued` : "–";
     queueIndicator.classList.toggle("active", len > 0);
+    queueIndicator.classList.toggle("ui-warn", len > 0);
     for (const chip of chips) chip.disabled = len > 0 || isInputting;
     input.disabled = len > 0 || isInputting;
+    sendBtn.disabled = input.disabled;
   }
 
   async function send() {
     const text = input.value.trim();
     if (!text) return;
     input.value = "";
+    grow();
     isInputting = true;
     for (const chip of chips) chip.disabled = true;
+    sendBtn.disabled = true;
     addMessage(text, "request");
     try {
       const result = await window.command.send(text);
@@ -179,6 +167,7 @@
     } finally {
       isInputting = false;
       updateQueue(queueLength);
+      input.focus();
     }
   }
 
@@ -190,6 +179,8 @@
       window.command.close();
     }
   });
+  input.addEventListener("input", grow);
+  sendBtn.addEventListener("click", () => void send());
 
   for (const chip of chips) {
     if (chip.dataset.text) {

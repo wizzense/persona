@@ -34,23 +34,34 @@
   #rail { overflow-y: auto; min-height: 0; display: flex; flex-direction: column; gap: 1px; }
   .section { font-size: 10px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase;
     color: var(--surface-500); padding: 12px 10px 5px; }
-  .tab { appearance: none; text-align: left; border: 0; background: none; color: var(--surface-300);
+  .place { appearance: none; text-align: left; border: 0; background: none; color: var(--surface-300);
     border-radius: var(--radius); padding: 7px 10px; cursor: pointer; display: grid;
     grid-template-columns: 18px 1fr auto; align-items: center; column-gap: 10px;
     position: relative; font: inherit; transition: background .12s, color .12s; }
-  .tab svg { width: 16px; height: 16px; color: var(--surface-400); transition: color .12s; }
-  .tab:hover { background: var(--surface-900); color: var(--fg); }
-  .tab[aria-selected="true"] { background: var(--surface-800); color: var(--fg); }
-  .tab[aria-selected="true"] svg { color: var(--brand); }
-  .tab[aria-selected="true"]::before { content: ""; position: absolute; left: -8px; top: 8px; bottom: 8px;
+  .place svg { width: 16px; height: 16px; color: var(--surface-400); transition: color .12s; }
+  .place:hover { background: var(--surface-900); color: var(--fg); }
+  .place[aria-selected="true"] { background: var(--surface-800); color: var(--fg); }
+  .place[aria-selected="true"] svg { color: var(--brand); }
+  .place[aria-selected="true"]::before { content: ""; position: absolute; left: -8px; top: 8px; bottom: 8px;
     width: 3px; border-radius: 0 3px 3px 0; background: var(--brand); }
-  .tab .name { font-size: 13px; font-weight: 550; }
-  /* The hint is the row's tooltip now; the shell bar shows it for the pane you are on. */
-  .tab .hint { display: none; }
-  .tab .badge { font-size: 10px; font-weight: 650; letter-spacing: .02em; color: var(--muted); }
-  .tab .badge.count { color: var(--background); background: var(--warn); border-radius: 999px;
+  .place .name { font-size: 13px; font-weight: 550; }
+  .place .badge { font-size: 10px; font-weight: 650; letter-spacing: .02em; color: var(--muted); }
+  .place .badge.count { color: var(--background); background: var(--warn); border-radius: 999px;
     padding: 1px 7px; min-width: 18px; text-align: center; }
   nav .spacer { flex: 1; }
+  #rail-foot { display: flex; flex-direction: column; gap: 1px; }
+
+  /* A place with several panes shows them as tabs over the stage -- the same
+     grammar as .ui-tabs in aither-ui.css, so a pane's own sub-tabs read alike. */
+  .subtabs { display: flex; gap: 2px; padding: 0 12px; border-bottom: 1px solid var(--line); flex: none; }
+  .subtabs[hidden] { display: none; }
+  .tab { appearance: none; border: 0; background: none; color: var(--muted); cursor: pointer;
+    font: 550 13px/1 var(--font-sans); padding: 10px 12px 11px; position: relative; }
+  .tab:hover { color: var(--fg); }
+  .tab[aria-selected="true"] { color: var(--fg); }
+  .tab[aria-selected="true"]::after { content: ""; position: absolute; left: 8px; right: 8px;
+    bottom: -1px; height: 2px; border-radius: 2px; background: var(--brand); }
+  .tab .badge { margin-left: 6px; font-size: 10px; color: var(--muted); }
   /* The footer answers "is any of this connected?" and "make it look like mine" --
      the two things a status bar is for. */
   .foot { border-top: 1px solid var(--line); margin: 6px -8px 0; padding: 9px 12px 2px;
@@ -72,7 +83,7 @@
     /* keep clear of the OS caption buttons drawn over this strip */
     padding-right: calc(100vw - env(titlebar-area-width, 100vw) + 14px); }
   .bar button, .bar .chip { -webkit-app-region: no-drag; }
-  .bar .title { font-size: 13px; font-weight: 600; }
+  .bar .title { font-size: 15px; font-weight: 650; }
   .bar .state { font-size: 11px; color: var(--muted); }
   .bar .grow { flex: 1; }
   .chip { appearance: none; border: 1px solid var(--line); background: var(--btn); color: var(--muted);
@@ -120,6 +131,7 @@
     </div>
     <div id="rail" role="tablist" aria-orientation="vertical"></div>
     <div class="spacer"></div>
+    <div id="rail-foot"></div>
     <div class="foot">
       <div class="row">
         <button class="link" id="open-palette" title="Everything Desk can do">Commands</button>
@@ -141,6 +153,7 @@
       <button class="chip" id="btn-reattach" hidden>Reattach</button>
       <button class="chip" id="btn-close" hidden>Close</button>
     </div>
+    <div class="subtabs" id="subtabs" role="tablist" hidden></div>
     <div id="error"></div>
     <div class="stage" id="stage"></div>
   </main>
@@ -249,7 +262,34 @@ if (window.aitherConsole && typeof window.aitherConsole.onInboxCount === "functi
   });
 }
 
+const subtabs = document.getElementById("subtabs");
+/** The pane last shown in each place, so going back to Avatars returns to Voices. */
+const lastInPlace = {};
+
+function placeOf(paneId) {
+  const pane = panes.find((p) => p.id === paneId);
+  return pane ? pane.place || pane.id : null;
+}
+
+function renderPlaces() {
+  const current = placeOf(selected);
+  for (const node of document.querySelectorAll(".place")) {
+    const id = node.dataset.place;
+    node.setAttribute("aria-selected", String(id === current));
+    const badge = node.querySelector(".badge");
+    const count = id === "decisions" && inboxCount > 0;
+    badge.textContent = count ? String(inboxCount) : "";
+    badge.classList.toggle("count", count);
+  }
+  const siblings = panes.filter((p) => (p.place || p.id) === current);
+  subtabs.hidden = siblings.length < 2;
+  for (const tab of subtabs.querySelectorAll(".tab")) {
+    tab.hidden = placeOf(tab.dataset.pane) !== current;
+  }
+}
+
 function render() {
+  renderPlaces();
   for (const pane of panes) {
     const isSelected = pane.id === selected;
     const isDetached = detached.has(pane.id);
@@ -278,9 +318,10 @@ function render() {
     if (isSelected) {
       const node = isDetached ? placeholderFor(pane) : frameFor(pane);
       node.classList.add("active");
-      barTitle.textContent = pane.label;
+      barTitle.textContent = pane.placeLabel && pane.placeLabel !== pane.label
+        ? pane.placeLabel + " · " + pane.label : pane.label;
       barState.textContent = isDetached ? "detached" : pane.hint;
-      btnDetach.hidden = isDetached;
+      btnDetach.hidden = isDetached || pane.detachable === false;
       btnReattach.hidden = !isDetached;
     } else {
       const node = document.getElementById("pane-" + pane.id);
@@ -307,6 +348,8 @@ function reportStage() {
 
 function select(paneId) {
   selected = paneId;
+  const place = placeOf(paneId);
+  if (place) lastInPlace[place] = paneId;
   say("");
   render();
   reportStage();
@@ -560,6 +603,7 @@ window.aitherConsole.onFocus((payload) => {
 // Icon NAME (pane data from main) -> drawing. Same stroke set as the avatar's bead
 // rail and the workspace sidebar, so the three read as one hand.
 const ICON_PATHS = {
+  home: '<path d="m3 11 9-7 9 7"/><path d="M5 10v10h14V10"/><path d="M10 20v-6h4v6"/>',
   bell: '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/>',
   terminal: '<path d="m5 8 4 4-4 4"/><path d="M12 16h7"/>',
   server: '<rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/>',
@@ -609,33 +653,46 @@ document.getElementById("open-palette").addEventListener("click", () => { void o
     say("could not load panes: " + String(error && error.message ? error.message : error));
     return;
   }
-  let section = null;
+  // Places in the rail (in first-seen order), one .tab per pane in the strip. Every
+  // pane keeps its own .tab (hidden when its place is not showing) so a deep link
+  // and the smoke's "one tab per pane" both still hold.
+  const seen = new Set();
+  const railFoot = document.getElementById("rail-foot");
   for (const pane of panes) {
-    if (pane.section && pane.section !== section) {
-      section = pane.section;
-      const heading = document.createElement("div");
-      heading.className = "section";
-      heading.textContent = section;
-      rail.appendChild(heading);
+    const place = pane.place || pane.id;
+    if (!seen.has(place)) {
+      seen.add(place);
+      const row = document.createElement("button");
+      row.className = "place";
+      row.id = "place-" + place;
+      row.dataset.place = place;
+      row.setAttribute("role", "tab");
+      row.setAttribute("aria-selected", "false");
+      row.title = pane.placeLabel || pane.label;
+      row.insertAdjacentHTML("afterbegin", iconSvg(pane.placeIcon || pane.icon));
+      const name = document.createElement("span");
+      name.className = "name";
+      name.textContent = pane.placeLabel || pane.label;
+      const badge = document.createElement("span");
+      badge.className = "badge";
+      row.append(name, badge);
+      row.addEventListener("click", () => select(lastInPlace[place] || pane.id));
+      (pane.footer ? railFoot : rail).appendChild(row);
     }
     const tab = document.createElement("button");
     tab.className = "tab";
     tab.id = "tab-" + pane.id;
+    tab.dataset.pane = pane.id;
     tab.setAttribute("role", "tab");
     tab.setAttribute("aria-selected", "false");
     tab.title = pane.hint || pane.label;
-    tab.insertAdjacentHTML("afterbegin", iconSvg(pane.icon));
     const name = document.createElement("span");
-    name.className = "name";
     name.textContent = pane.label;
-    const hint = document.createElement("span");
-    hint.className = "hint";
-    hint.textContent = pane.hint;
     const badge = document.createElement("span");
     badge.className = "badge";
-    tab.append(name, hint, badge);
+    tab.append(name, badge);
     tab.addEventListener("click", () => select(pane.id));
-    rail.appendChild(tab);
+    subtabs.appendChild(tab);
   }
   await refreshDetached();
   started = true;

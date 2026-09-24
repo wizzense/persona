@@ -553,3 +553,29 @@ test("castPaneImpl.describe lists the resident FIRST with its service:awdesk res
   assert.equal(first.resolution.physics.weight, 0.4);
   assert.equal(first.resolution.physicsFrom.weight, "defaults.physics.weight");
 });
+
+test("castPaneImpl.preview: speaks the sample line in the asked voice, through slot0, as service:awdesk-preview", async () => {
+  const calls = [];
+  const pane = host.castPaneImpl(baseDeps({
+    castFile: castFileIn(tmpDir()),
+    speakAloud: async (...args) => { calls.push(args); return { ok: true, durationMs: 1200 }; },
+  }));
+  const result = await pane.preview({ voice: " en-GB-SoniaNeural " });
+  assert.deepEqual(result, { ok: true, durationMs: 1200 }, "preview returns speakAloud's own verdict");
+  assert.deepEqual(calls, [[host.PREVIEW_TEXT, "en-GB-SoniaNeural", undefined, "slot0", "service:awdesk-preview"]]);
+  assert.equal(host.PREVIEW_TEXT, "Hi, this is how I sound.");
+
+  await pane.preview({ voice: "onyx", text: "Custom line." });
+  assert.equal(calls[1][0], "Custom line.");
+});
+
+test("castPaneImpl.preview: no voice, or no speakAloud wired, is {ok:false} -- never a throw, never a speak", async () => {
+  let spoke = false;
+  const pane = host.castPaneImpl(baseDeps({ castFile: castFileIn(tmpDir()), speakAloud: async () => { spoke = true; return { ok: true }; } }));
+  assert.equal((await pane.preview({ voice: "" })).ok, false);
+  assert.equal((await pane.preview()).ok, false);
+  assert.equal(spoke, false);
+
+  const unwired = host.castPaneImpl(baseDeps({ castFile: castFileIn(tmpDir()), speakAloud: undefined }));
+  assert.equal((await unwired.preview({ voice: "nova" })).ok, false);
+});

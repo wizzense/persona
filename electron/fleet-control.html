@@ -5,11 +5,12 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' file:; script-src 'unsafe-inline'; img-src data:;" />
 <title>Aither Fleet</title>
 <link rel="stylesheet" href="aither-tokens.css" />
+<link rel="stylesheet" href="aither-ui.css" />
 <style>
-  /* Colours, type and scrollbars come from aither-tokens.css -- GENERATED from Veil's
-     tokens by AitherOS/dev/tools/gen_desk_tokens.py. This pane used to re-declare its
-     own --bg/--panel/--line/--fg palette by hand; five panes did, none matched the
-     family. What stays here is only what this pane MEANS by a colour. */
+  /* Components (buttons, cards, lists, badges, notes) come from aither-ui.css, colours
+     and type from aither-tokens.css (GENERATED from Veil's tokens by
+     AitherOS/dev/tools/gen_desk_tokens.py). What stays here is layout, and what this
+     pane MEANS by a colour: the verdict pill and the tone of each action. */
   :root {
     --up: var(--success);
     --down: var(--destructive);
@@ -17,37 +18,15 @@
     --mixed: var(--agent-purple);
     --unknown: var(--surface-500);
   }
-  * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
-    font: 14px/1.4 var(--font-sans); }
-  body { display: grid; grid-template-rows: auto auto auto auto auto auto 1fr auto; height: 100vh; }
-  .holders { margin: -4px 18px 8px; padding: 8px 12px; background: var(--panel); border: 1px solid var(--line);
-    border-radius: 10px; font-size: 12px; color: var(--surface-300); }
-  .holders .k { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 4px; }
-  .holders .h { display: flex; gap: 8px; align-items: baseline; font-variant-numeric: tabular-nums; }
-  .holders .h .g { min-width: 62px; font-weight: 600; color: var(--fg); }
-  .holders .h .n { min-width: 90px; }
-  .holders .h .hint { color: var(--muted); }
-  .holders .none { color: var(--muted); }
-  .surfaces { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 18px 8px; }
-  .surfaces .k { width: 100%; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
-  .surface { display: inline-flex; align-items: center; gap: 6px; padding: 5px 9px; border-radius: 999px;
-    border: 1px solid var(--line); background: var(--btn); font-size: 12px; font-weight: 500; cursor: pointer; }
-  .surface:hover { background: var(--btn-hi); }
-  .surface .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--unknown); }
-  .surface[data-up="1"] .dot { background: var(--up); }
-  .surface[data-up="0"] .dot { background: var(--down); }
-  .surface .d { color: var(--muted); font-weight: 400; }
-  header { display: flex; align-items: center; gap: 12px; padding: 14px 18px 8px; }
   /* ONE chrome. Inside the console the shell's bar already names this pane, so the
      pane's own title is the double header from the owner's 2026-09-20 screenshots.
      console-preload.cjs sets .embedded per frame; detached into its own window the
      page is not embedded and keeps its title, because there it is the only one. */
   .embedded header h1 { display: none; }
-  header h1 { font-size: 16px; margin: 0; font-weight: 600; letter-spacing: .02em; }
-  header .sub { color: var(--muted); font-size: 12px; }
-  #pill { margin-left: auto; padding: 6px 14px; border-radius: 999px; font-weight: 700;
-    font-size: 13px; letter-spacing: .06em; background: var(--unknown); color: var(--bg-sunk); }
+  #hint { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  #pill { padding: 5px 12px; border-radius: 999px; font-weight: 700; font-size: 12px;
+    letter-spacing: .06em; white-space: nowrap; background: var(--unknown); color: var(--bg-sunk); }
   #pill[data-state="UP"] { background: var(--up); }
   #pill[data-state="DOWN"] { background: var(--down); color: var(--foreground); }
   #pill[data-state="GPU QUIET"] { background: var(--quiet); }
@@ -60,115 +39,125 @@
   #pill[data-state="CANNOT JUDGE"] { background: var(--down); color: var(--foreground); }
   #pill[data-state="STALE"] { background: var(--quiet); }
   @keyframes pulse { 50% { opacity: .5; } }
-  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; padding: 6px 18px 10px; }
-  .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
-  .stat .k { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
   .stat .v { font-size: 20px; font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; }
   .stat .v small { font-size: 12px; color: var(--muted); font-weight: 400; }
   .stat .v.probing { font-size: 14px; font-weight: 500; color: var(--muted); animation: pulse 1.2s ease-in-out infinite; }
-  .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 4px 18px 10px; }
-  button { appearance: none; border: 1px solid var(--line); background: var(--btn); color: var(--fg);
-    border-radius: 10px; padding: 14px 12px; font: inherit; font-weight: 600; cursor: pointer;
-    text-align: left; transition: background .12s, border-color .12s; }
-  button:hover:not(:disabled) { background: var(--btn-hi); }
-  button:disabled { opacity: .45; cursor: not-allowed; }
-  button .t { display: block; font-size: 15px; }
-  button .d { display: block; color: var(--muted); font-weight: 400; font-size: 12px; margin-top: 3px; }
-  button.down { border-color: color-mix(in oklch, var(--bad), var(--background) 70%); } button.down:hover:not(:disabled) { background: color-mix(in oklch, var(--bad), var(--background) 78%); border-color: var(--down); }
-  button.up { border-color: color-mix(in oklch, var(--ok), var(--background) 72%); } button.up:hover:not(:disabled) { background: color-mix(in oklch, var(--ok), var(--background) 80%); border-color: var(--up); }
-  button.quiet { border-color: color-mix(in oklch, var(--warn), var(--background) 72%); } button.quiet:hover:not(:disabled) { background: color-mix(in oklch, var(--warn), var(--background) 80%); border-color: var(--quiet); }
-  button.confirm { background: var(--down) !important; border-color: var(--down) !important; color: var(--foreground); }
-  button.confirm .d { color: color-mix(in oklch, var(--bad), var(--foreground) 60%); }
-  .row { display: flex; gap: 10px; padding: 0 18px 8px; align-items: center; }
-  .row button { padding: 8px 12px; font-weight: 500; }
-  .row .spacer { flex: 1; }
-  .row .hint { color: var(--muted); font-size: 12px; }
-  #log { margin: 0 18px 10px; background: var(--bg-sunk); border: 1px solid var(--line); border-radius: 10px;
-    padding: 10px 12px; overflow: auto; font: 12px/1.5 var(--font-mono); color: var(--surface-300);
-    white-space: pre-wrap; min-height: 80px; }
+  @media (max-width: 520px) { .stats, .actions { grid-template-columns: repeat(2, 1fr); } }
+
+  /* An action is a two-line tile: the verb, then what it will do. The tone is a
+     left rule; the armed (click-again-to-confirm) state is the one loud fill. */
+  .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .tile { flex-direction: column; align-items: flex-start; gap: 3px; white-space: normal;
+    text-align: left; padding: 12px 14px; border-left-width: 3px; }
+  .tile .t { font-size: 14px; font-weight: 650; }
+  .tile .d { color: var(--muted); font-weight: 400; font-size: 12px; }
+  .tile.down { border-left-color: var(--down); }
+  .tile.up { border-left-color: var(--up); }
+  .tile.quiet { border-left-color: var(--quiet); }
+  .tile.confirm { background: var(--down); border-color: var(--down); color: var(--foreground); }
+  .tile.confirm .d { color: var(--foreground); }
+
+  #holders .h .g { min-width: 72px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  #holders .h .n { min-width: 140px; }
+  #surfaces > .surface, .wall > .surface { margin: 0 6px 6px 0; }
+  .wall { margin-bottom: 6px; }
+
+  #log { background: var(--bg-deep); border: 1px solid var(--line); border-radius: 7px;
+    padding: 10px 12px; overflow: auto; font: 12px/1.5 var(--font-mono); color: var(--muted);
+    white-space: pre-wrap; min-height: 80px; max-height: 320px; }
   #log .err { color: var(--bad); } #log .warn { color: var(--warn); } #log .ok { color: var(--ok); } #log .cmd { color: var(--brand); }
-  footer { padding: 8px 18px 12px; color: var(--muted); font-size: 11px; display: flex; gap: 12px; }
-  footer code { color: var(--surface-300); }
-  @media (max-width: 520px) { .stats { grid-template-columns: repeat(2, 1fr); } }
 </style>
 </head>
-<body>
-  <header>
-    <div>
-      <h1>Aither Fleet</h1>
-      <div class="sub">rootful podman quadlets · Debian WSL2 · one implementation behind every button</div>
-    </div>
+<body class="ui">
+  <header class="ui-head">
+    <h1>Aither Fleet</h1>
+    <span class="ui-sub" id="hint">auto-refresh every 30 s</span>
+    <span class="ui-grow"></span>
+    <button id="b-refresh" class="ui-btn ui-small">Refresh status</button>
     <div id="pill" data-state="UNKNOWN">…</div>
   </header>
 
-  <div class="stats">
-    <div class="stat"><div class="k">Containers running</div><div class="v" id="s-running">–</div></div>
-    <div class="stat"><div class="k">Units masked</div><div class="v" id="s-masked">–</div></div>
-    <div class="stat"><div class="k">GPU VRAM</div><div class="v" id="s-vram">–</div></div>
-    <div class="stat"><div class="k">GPU hold</div><div class="v" id="s-hold">–</div></div>
-  </div>
+  <main class="ui-body">
+    <div class="ui-stack">
+      <div class="stats">
+        <div class="ui-card ui-tight stat"><div class="ui-label">Containers running</div><div class="v" id="s-running">–</div></div>
+        <div class="ui-card ui-tight stat"><div class="ui-label">Units masked</div><div class="v" id="s-masked">–</div></div>
+        <div class="ui-card ui-tight stat"><div class="ui-label">GPU VRAM</div><div class="v" id="s-vram">–</div></div>
+        <div class="ui-card ui-tight stat"><div class="ui-label">GPU hold</div><div class="v" id="s-hold">–</div></div>
+      </div>
 
-  <div class="holders" id="holders">
-    <div class="k">Who holds the VRAM (Windows host, not the distro)</div>
-    <div class="none">not probed yet</div>
-  </div>
+      <section class="ui-card">
+        <div class="ui-card-head"><h2>Fleet power</h2></div>
+        <div class="actions">
+          <button id="b-down" class="ui-btn tile down" data-action="down">
+            <span class="t">Fleet DOWN</span>
+            <span class="d">Stop + mask every aither unit and container. Holds against restarts.</span>
+          </button>
+          <button id="b-up" class="ui-btn tile up" data-action="up">
+            <span class="t">Fleet UP</span>
+            <span class="d">Unmask and bring back exactly what was stopped. GPU models one at a time.</span>
+          </button>
+          <button id="b-gaming" class="ui-btn tile quiet" data-action="gaming">
+            <span class="t">GPU quiet (game on)</span>
+            <span class="d">Stop the GPU models + routine runners, keep the rest of the fleet up.</span>
+          </button>
+          <button id="b-resume" class="ui-btn tile up" data-action="resume">
+            <span class="t">GPU resume (game off)</span>
+            <span class="d">Bring the GPU models and runners back through the sequencer.</span>
+          </button>
+        </div>
+      </section>
 
-  <div class="surfaces" id="surfaces">
-    <div class="k">Doors · click to open</div>
-  </div>
+      <section class="ui-card">
+        <div class="ui-card-head"><h2>ARC</h2></div>
+        <div class="actions" id="arc-actions">
+          <button id="b-arc-now" class="ui-btn tile up" data-action="arc-now">
+            <span class="t">ARC run now</span>
+            <span class="d">Solve + learn for 4 h, overriding quiet hours and any GPU hold. Attributed, self-expiring.</span>
+          </button>
+          <button id="b-arc-start" class="ui-btn tile up" data-action="arc-start">
+            <span class="t">ARC start</span>
+            <span class="d">Unmask the solver and world model; quiet hours (23:00–07:00 PT) still apply.</span>
+          </button>
+          <button id="b-arc-status" class="ui-btn tile quiet" data-action="arc-status">
+            <span class="t">ARC status</span>
+            <span class="d">Is it solving and is the world model learning (train_steps climbing)?</span>
+          </button>
+          <button id="b-arc-stop" class="ui-btn tile down" data-action="arc-stop">
+            <span class="t">ARC stop</span>
+            <span class="d">Stop the solver. The world model stays up.</span>
+          </button>
+        </div>
+      </section>
 
-  <div class="actions">
-    <button id="b-down" class="down" data-action="down">
-      <span class="t">Fleet DOWN</span>
-      <span class="d">Stop + mask every aither unit and container. Holds against restarts.</span>
-    </button>
-    <button id="b-up" class="up" data-action="up">
-      <span class="t">Fleet UP</span>
-      <span class="d">Unmask and bring back exactly what was stopped. GPU models one at a time.</span>
-    </button>
-    <button id="b-gaming" class="quiet" data-action="gaming">
-      <span class="t">GPU quiet (game on)</span>
-      <span class="d">Stop the GPU models + routine runners, keep the rest of the fleet up.</span>
-    </button>
-    <button id="b-resume" class="up" data-action="resume">
-      <span class="t">GPU resume (game off)</span>
-      <span class="d">Bring the GPU models and runners back through the sequencer.</span>
-    </button>
-  </div>
+      <section class="ui-card" id="holders">
+        <div class="ui-card-head"><h2>Who holds the VRAM</h2><span class="ui-note">Windows host, not the distro</span></div>
+        <div class="ui-note none">not probed yet</div>
+      </section>
 
-  <div class="actions" id="arc-actions">
-    <button id="b-arc-now" class="up" data-action="arc-now">
-      <span class="t">ARC run now</span>
-      <span class="d">Solve + learn for 4 h, overriding quiet hours and any GPU hold. Attributed, self-expiring.</span>
-    </button>
-    <button id="b-arc-start" class="up" data-action="arc-start">
-      <span class="t">ARC start</span>
-      <span class="d">Unmask the solver and world model; quiet hours (23:00–07:00 PT) still apply.</span>
-    </button>
-    <button id="b-arc-status" class="quiet" data-action="arc-status">
-      <span class="t">ARC status</span>
-      <span class="d">Is it solving and is the world model learning (train_steps climbing)?</span>
-    </button>
-    <button id="b-arc-stop" class="down" data-action="arc-stop">
-      <span class="t">ARC stop</span>
-      <span class="d">Stop the solver. The world model stays up.</span>
-    </button>
-  </div>
+      <section class="ui-card" id="surfaces">
+        <div class="ui-card-head"><h2>Doors</h2><span class="ui-note">click to open</span></div>
+      </section>
 
-  <div class="row">
-    <button id="b-refresh">Refresh status</button>
-    <button id="b-adopt" title="The fleet was stopped by hand (masks exist but nothing is recorded): record the masked set so Fleet UP knows what to start">Adopt hand-stopped state</button>
-    <span class="spacer"></span>
-    <span class="hint" id="hint">auto-refresh every 30 s</span>
-  </div>
+      <section class="ui-card">
+        <div class="ui-card-head">
+          <h2>Activity</h2>
+          <span class="ui-grow"></span>
+          <button id="b-adopt" class="ui-btn ui-small" title="The fleet was stopped by hand (masks exist but nothing is recorded): record the masked set so Fleet UP knows what to start">Adopt hand-stopped state</button>
+        </div>
+        <div id="log"></div>
+      </section>
 
-  <div id="log"></div>
-
-  <footer>
-    <span>CLI: <code>game down</code> · <code>game up</code> · <code>game on</code> · <code>game off</code> · <code>game status</code></span>
-    <span>MCP: <code>fleet_status</code> · <code>fleet_control</code></span>
-    <span>awsh: <code>/fleet</code> · adk: <code>adk desk fleet</code></span>
-  </footer>
+      <p class="ui-note">
+        Rootful podman quadlets · Debian WSL2 · one implementation behind every button.
+        CLI: <kbd>game down</kbd> <kbd>game up</kbd> <kbd>game on</kbd> <kbd>game off</kbd> <kbd>game status</kbd> ·
+        MCP: <kbd>fleet_status</kbd> <kbd>fleet_control</kbd> ·
+        awsh: <kbd>/fleet</kbd> · adk: <kbd>adk desk fleet</kbd>
+      </p>
+    </div>
+  </main>
 
 <script>
 (() => {
@@ -181,9 +170,21 @@
   let armTimer = null;
   let busy = null;
 
+  /** One log line. The same line again (a 30 s refresh that fails the same way)
+   *  bumps a counter on the last one instead of stacking a wall of repeats. */
   function line(text, cls) {
+    const last = log.lastChild;
+    if (last && last.dataset && last.dataset.text === text && last.dataset.cls === (cls || "")) {
+      const n = Number(last.dataset.n || 1) + 1;
+      last.dataset.n = String(n);
+      last.textContent = `${text}  (×${n})`;
+      log.scrollTop = log.scrollHeight;
+      return;
+    }
     const el = document.createElement("div");
     if (cls) el.className = cls;
+    el.dataset.text = text;
+    el.dataset.cls = cls || "";
     el.textContent = text;
     log.appendChild(el);
     while (log.childElementCount > 400) log.removeChild(log.firstChild);
@@ -222,40 +223,77 @@
     const box = $("holders");
     while (box.childElementCount > 1) box.removeChild(box.lastChild);
     if (!Array.isArray(holders)) {
-      box.appendChild(el("div", "none", error ? `not readable: ${error}` : emptyState()));
+      box.appendChild(el("div", "ui-note none", error ? `not readable: ${error}` : emptyState()));
       return;
     }
     if (holders.length === 0) {
-      box.appendChild(el("div", "none", error ? `not readable: ${error}` : "no process holds more than 0.1 GiB"));
+      box.appendChild(el("div", "ui-note none", error ? `not readable: ${error}` : "no process holds more than 0.1 GiB"));
       return;
     }
+    const list = el("div", "ui-list");
     for (const h of holders) {
-      const row = el("div", "h");
-      row.appendChild(el("span", "g", `${h.gib.toFixed(2)} GiB`));
+      const row = el("div", "ui-item h");
+      row.appendChild(el("span", "g ui-mono", `${h.gib.toFixed(2)} GiB`));
       row.appendChild(el("span", "n", `${h.name} (pid ${h.pid})`));
-      row.appendChild(el("span", "hint", h.hint || h.cmd || ""));
+      row.appendChild(el("span", "ui-note hint", h.hint || h.cmd || ""));
       row.title = h.cmd || "";
-      box.appendChild(row);
+      list.appendChild(row);
     }
+    box.appendChild(list);
+  }
+
+  /** The part of a door's failure that is the CAUSE, not the door: strip the url,
+   *  host:port and bare ports so seven "HTTP 503" doors group as one. */
+  function causeOf(detail) {
+    return String(detail || "no answer")
+      .replace(/https?:\/\/\S+/g, "")
+      .replace(/\b\d{1,3}(\.\d{1,3}){3}(:\d+)?\b/g, "")
+      .replace(/:\d{2,5}\b/g, "")
+      .replace(/\s+/g, " ")
+      .trim() || "no answer";
+  }
+
+  function doorChip(s, compact) {
+    const chip = el("button", "ui-btn ui-small surface");
+    chip.dataset.up = s.up ? "1" : "0";
+    chip.appendChild(el("span", `ui-dot ${s.up ? "ui-ok" : "ui-bad"}`));
+    chip.appendChild(el("span", null, s.label));
+    if (!compact) {
+      chip.appendChild(el("span", "ui-note", s.up ? (s.detail && !/^HTTP/.test(s.detail) ? s.detail : `${s.ms} ms`) : `DOWN · ${s.detail}`));
+    }
+    chip.title = `${s.url}\n${s.detail}`;
+    chip.addEventListener("click", () => window.fleet.open(s.url));
+    return chip;
   }
 
   // Every door the owner asked for, probed; click opens it in the browser.
+  // 🚩 Seven doors failing the same way used to paint "DOWN · HTTP 503 …" seven
+  // times -- a wall that hides the one fact in it. Doors that share a cause get ONE
+  // line (the cause and the count) and keep only their names as chips.
   function renderSurfaces(rows) {
     const box = $("surfaces");
     while (box.childElementCount > 1) box.removeChild(box.lastChild);
     if (!Array.isArray(rows) || rows.length === 0) {
-      box.appendChild(el("span", "surface", emptyState()));
+      box.appendChild(el("span", "ui-note surface", emptyState()));
       return;
     }
+    const byCause = new Map();
     for (const s of rows) {
-      const chip = el("button", "surface");
-      chip.dataset.up = s.up ? "1" : "0";
-      chip.appendChild(el("span", "dot"));
-      chip.appendChild(el("span", null, s.label));
-      chip.appendChild(el("span", "d", s.up ? (s.detail && !/^HTTP/.test(s.detail) ? s.detail : `${s.ms} ms`) : `DOWN · ${s.detail}`));
-      chip.title = `${s.url}\n${s.detail}`;
-      chip.addEventListener("click", () => window.fleet.open(s.url));
-      box.appendChild(chip);
+      if (s.up) continue;
+      const cause = causeOf(s.detail);
+      if (!byCause.has(cause)) byCause.set(cause, []);
+      byCause.get(cause).push(s);
+    }
+    const walled = new Set();
+    for (const [cause, group] of byCause) {
+      if (group.length < 2) continue;
+      const wall = el("div", "wall");
+      wall.appendChild(el("div", "ui-note ui-bad", `${group.length} of ${rows.length} doors DOWN, same cause: ${cause}`));
+      for (const s of group) { walled.add(s); wall.appendChild(doorChip(s, true)); }
+      box.appendChild(wall);
+    }
+    for (const s of rows) {
+      if (!walled.has(s)) box.appendChild(doorChip(s, false));
     }
   }
 

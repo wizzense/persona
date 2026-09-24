@@ -25,6 +25,8 @@ contextBridge.exposeInMainWorld("deskBridge", {
     open: () => ipcRenderer.send("desk:deck-open"),
     close: () => ipcRenderer.send("desk:deck-close"),
     answer: (id, choice) => ipcRenderer.invoke("desk:deck-answer", { id, choice }),
+    // Decisions page bulk verbs (decisions-bulk.cjs): answer-with-default / dismiss.
+    bulk: (verb, ids, note) => ipcRenderer.invoke("desk:deck-bulk", { verb, ids, note }),
     // "None of these — do this instead": the card plane's steer verb, so a card
     // whose right answer is not one of its options no longer needs a terminal.
     steer: (id, text) => ipcRenderer.invoke("desk:deck-steer", { id, text }),

@@ -70,8 +70,10 @@ const GROUPS = Object.freeze({
  * ITEMS are one list; only the reading order differs.
  */
 const LAYOUT = Object.freeze({
-  tray: Object.freeze(["go", "desktop", "avatar", "window-size", "talk", "stage", "fleet", "arc", "blog", "app"]),
-  "avatar-menu": Object.freeze(["talk", "body", "stage", "window-size", "avatar", "slot", "desktop", "go"]),
+  // 2026-09-23 redesign: where to go, then what you HEAR (voices, mic), then the
+  // avatar, then the nested places. Voice controls sat seventh, under five submenus.
+  tray: Object.freeze(["go", "talk", "avatar", "desktop", "window-size", "stage", "fleet", "arc", "blog", "app"]),
+  "avatar-menu": Object.freeze(["talk", "body", "avatar", "stage", "window-size", "slot", "desktop", "go"]),
   // The rail reads top to bottom: what is waiting, where to go, who to talk to,
   // the desktop. The bell stays on top -- it is the one bead read without a click.
   beads: Object.freeze(["go", "talk", "desktop"]),
@@ -121,13 +123,13 @@ const COMMANDS = Object.freeze([
     label: (ctx = {}) => {
       const waiting = Number(ctx.decisionsWaiting || 0);
       const total = Number(ctx.decisionsTotal || 0);
-      if (waiting > 0) return `Inbox — ${waiting} decision${waiting === 1 ? "" : "s"} waiting`;
-      if (total > 0) return `Inbox — ${total} card${total === 1 ? "" : "s"}`;
-      return "Inbox";
+      if (waiting > 0) return `Decisions — ${waiting} waiting`;
+      if (total > 0) return `Decisions — ${total} card${total === 1 ? "" : "s"}`;
+      return "Decisions";
     },
   }),
   Object.freeze({
-    id: "console.open", label: "Aither Console…", group: "go", icon: "grid",
+    id: "console.open", label: "Open Aither…", group: "go", icon: "grid",
     surfaces: ["tray", "avatar-menu", "palette", "beads", "jumplist"],
   }),
   // 🚩 AitherOS Online -- the Living Desktop held over the real one. It is what the
@@ -269,6 +271,34 @@ const COMMANDS = Object.freeze([
     id: "voice.mute", group: "talk", accel: "Ctrl+Shift+M", icon: "mic-off",
     surfaces: ["tray", "avatar-menu", "palette"],
     label: (ctx = {}) => (ctx.micMuted ? "Unmute microphone" : "Mute microphone"),
+  }),
+  // Owner, 2026-09-23: "no easy way to mute voices/narration". cast.json's
+  // voice.muted existed, but only as a checkbox three clicks deep in the Cast
+  // pane. This is the same switch from every surface: silences every speaker,
+  // keeps the speech bubbles, cuts off whatever is playing right now.
+  Object.freeze({
+    id: "voice.silence", group: "talk", accel: "Ctrl+Alt+M", icon: "volume-off",
+    surfaces: ["tray", "avatar-menu", "palette", "jumplist"],
+    label: (ctx = {}) => (ctx.voicesMuted ? "Unmute voices (narration is off)" : "Mute all voices"),
+  }),
+  // Owner, 2026-09-23: cards "popping up on my main screen while im playing games".
+  // A full-screen game already silences the desk on its own (quiet-mode.cjs); this is
+  // the manual switch for everything else, and the label says why it is quiet now.
+  Object.freeze({
+    id: "attention.dnd", group: "talk", icon: "moon",
+    surfaces: ["tray", "avatar-menu", "palette", "jumplist"],
+    label: (ctx = {}) => {
+      if (ctx.doNotDisturb) return "Turn off Do not disturb";
+      return ctx.quietReason ? `Do not disturb (quiet now: ${ctx.quietReason})` : "Do not disturb";
+    },
+  }),
+  // The other half of the same complaint: assigning a voice meant finding the
+  // body's row in the Cast pane and typing an id. Right-click the body, pick one.
+  Object.freeze({
+    id: "voice.pick", label: "Voice", group: "talk", scope: "slot", dynamic: true,
+    surfaces: ["avatar-menu"],
+    whySingle: "Sets the voice of the body that was right-clicked; the Cast pane "
+      + "(cast.open) is the everywhere twin with every speaker listed.",
   }),
   // The settings page the owner asked for by name ("there still isnt just a
   // shared settings page"). Opens as a console pane (kind:"file", no vite
@@ -509,8 +539,14 @@ function groupOrder(surface, commands) {
   return [...wanted, ...present.filter((group) => !wanted.includes(group))];
 }
 
+/** Electron reads a lone `&` as a mnemonic marker and DROPS it: "Cast & voices…"
+ *  rendered as "Cast  voices…". `&&` is a literal ampersand in a menu label. */
+function menuText(label) {
+  return String(label).replace(/&/g, "&&");
+}
+
 function rowFor(command, ctx, run, nested) {
-  const row = { label: labelOf(command, ctx, { nested }), click: () => run(command.id) };
+  const row = { label: menuText(labelOf(command, ctx, { nested })), click: () => run(command.id) };
   if (command.type) {
     row.type = command.type;
     row.checked = typeof command.checked === "function" ? Boolean(command.checked(ctx)) : false;
@@ -543,11 +579,11 @@ function buildMenu(surface, run, { ctx = {}, submenus = {} } = {}) {
     if (nest) {
       // A menu nests a group; the palette lists the same commands one per row.
       // Both read this list, so neither can carry an entry the other lacks.
-      template.push({ label: nest, submenu: members.map((child) => rowFor(child, ctx, run, true)) });
+      template.push({ label: menuText(nest), submenu: members.map((child) => rowFor(child, ctx, run, true)) });
       continue;
     }
     for (const command of members) {
-      if (command.dynamic) template.push({ label: labelOf(command, ctx), submenu: submenus[command.id] });
+      if (command.dynamic) template.push({ label: menuText(labelOf(command, ctx)), submenu: submenus[command.id] });
       else template.push(rowFor(command, ctx, run, false));
     }
   }

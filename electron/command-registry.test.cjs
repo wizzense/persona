@@ -103,7 +103,7 @@ test("a dynamic command with no submenu is DROPPED, never rendered dead", () => 
   const labels = (template) => template.map((row) => row.label).filter(Boolean);
   const bare = labels(buildMenu("tray", () => {}, { submenus: {} }));
   assert.ok(!bare.includes("Characters"), "a roster picker with no roster behind it is a row that does nothing");
-  assert.ok(bare.includes("Aither Console…"), "static rows must still render");
+  assert.ok(bare.includes("Open Aither…"), "static rows must still render");
   const fed = labels(buildMenu("tray", () => {}, { submenus: { "characters.pick": [{ label: "x" }] } }));
   assert.ok(fed.includes("Characters"), "a supplied submenu must render");
 });
@@ -229,7 +229,7 @@ test("an exported overlay opener has a caller", () => {
 test("shortcuts are registered FROM the registry, and a dead key is not advertised", () => {
   const keys = shortcuts();
   assert.deepEqual(keys.map((k) => k.accel).sort(),
-    ["Ctrl+Shift+,", "Ctrl+Shift+-", "Ctrl+Shift+=", "Ctrl+Shift+A", "Ctrl+Shift+D", "Ctrl+Shift+M", "Ctrl+Shift+Space"]);
+    ["Ctrl+Alt+M", "Ctrl+Shift+,", "Ctrl+Shift+-", "Ctrl+Shift+=", "Ctrl+Shift+A", "Ctrl+Shift+D", "Ctrl+Shift+M", "Ctrl+Shift+Space"]);
   assert.ok(keys.every((k) => k.electron.startsWith("CommandOrControl+")));
   const main = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
   // Plan: configurable hotkeys -- main now passes cast.json overrides through,
@@ -261,9 +261,9 @@ test("the beads are registry rows, and the deck-action door accepts an id", () =
 
 test("counting labels say what is actually waiting", () => {
   const label = (ctx) => byId("inbox.open").label(ctx);
-  assert.equal(label({ decisionsWaiting: 1, decisionsTotal: 3 }), "Inbox — 1 decision waiting");
-  assert.equal(label({ decisionsWaiting: 0, decisionsTotal: 3 }), "Inbox — 3 cards");
-  assert.equal(label({}), "Inbox");
+  assert.equal(label({ decisionsWaiting: 1, decisionsTotal: 3 }), "Decisions — 1 waiting");
+  assert.equal(label({ decisionsWaiting: 0, decisionsTotal: 3 }), "Decisions — 3 cards");
+  assert.equal(label({}), "Decisions");
 });
 
 test("every command either has a handler or a dynamic submenu", () => {
@@ -273,15 +273,21 @@ test("every command either has a handler or a dynamic submenu", () => {
   const at = main.indexOf("function runCommand(");
   assert.ok(at > 0, "runCommand is gone -- the registry has no HOW");
   const body = main.slice(at, main.indexOf("\nfunction ", at + 10));
-  const trayAt = main.indexOf("buildMenu(\"tray\"");
-  const traySubmenus = main.slice(trayAt, trayAt + 600);
+  // A dynamic submenu must be supplied at the buildMenu call of EVERY menu it
+  // sits on -- a body-only picker (voice.pick) is supplied by the avatar menu.
+  const submenusOf = (surface) => {
+    const at = main.search(new RegExp(`buildMenu\\(\\s*"${surface}"`));
+    return at < 0 ? "" : main.slice(at, at + 600);
+  };
   for (const command of COMMANDS) {
     if (command.dynamic) {
-      assert.match(
-        traySubmenus,
-        new RegExp(`"${command.id.replace(".", "\\.")}":`),
-        `${command.id} is dynamic but nothing supplies its submenu`,
-      );
+      for (const surface of command.surfaces.filter((s) => s === "tray" || s === "avatar-menu")) {
+        assert.match(
+          submenusOf(surface),
+          new RegExp(`"${command.id.replace(".", "\\.")}":`),
+          `${command.id} is dynamic but nothing supplies its submenu on ${surface}`,
+        );
+      }
       continue;
     }
     // A command is answerable three ways: a case in the switch, a dynamic submenu,

@@ -87,7 +87,9 @@ chrome IS the edge.
 | 0 | **stop-gaps (landed 2026-09-18)** | reattach repaints; size is on the tray; `console-smoke` drives the BUTTONS and reads the DOM; `window-size-reach.test.cjs` |
 | 1 | **command registry + palette (landed 2026-09-18)** — `command-registry.cjs`; tray and size menu rendered from it; Ctrl+K palette in the console | `conformance()` refuses a single-surface command with no written reason; the smoke opens the palette, filters it and runs a command |
 | 2 | **surface state machine (landed 2026-09-18)** — `electron/surface-state.cjs` owns where every route is; main pushes the map, the shell renders it | `surface-state.test.cjs` (8 arms); the smoke closes a detached window from OUTSIDE and the rail un-detaches itself — that arm FAILS on the pre-slice-2 files |
+| 3a | **places + Home + Decisions (landed 2026-09-23)** — rail is five places (Home, Decisions, Agents, Avatars, Fleet); Home page; Inbox rebuilt as a triage list | `console-window.test.cjs` pins PLACES; the smoke reads the RENDERED rail (each place once) |
 | 3 | Deck decomposition into routes; standalone windows become `detached` presentations | no `new BrowserWindow` outside the presentation layer; `main.cjs` under ~1,200 lines |
+| 4a | **one component layer (landed 2026-09-23)** — `electron/aither-ui.css`; every file pane rebuilt on it; Voices page replaces the Cast form | no pane declares its own button/field CSS |
 | 4 | visual pass: one layout grammar, one type scale, dark-first tokens, stage chrome | every surface uses the shared tokens; no per-window CSS colours |
 | 5 | gates | palette reachability, keyboard-only pass, and the smoke run wired into `npm run check` |
 
@@ -99,3 +101,22 @@ chrome IS the edge.
   is on screen — the bridge-level assertion is what let the reattach bug ship.
 - **Nothing is reimplemented twice.** A detached window shows the same page the pane does;
   that is why a pane cannot drift from its twin.
+
+## Where it stood on 2026-09-23 (the owner asked why this had not happened)
+
+Slices 0–2 landed on 09-18 and then nothing that was visible did. Every session
+after that fixed the complaint of the day and ADDED to the structure the plan
+meant to replace:
+
+| measure | 09-18 | 09-23 |
+|---|---|---|
+| `electron/main.cjs` | 2,461 | 3,847 |
+| `new BrowserWindow(...)` | 10 | 13 |
+| preload bridges | 6 | 9 |
+| `ipcMain` channels | 43 | 68 |
+| `Deck.tsx` | 1,431 | 1,525 |
+
+The lesson this plan now holds itself to: **a slice the owner cannot see is not
+the redesign.** Slices 3a/4a went first because they are what is on screen; the
+window consolidation (slice 3 proper: one presentation layer, `main.cjs` under
+~1,200 lines) is still open and is the next slice, not a someday.
