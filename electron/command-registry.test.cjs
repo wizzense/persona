@@ -231,12 +231,14 @@ test("shortcuts are registered FROM the registry, and a dead key is not advertis
   assert.deepEqual(keys.map((k) => k.accel).sort(),
     ["Ctrl+Alt+M", "Ctrl+Shift+,", "Ctrl+Shift+-", "Ctrl+Shift+=", "Ctrl+Shift+A", "Ctrl+Shift+D", "Ctrl+Shift+M", "Ctrl+Shift+Space"]);
   assert.ok(keys.every((k) => k.electron.startsWith("CommandOrControl+")));
+  // The shortcuts moved out of main.cjs into hotkeys-settings.cjs (slice 3 of
+  // docs/UX-REIMPLEMENTATION.md); main wires that module, and the module asks
+  // the REGISTRY, never hand-writes its own key list.
   const main = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
-  // Plan: configurable hotkeys -- main now passes cast.json overrides through,
-  // so the call is no longer bare (); the guarantee this test protects (main
-  // asks the REGISTRY, never hand-writes its own key list) still holds.
-  assert.match(main, /commandRegistry\.shortcuts\(/, "main keeps its own shortcut list again");
-  assert.match(main, /deadAccels\.add\(accel\)/, "a refused shortcut is not recorded");
+  assert.match(main, /require\("\.\/hotkeys-settings\.cjs"\)/, "main no longer wires the shortcut module");
+  const hotkeys = fs.readFileSync(path.join(__dirname, "hotkeys-settings.cjs"), "utf8");
+  assert.match(hotkeys, /commandRegistry\.shortcuts\(/, "the desk keeps its own shortcut list again");
+  assert.match(hotkeys, /deadAccels\.add\(accel\)/, "a refused shortcut is not recorded");
   const live = buildMenu("tray", () => {}, { ctx: {} }).find((r) => r.label && r.label.startsWith("AitherOS Online"));
   assert.match(live.submenu[0].label, /Ctrl\+Shift\+D/);
   const dead = buildMenu("tray", () => {}, { ctx: { deadAccels: ["Ctrl+Shift+D"] } })
