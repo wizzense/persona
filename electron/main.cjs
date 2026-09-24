@@ -318,16 +318,6 @@ let isQuitting = false;
 let latestEvent = null;
 let latestVoiceState = null;
 let tray = null;
-// Decision-card plane (see decision-cards.cjs): the open queue drives the tray
-// label/tooltip and the deck badge. Native notifications were REMOVED
-// 2026-08-31 (owner decision) — the tray badge, deck and Discord fanout carry
-// the push; DTOAST001 gates the notify.py twins against Windows toasts.
-let openDecisions = [];
-// Cards a desk surface answered/dismissed that the 15 s watcher still lists:
-// every surface reads visibleDecisions(), so a push between the write and the
-// next poll does not bring them back (review #1). TTL-bound in decision-cards.
-const pendingRemovals = decisionCards.createPendingRemovals();
-const visibleDecisions = () => pendingRemovals.filter(openDecisions);
 let relayFeed = [];
 let relayFeedTimer = null;
 // The awrise wake snapshot the deck renders. `source` is "none" until the first
@@ -347,7 +337,6 @@ let roomPublisher = null;
  *  app.whenReady; OFF unless cast.json's own `sync` section turns it on. */
 let settingsSync = null;
 let relayPoller = null;
-let decisionWatchStop = null;
 let hyprlandConfigured = false;
 let hyprlandConfiguring = false;
 let hyprlandConfigurationTimer = null;
@@ -759,7 +748,7 @@ function handleProtocolUrl(rawUrl) {
     for (const command of commands) {
       if (command.type === "hide") void hideOverlay();
       else if (command.type === "event") handleBridgeEvent(command.event);
-      else if (command.type === "console") heldWhileQuiet += 1;
+      else if (command.type === "console") holdWhileQuiet();
     }
     return true;
   }
@@ -875,35 +864,6 @@ function resetAvatarLayout() {
     .finally(() => avatarWindow.reloadIgnoringCache());
 }
 
-/** Every place Windows reserves for a count, from ONE number: the tray icon
- *  (a drawn disc — the notification area), the console's taskbar button
- *  (overlay icon) and its Inbox tab, and the tooltip. Native toasts stay
- *  removed (owner decision 2026-08-31); a badge is a fact, a toast is noise. */
-let trayBaseIcon = null;
-function badgedImage(base, count) {
-  const { width, height } = base.getSize();
-  const bmp = Buffer.from(base.toBitmap());
-  drawBadge(bmp, width, height, count, { diameter: Math.round(Math.min(width, height) * 0.6) });
-  return nativeImage.createFromBitmap(bmp, { width, height });
-}
-function refreshNotificationBadges(cards = openDecisions) {
-  const waiting = decisionCards.actionableCount(cards);
-  const tooltip = badgeTooltip(waiting, cards.length);
-  if (tray) {
-    tray.setToolTip(tooltip);
-    if (trayBaseIcon) tray.setImage(badgedImage(trayBaseIcon, waiting));
-  }
-  setInboxBadge({
-    count: waiting,
-    image: waiting > 0
-      ? nativeImage.createFromBitmap(badgeBitmap(waiting, 16), { width: 16, height: 16 })
-      : null,
-    tooltip,
-  });
-  // The dock (macOS) and Unity launcher draw their own numeral; on Windows the
-  // overlay above IS the taskbar badge, and setBadgeCount would fight it.
-  if (process.platform !== "win32") app.setBadgeCount?.(waiting);
-}
 
 // The roster as the desk shows it: Characters/Agents menus, switching, the adult
 // gate's on-screen enforcement, the rater's capture and the thumbnail IPC.
@@ -1070,80 +1030,48 @@ const {
   debugLog,
 });
 
-/**
- * Ask a decision card aloud and apply the spoken reply: a number or an
- * option's words answers it, anything else steers the raising session. A card
- * answered by click while the question was out is left alone.
- */
-async function answerCardByVoice(card) {
-  const { cardPrompt, matchReply } = require("./voice-card.cjs");
-  let res;
-  try {
-    res = await voiceAsk.ask(cardPrompt(card), { timeoutMs: 90000 });
-  } catch (error) {
-    debugLog("voice card ask failed", error && error.message);
-    return;
-  }
-  if (!res || !res.ok) return; // unanswered: the popup and the inbox still have it
-  if (!openDecisions.some((c) => c && c.id === card.id)) {
-    void speakAloud("That one was already answered.", undefined, undefined, "slot0", "service:awdesk-voice");
-    return;
-  }
-  const reply = matchReply(card, res.answer);
-  if (reply.kind === "answer") {
-    const ok = decisionCards.answerCard(card.id, reply.key, "answered by voice");
-    void speakAloud(ok ? `Answered: ${reply.label}.` : "I could not record that answer.", undefined, undefined, "slot0", "service:awdesk-voice");
-  } else if (reply.kind === "steer") {
-    const ok = decisionCards.steerCard(card.id, reply.text);
-    void speakAloud(ok ? "Sent that to the session." : "I could not send that.", undefined, undefined, "slot0", "service:awdesk-voice");
-  }
-}
-
-// "Mute all voices" + the right-click Voice picker live in voice-controls.cjs.
-// Quiet mode (owner, 2026-09-23: cards "popping up on my main screen while im playing
-// games"): every path that interrupts -- a card popup, the console jumping forward,
-// speech -- asks quietMode first. Cards that arrive while quiet are HELD and summed up
-// once when the game ends; nothing is dropped.
-let heldWhileQuiet = 0;
-function inputPrefs() {
-  try {
-    const { load, resolveInput } = require("./cast-config.cjs");
-    return resolveInput(load().snapshot);
-  } catch {
-    return {};
-  }
-}
-const quietMode = require("./quiet-mode.cjs").createQuietMode({
-  readPrefs: () => inputPrefs(),
-  ownPids: () => {
-    try { return app.getAppMetrics().map((m) => m.pid); } catch { return [process.pid]; }
-  },
-  onChange: (now, was) => {
-    debugLog("quiet", now.quiet ? `ON (${now.reason})` : "off", was.quiet ? `(was: ${was.reason})` : "");
-    if (tray) refreshTrayMenu();
-    if (!now.quiet && was.quiet && heldWhileQuiet > 0) {
-      const n = heldWhileQuiet;
-      heldWhileQuiet = 0;
-      // ONE line, never the popups it held: the owner just came back, not asked.
-      void speakAloud(n === 1 ? "One decision came in while you were busy." : `${n} decisions came in while you were busy.`,
-        undefined, undefined, "slot0", "service:awdesk-decisions");
-    }
-  },
-  log: (...args) => debugLog(...args),
+// The decision-card plane (decisions-plane.cjs): the open queue and its ONE count,
+// the badges, quiet mode + Do Not Disturb, the spoken prompt for a new card, the
+// window router and the deck's answer/steer/bulk IPC. Built here, after speech and
+// voiceAsk exist; the tray and the avatar window are replaced, so both are getters.
+const {
+  quietMode,
+  inputPrefs,
+  toggleDoNotDisturb,
+  holdWhileQuiet,
+  visibleDecisions,
+  pendingRemovals,
+  inboxCounts,
+  refreshNotificationBadges,
+  setTrayBaseIcon,
+  wireWindowRouter,
+  registerDeckIpc,
+  startDecisionWatch,
+  stopDecisionWatch,
+} = require("./decisions-plane.cjs").createDecisionsPlane({
+  decisionCards,
+  app,
+  nativeImage,
+  ipcMain,
+  getTray: () => tray,
+  getAvatarWindow: () => avatarWindow,
+  setInboxBadge,
+  badgeBitmap,
+  badgeTooltip,
+  drawBadge,
+  speakAloud: (...args) => speakAloud(...args),
+  voiceAsk,
+  micMuted: () => micMuted(),
+  openInbox: (...args) => openInbox(...args),
+  postToRelay: (...args) => postToRelay(...args),
+  RELAY_CHANNEL,
+  refreshRelayFeed: () => refreshRelayFeed(),
+  refreshTrayMenu: () => refreshTrayMenu(),
+  sendDeckState: () => sendDeckState(),
+  debugLog: (...args) => debugLog(...args),
 });
 
-function toggleDoNotDisturb() {
-  try {
-    const { write } = require("./cast-config.cjs");
-    const next = !inputPrefs().doNotDisturb;
-    write((draft) => { draft.input = { ...(draft.input || {}), doNotDisturb: next }; return draft; });
-    quietMode.state();
-    refreshTrayMenu();
-  } catch (error) {
-    debugLog("toggleDoNotDisturb failed", error && error.message);
-  }
-}
-
+// "Mute all voices" + the right-click Voice picker live in voice-controls.cjs.
 const { voicesMuted, toggleVoiceSilence, buildVoiceMenu } = require("./voice-controls.cjs").createVoiceControls({
   BrowserWindow,
   speakAloud: (...args) => speakAloud(...args),
@@ -1187,7 +1115,7 @@ const integrationDoors = require("./integration-doors.cjs").createIntegrationDoo
   getVoiceState: () => latestVoiceState,
   getListenerStatus: () => getListenerStatus(),
   getWakesFeed: () => wakesFeed,
-  holdWhileQuiet: () => { heldWhileQuiet += 1; },
+  holdWhileQuiet: () => holdWhileQuiet(),
   showOverlay: (...args) => showOverlay(...args),
   hideOverlay: (...args) => hideOverlay(...args),
   handleBridgeEvent: (...args) => handleBridgeEvent(...args),
@@ -1536,25 +1464,8 @@ function runCommand(id, arg, { surface = "menu", slotId = null } = {}) {
 
 /** Everything the deck panel renders, in one object — the panel is a VIEW over
  *  main's state, so the tray and the deck can never disagree about what is
- *  waiting or which avatars exist (the one-source-of-truth class). */
-/**
- * ONE answer to "how many are waiting".
- *
- * Measured on the owner's screen 2026-09-20: the tray said 20, the console rail
- * said 20, the Inbox pane's pill said "22 waiting" and the bell said 22 -- four
- * readings of one inbox, two values. `waiting` is what needs a decision
- * (decision-cards triage); `total` also counts the FYI cards. The tray and rail
- * used `waiting`, the pane and the bell used `total` under the word "waiting".
- * Every surface reads THIS now, so "waiting" means one thing.
- */
-function inboxCounts() {
-  const visible = visibleDecisions();
-  return {
-    waiting: decisionCards.actionableCount(visible),
-    total: visible.length,
-  };
-}
-
+ *  waiting or which avatars exist (the one-source-of-truth class). The counts
+ *  come from inboxCounts() (decisions-plane.cjs), the ONE answer every surface reads. */
 function deckState() {
   const counts = inboxCounts();
   return {
@@ -1656,15 +1567,6 @@ async function refreshRoomFeed() {
   if (changed) sendDeckState();
 }
 
-/** Push the open-count badge to the avatar window's floating beads. */
-function sendDecisionBadge() {
-  if (!avatarWindow || avatarWindow.isDestroyed()) return;
-  avatarWindow.webContents.send("desk:event", {
-    type: "decisions-changed",
-    openCount: inboxCounts().waiting,
-    totalCount: inboxCounts().total,
-  });
-}
 
 /** The Desk panel — a frameless always-on-top window that opens beside the avatar
  *  on right-click. Same bundle as the avatar scene (`?deck=1`), same preload, so
@@ -1940,23 +1842,13 @@ function openConsole() {
   });
 }
 
-// The LAST independent popup source folds in (owner, 2026-09-08: "I WANT TO
-// CONSOLIDATE AND DEDUPE"). A decision card had three unrelated homes -- awask's
-// own Tk window, the deck panel, and now the console's Cards pane -- and none of
-// them knew the others existed, so answering a card in one left it sitting open
-// in another. The ladder is now explicit and every rung is a surface that already
-// exists: the deck window if the Cards pane is DETACHED into it, otherwise the
-// console, and awask's popup only when neither is there to take it.
-decisionCards.setWindowRouter((_kind, id) => {
-  // A card asking to be SHOWN while a game is full-screen waits in the badge.
-  if (quietMode.isQuiet()) { heldWhileQuiet += 1; return true; }
-  return openInbox(id);
-});
+// A card asking to be SHOWN goes to the deck/console ladder (decisions-plane.cjs).
+wireWindowRouter();
 
 function createTray() {
   const iconPath = path.join(__dirname, "..", "build", "icon.png");
   const icon = nativeImage.createFromPath(iconPath).resize({ width: 20, height: 20 });
-  trayBaseIcon = icon;
+  setTrayBaseIcon(icon);
   tray = new Tray(icon);
   refreshTrayMenu();
   refreshNotificationBadges();
@@ -2120,55 +2012,8 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
     ipcMain.on("desk:deck-close", () => {
       if (deckWindow && !deckWindow.isDestroyed()) deckWindow.close();
     });
-    // The Decisions page's bulk bar: 298 cards cannot be triaged one click at a time.
-    // ONE relay line per batch, not one per card (decisions-bulk.cjs builds it).
-    // Each write is awaited to awask's exit (review #9) and hidden as pending
-    // until the watcher confirms it; a refused one comes straight back (#1).
-    const confirmedWrite = (id, write) => {
-      pendingRemovals.add(id);
-      return write().then((verdict) => {
-        if (!verdict.ok) pendingRemovals.delete(id);
-        return verdict;
-      });
-    };
-    ipcMain.handle("desk:deck-bulk", async (_event, payload) => {
-      const result = await require("./decisions-bulk.cjs").handleBulk(payload, {
-        listOpen: () => visibleDecisions(),
-        answerCard: (id, key, note) => confirmedWrite(id, () => decisionCards.answerCardConfirmed(id, key, note)),
-        cancelCard: (id, note) => confirmedWrite(id, () => decisionCards.cancelCardConfirmed(id, note)),
-      });
-      sendDeckState();
-      if (result && result.summary) void postToRelay(RELAY_CHANNEL, result.summary).then(() => refreshRelayFeed());
-      return result;
-    });
-    ipcMain.handle("desk:deck-answer", async (_event, payload) => {
-      const { id, choice } = payload || {};
-      const ok = (await confirmedWrite(id, () => decisionCards.answerCardConfirmed(id, choice))).ok;
-      if (ok) {
-        sendDeckState();
-        // The loop closes only if the SESSIONS see the answer: post it to the
-        // coordination channel the fleet already reads. Best-effort — a quiet
-        // relay must never make the answer look undone.
-        void postToRelay(RELAY_CHANNEL, `answered ${id}: ${choice} (via desk)`).then(() => {
-          void refreshRelayFeed();
-        });
-      }
-      return ok;
-    });
-    // STEER a card: "none of these options — do this instead". The card plane's
-    // write verb the deck never had (integration-map gap 3): without it, a card
-    // whose right answer was not one of its options had to be retyped in a
-    // terminal. Mirrored to the coordination channel like an answer, so the
-    // sessions see the order and not just its effect.
-    ipcMain.handle("desk:deck-steer", (_event, payload) => {
-      const { id, text } = payload || {};
-      const ok = decisionCards.steerCard(id, text);
-      if (ok) {
-        void postToRelay(RELAY_CHANNEL, `steered ${id}: ${String(text).slice(0, 300)} (via desk)`)
-          .then(() => void refreshRelayFeed());
-      }
-      return ok;
-    });
+    // desk:deck-bulk / desk:deck-answer / desk:deck-steer (decisions-plane.cjs).
+    registerDeckIpc();
     // Marketplace browse + character thumbnail / full-body / turntable writes.
     registerRosterIpc();
     // The per-avatar direct chat READ side: every reply under one message
@@ -2659,87 +2504,9 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
     roomFeedTimer.unref?.();
     commandAgent.on("complete", () => void refreshRoomFeed());
 
-        // Bridge the decision plane into the voice + proactive surface the desk
-    // already has. A passive badge is why cards piled up unseen (owner,
-    // 2026-09-21: "it doesnt prompt me, ask permission, give me anything to
-    // click or respond to"). speakAloud + openInbox exist; wire them here.
-    const announceDecisions = (list, isBacklog) => {
-      if (quietMode.isQuiet()) {
-        // Held, not dropped: the badge still counts them and the end of the game
-        // gets ONE spoken line (quietMode onChange). No popup, no voice, no focus.
-        heldWhileQuiet += list.length;
-        return;
-      }
-      try {
-        const lead = (list[isBacklog ? 0 : list.length - 1]) || {};
-        const title = String(lead.title || "a decision").slice(0, 120);
-        const n = list.length;
-        const phrase = isBacklog
-          ? (n === 1
-              ? `You have one decision waiting: ${title}.`
-              : `You have ${n} decisions waiting. The oldest is: ${title}.`)
-          : (n === 1
-              ? `A decision needs you: ${title}.`
-              : `${n} decisions need you. The latest is: ${title}.`);
-        // A NEW card is a spoken question the owner can answer out loud
-        // (voice-card.cjs); a backlog, a muted mic or an ask already waiting
-        // keeps the plain announcement. The popups below still open either way.
-        if (!isBacklog && lead.id && !micMuted() && !voiceAsk.waiting) {
-          void answerCardByVoice(lead);
-        } else {
-          try { void speakAloud(phrase, "nova", undefined, "slot0", "service:awdesk-decisions"); } catch { /* best-effort */ }
-        }
-        try {
-          if (isBacklog) {
-            openInbox();                          // backlog: ONE console, no 30-popup storm
-          } else {
-            const _cp = require("node:child_process"); // spawn the REAL topmost popup,
-            for (const c of list.slice(0, 3)) {                // bypassing the deck router
-              if (!c || !c.id) continue;
-              try {
-                _cp.spawn(require("./command-agent.cjs").resolveBin("python", "AWDESK_PYTHON_BIN"), ["-m", "awask.popup", String(c.id)], {
-                  detached: true, stdio: "ignore",
-                  // No forced AITHER_DECISIONS_POPUP=1: the owner's own off switches
-                  // (.popup-off, the env var) and awask's quiet gate must apply here too.
-                  env: { ...process.env },
-                }).unref();
-              } catch { /* best-effort */ }
-            }
-          }
-        } catch { /* best-effort */ }
-      } catch { /* a prompt must never crash the poll */ }
-    };
-    let decisionsAnnounced = null; // null until the first poll seeds the backlog
-    quietMode.start();
-    await quietMode.ready();
-    decisionWatchStop = decisionCards.watch({
-      onChange: (cards) => {
-        pendingRemovals.reconcile(cards);
-        openDecisions = cards;
-        refreshTrayMenu();
-        refreshNotificationBadges(visibleDecisions());
-        sendDeckState();
-        sendDecisionBadge();
-
-        // Only cards actually WAITING on the owner (the badge predicate) are
-        // spoken -- never info digests (the noise class of the removed toasts).
-        let actionable;
-        try {
-          actionable = cards.filter((c) => decisionCards.triageCard(c) === "decision");
-        } catch {
-          return; // triage threw: keep the badge, never crash the poll
-        }
-        const ids = new Set(actionable.map((c) => c && c.id).filter(Boolean));
-        if (decisionsAnnounced === null) {
-          decisionsAnnounced = ids;                 // first poll: surface backlog ONCE
-          if (actionable.length > 0) announceDecisions(actionable, true);
-          return;
-        }
-        const fresh = actionable.filter((c) => c && !decisionsAnnounced.has(c.id));
-        decisionsAnnounced = ids;
-        if (fresh.length > 0) announceDecisions(fresh, false);
-      },
-    });
+    // Quiet mode, then the card watcher: badges, deck, and the spoken prompt for
+    // a card that needs the owner (decisions-plane.cjs).
+    await startDecisionWatch();
 
     // 🚩 register() RETURNS whether it got the accelerator, and the answer was
     // thrown away. Another app holding Ctrl+Shift+= takes the only keyboard path
@@ -2782,7 +2549,7 @@ app.on("before-quit", () => {
   clearTimeout(hyprlandConfigurationTimer);
   if (relayFeedTimer) clearInterval(relayFeedTimer);
   wakesWatchStop?.();
-  decisionWatchStop?.();
+  stopDecisionWatch();
   settingsSync?.stop();
   stopAudioListener();
   globalShortcut.unregisterAll();

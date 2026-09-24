@@ -83,6 +83,8 @@ test("every door that can put something on screen or in the ears asks quietMode 
   const doors = read("integration-doors.cjs");
   // speakAloud moved to speech.cjs (slice 3), quietMode arriving through a getter.
   const speech = read("speech.cjs");
+  // The card announcer and the window router moved to decisions-plane.cjs (slice 3).
+  const decisions = read("decisions-plane.cjs");
   const bodyOf = (source, marker, span = 1400) => {
     const at = source.indexOf(marker);
     assert.ok(at >= 0, `door not found: ${marker}`);
@@ -94,11 +96,14 @@ test("every door that can put something on screen or in the ears asks quietMode 
     [main, "function handleProtocolUrl("],
     [doors, "consoleHandler: (pane) =>"],
     [doors, "desktopHandler: (mode) =>"],
-    [main, "const announceDecisions = (list, isBacklog) =>"],
-    [main, "decisionCards.setWindowRouter("],
+    [decisions, "const announceDecisions = (list, isBacklog) =>"],
+    [decisions, "decisionCards.setWindowRouter("],
     [speech, "async function speakAloud("],
   ]) {
     assert.match(bodyOf(source, marker), /quietMode\.isQuiet\(\)/, `${marker} does not ask quietMode`);
   }
-  assert.doesNotMatch(main, /AITHER_DECISIONS_POPUP:\s*"1"/, "the desk must not force popups past the owner's off switch");
+  for (const source of [main, decisions]) {
+    assert.doesNotMatch(source, /AITHER_DECISIONS_POPUP:\s*"1"/, "the desk must not force popups past the owner's off switch");
+  }
+  assert.match(main, /require\("\.\/decisions-plane\.cjs"\)\.createDecisionsPlane\(/, "main no longer wires the card plane");
 });
