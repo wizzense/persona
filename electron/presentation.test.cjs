@@ -16,7 +16,6 @@ const { createPresentation } = require("./presentation.cjs");
  */
 const STILL_OUTSIDE = {
   "cast-window.cjs": 1, // P2
-  "command-window.cjs": 1, // P2
   "fleet-window.cjs": 1, // P2
   "sessions-window.cjs": 1, // P2
   "settings-window.cjs": 1, // P2
@@ -47,7 +46,78 @@ test("window constructions outside presentation.cjs are exactly the ones left fo
     "a window constructor appeared outside presentation.cjs, or one moved and its STILL_OUTSIDE entry was not deleted",
   );
   const total = Object.values(outside).reduce((a, b) => a + b, 0);
-  assert.equal(total, 11, "the ratchet only goes down: 13 before step 12, 11 after it");
+  assert.equal(total, 10, "the ratchet only goes down: 13 before step 12, 11 after it, 10 once command moved");
+});
+
+test("command-window.cjs never builds its own window again (P2: route 'command')", () => {
+  const source = fs.readFileSync(path.join(__dirname, "command-window.cjs"), "utf8");
+  assert.doesNotMatch(source, /\bBrowserWindow\b/, "command-window.cjs names BrowserWindow again");
+  assert.match(source, /openRouteWindow\(ROUTE, \{ electron \}\)/, "createCommandWindow no longer opens through presentation");
+});
+
+test("the command route keeps the Command window's exact options, single instance, and no navigation", () => {
+  const { ROUTE_WINDOWS, openRouteWindow, closeRouteWindow, routeWindow } = require("./presentation.cjs");
+  const built = [];
+  class FakeWindow {
+    constructor(options) {
+      this.options = options;
+      this.destroyed = false;
+      this.handlers = {};
+      this.shown = 0;
+      this.focused = 0;
+      this.navHandlers = [];
+      this.webContents = {
+        openHandler: null,
+        setWindowOpenHandler: (fn) => { this.webContents.openHandler = fn; },
+        on: (event, fn) => { if (event === "will-navigate") this.navHandlers.push(fn); },
+      };
+      built.push(this);
+    }
+    isDestroyed() { return this.destroyed; }
+    show() { this.shown += 1; }
+    focus() { this.focused += 1; }
+    once(event, fn) { this.handlers[event] = fn; }
+    on(event, fn) { this.handlers[event] = fn; }
+    loadFile(file) { this.file = file; return Promise.resolve(); }
+    close() { this.destroyed = true; if (this.handlers.closed) this.handlers.closed(); }
+  }
+  const electron = { BrowserWindow: FakeWindow };
+  assert.equal(routeWindow("command"), null);
+  const win = openRouteWindow("command", { electron });
+  assert.deepEqual(win.options, {
+    width: 640,
+    height: 720,
+    minWidth: 480,
+    minHeight: 560,
+    show: false,
+    title: "Aither Command",
+    backgroundColor: "#0f1218",
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: path.join(__dirname, "command-preload.cjs"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  assert.equal(ROUTE_WINDOWS.command.file, "command.html");
+  assert.equal(win.file, path.join(__dirname, "command.html"));
+  assert.deepEqual(win.webContents.openHandler(), { action: "deny" });
+  let prevented = false;
+  win.navHandlers[0]({ preventDefault: () => { prevented = true; } }, "https://example.com/");
+  assert.equal(prevented, true, "a file page never navigates");
+  win.handlers["ready-to-show"]();
+  assert.equal(win.shown, 1);
+  assert.equal(win.focused, 1);
+  assert.equal(openRouteWindow("command", { electron }), win, "single instance while it lives");
+  assert.equal(built.length, 1);
+  assert.equal(win.shown, 2);
+  assert.equal(win.focused, 2);
+  assert.equal(routeWindow("command"), win);
+  closeRouteWindow("command");
+  assert.equal(routeWindow("command"), null, "the handle is dropped on 'closed'");
+  closeRouteWindow("command"); // no-op when absent
+  assert.throws(() => openRouteWindow("nope", { electron }), /no window route nope/);
 });
 
 test("the deck and chat panels are no longer built in main.cjs", () => {

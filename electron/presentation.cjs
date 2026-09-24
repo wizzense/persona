@@ -2,9 +2,9 @@
 
 /**
  * presentation.cjs -- the desk's window plane: the route registry every console
- * pane detaches through, the deck and chat panels (the only windows this module
- * builds today), openConsole, and the three doors that land on those surfaces:
- * openInbox, openTalkWindow and openModelBrowser.
+ * pane detaches through, the deck and chat panels, the standalone file-page
+ * windows (ROUTE_WINDOWS: the Command window so far), openConsole, and the three
+ * doors that land on those surfaces: openInbox, openTalkWindow and openModelBrowser.
  *
  * Moved out of main.cjs in slice 3 of docs/UX-REIMPLEMENTATION.md (step 12, plan
  * phases P0+P1). Pure move: every URL, window option, channel and ordering is what
@@ -110,6 +110,96 @@ const PANELS = {
   },
 };
 
+/**
+ * The ONE constructor. Every window this module builds goes through here, so the
+ * baseline webPreferences (isolated, no node, sandboxed, the named preload) cannot
+ * drift between routes. The console's sandbox:false exception is NOT a caller of
+ * this -- it is still built in console-window.cjs (P5) and will arrive as a named
+ * exception in its spec, not as a flag any route can set.
+ */
+function constructWindow(BrowserWindow, options, preload) {
+  return new BrowserWindow({
+    ...options,
+    webPreferences: {
+      preload: path.join(__dirname, preload),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+}
+
+/**
+ * Standalone windows that load a local page (`page: {kind:'file'}`) and are owned
+ * by a *-window.cjs module that keeps its IPC. The module's create/close/isOpen are
+ * thin wrappers over openRouteWindow/closeRouteWindow/routeWindow below, so every
+ * caller (the console's windows map, protocol routing, the command verbs) keeps
+ * the module's API while the construction lives here.
+ *
+ * A file page never navigates: will-navigate is refused outright (not merely
+ * checked against the renderer's origin, as the panels are).
+ */
+const ROUTE_WINDOWS = {
+  // The Command window (P2, moved from command-window.cjs): a REAL window --
+  // framed, in the taskbar, its own title.
+  command: {
+    file: "command.html",
+    preload: "command-preload.cjs",
+    window: {
+      width: 640,
+      height: 720,
+      minWidth: 480,
+      minHeight: 560,
+      show: false,
+      title: "Aither Command",
+      backgroundColor: "#0f1218",
+      autoHideMenuBar: true,
+    },
+  },
+};
+
+// One live handle per standalone route; nulled on 'closed'. Module scope because
+// the owning *-window.cjs modules are required before createPresentation runs and
+// reach their window (progress sends, close) without a presentation instance.
+const routeWindows = {};
+
+/** The live window for a standalone route, or null when absent/destroyed. */
+function routeWindow(id) {
+  const win = routeWindows[id];
+  return win && !win.isDestroyed() ? win : null;
+}
+
+/** Single-instance: show + focus the route's window if it lives, else build it. */
+function openRouteWindow(id, { electron }) {
+  const existing = routeWindow(id);
+  if (existing) {
+    existing.show();
+    existing.focus();
+    return existing;
+  }
+  const spec = ROUTE_WINDOWS[id];
+  if (!spec) throw new Error(`no window route ${id}`);
+  const win = constructWindow(electron.BrowserWindow, spec.window, spec.preload);
+  routeWindows[id] = win;
+  win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  win.webContents.on("will-navigate", (event) => event.preventDefault());
+  win.once("ready-to-show", () => {
+    win.show();
+    win.focus();
+  });
+  win.on("closed", () => {
+    routeWindows[id] = null;
+  });
+  void win.loadFile(path.join(__dirname, spec.file));
+  return win;
+}
+
+/** Close the route's window. No-op when absent. */
+function closeRouteWindow(id) {
+  const win = routeWindow(id);
+  if (win) win.close();
+}
+
 function createPresentation({
   electron,
   rendererUrl,
@@ -177,17 +267,7 @@ function createPresentation({
     const avatar = getAvatarWindow();
     const base = avatar && !avatar.isDestroyed() ? avatar.getBounds() : null;
     const { x, y } = spec.place(workArea, base, spec.window.width, spec.window.height);
-    const win = new BrowserWindow({
-      x,
-      y,
-      ...spec.window,
-      webPreferences: {
-        preload: path.join(__dirname, "preload.cjs"),
-        contextIsolation: true,
-        nodeIntegration: false,
-        sandbox: true,
-      },
-    });
+    const win = constructWindow(BrowserWindow, { x, y, ...spec.window }, "preload.cjs");
     panels[id] = win;
     win.setAlwaysOnTop(true, "floating");
     win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
@@ -426,4 +506,11 @@ function createPresentation({
   };
 }
 
-module.exports = { createPresentation, PANELS };
+module.exports = {
+  createPresentation,
+  PANELS,
+  ROUTE_WINDOWS,
+  openRouteWindow,
+  closeRouteWindow,
+  routeWindow,
+};
