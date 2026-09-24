@@ -355,6 +355,24 @@ function AvatarSceneApp() {
             });
           }, bubbleDurationMs(text, event.durationMs)),
         );
+      } else if (event.type === 'hush') {
+        // "Mute all voices" / "Silence this one": stop what is playing NOW, not
+        // just the next line. Closing the context skips onended, so reset the
+        // speaking state here.
+        audioCtxRef.current?.close().catch(() => {});
+        audioCtxRef.current = null;
+        setLevel('slot0', 0);
+        setVoice((current) => ({ ...current, activity: 'idle' }));
+        for (const [slotId, ref] of slotAudioRefs.current) {
+          ref.current?.close().catch(() => {});
+          ref.current = null;
+          setLevel(slotId, 0);
+        }
+        setSlotVoices((current) => {
+          const next = { ...current };
+          for (const id of Object.keys(next)) next[id] = { level: 0, speaking: false };
+          return next;
+        });
       } else if (event.type === 'speak') {
         // Drop-to-avatar (2026-08-29): main TTS'd a verdict and handed the
         // audio over. Play it through Web Audio and drive the SAME audioLevel

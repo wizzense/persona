@@ -270,6 +270,23 @@ const COMMANDS = Object.freeze([
     surfaces: ["tray", "avatar-menu", "palette"],
     label: (ctx = {}) => (ctx.micMuted ? "Unmute microphone" : "Mute microphone"),
   }),
+  // Owner, 2026-09-23: "no easy way to mute voices/narration". cast.json's
+  // voice.muted existed, but only as a checkbox three clicks deep in the Cast
+  // pane. This is the same switch from every surface: silences every speaker,
+  // keeps the speech bubbles, cuts off whatever is playing right now.
+  Object.freeze({
+    id: "voice.silence", group: "talk", accel: "Ctrl+Alt+M", icon: "volume-off",
+    surfaces: ["tray", "avatar-menu", "palette", "jumplist"],
+    label: (ctx = {}) => (ctx.voicesMuted ? "Unmute voices (narration is off)" : "Mute all voices"),
+  }),
+  // The other half of the same complaint: assigning a voice meant finding the
+  // body's row in the Cast pane and typing an id. Right-click the body, pick one.
+  Object.freeze({
+    id: "voice.pick", label: "Voice", group: "talk", scope: "slot", dynamic: true,
+    surfaces: ["avatar-menu"],
+    whySingle: "Sets the voice of the body that was right-clicked; the Cast pane "
+      + "(cast.open) is the everywhere twin with every speaker listed.",
+  }),
   // The settings page the owner asked for by name ("there still isnt just a
   // shared settings page"). Opens as a console pane (kind:"file", no vite
   // build) so it ships without touching the React bundle.
@@ -509,8 +526,14 @@ function groupOrder(surface, commands) {
   return [...wanted, ...present.filter((group) => !wanted.includes(group))];
 }
 
+/** Electron reads a lone `&` as a mnemonic marker and DROPS it: "Cast & voices…"
+ *  rendered as "Cast  voices…". `&&` is a literal ampersand in a menu label. */
+function menuText(label) {
+  return String(label).replace(/&/g, "&&");
+}
+
 function rowFor(command, ctx, run, nested) {
-  const row = { label: labelOf(command, ctx, { nested }), click: () => run(command.id) };
+  const row = { label: menuText(labelOf(command, ctx, { nested })), click: () => run(command.id) };
   if (command.type) {
     row.type = command.type;
     row.checked = typeof command.checked === "function" ? Boolean(command.checked(ctx)) : false;
@@ -543,11 +566,11 @@ function buildMenu(surface, run, { ctx = {}, submenus = {} } = {}) {
     if (nest) {
       // A menu nests a group; the palette lists the same commands one per row.
       // Both read this list, so neither can carry an entry the other lacks.
-      template.push({ label: nest, submenu: members.map((child) => rowFor(child, ctx, run, true)) });
+      template.push({ label: menuText(nest), submenu: members.map((child) => rowFor(child, ctx, run, true)) });
       continue;
     }
     for (const command of members) {
-      if (command.dynamic) template.push({ label: labelOf(command, ctx), submenu: submenus[command.id] });
+      if (command.dynamic) template.push({ label: menuText(labelOf(command, ctx)), submenu: submenus[command.id] });
       else template.push(rowFor(command, ctx, run, false));
     }
   }
