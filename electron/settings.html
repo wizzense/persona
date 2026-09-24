@@ -45,6 +45,16 @@
   <div class="bar"><div class="title">Settings</div></div>
   <div id="content">
     <section>
+      <h2>Account</h2>
+      <p class="lede">Link this machine to aitherium.com. One sign-in for awdesk, awsh and adk; what you get depends on your role.</p>
+      <div class="row">
+        <span id="linkState" style="flex:1">checking…</span>
+        <button id="linkBtn" class="small">Link to aitherium.com</button>
+      </div>
+      <div id="linkCode" class="note"></div>
+    </section>
+
+    <section>
       <h2>Microphone</h2>
       <p class="lede">Which device captures your voice, and whether it's muted.</p>
       <div class="row">
@@ -302,6 +312,69 @@
     say(`${bricksRows.length} bricks installed, ${n} with a newer version`, "ok");
     renderBricks();
   }
+
+  // ── Account (adk link) ──
+  const linkStateEl = document.getElementById("linkState");
+  const linkBtn = document.getElementById("linkBtn");
+  const linkCodeEl = document.getElementById("linkCode");
+
+  function showLink(st) {
+    if (!st || !st.ok) {
+      linkStateEl.textContent = "Account: unknown (" + ((st && st.error) || "adk not reachable") + ")";
+      return;
+    }
+    const d = st.data || {};
+    if (d.linked) {
+      const who = d.username || "your account";
+      linkStateEl.textContent = d.role === "owner"
+        ? `Linked as ${who} — platform owner (full endpoint and vault map)`
+        : `Linked as ${who}`;
+      linkBtn.textContent = "Re-link";
+    } else {
+      linkStateEl.textContent = d.signed_in
+        ? "Signed in locally, not linked to aitherium.com"
+        : "Not linked";
+      linkBtn.textContent = "Link to aitherium.com";
+    }
+  }
+
+  async function refreshLink() { showLink(await bridge.linkStatus()); }
+
+  linkBtn.addEventListener("click", async () => {
+    linkBtn.disabled = true;
+    linkCodeEl.textContent = "Asking aitherium.com for a code…";
+    const start = await bridge.linkStart();
+    if (!start.ok) {
+      linkCodeEl.textContent = "Could not start: " + start.error;
+      linkBtn.disabled = false;
+      return;
+    }
+    const s = start.data;
+    linkCodeEl.textContent = `Approve in your browser — code ${s.user_code}`;
+    const deadline = Date.now() + (s.expires_in || 900) * 1000;
+    let wait = (s.interval || 5) * 1000;
+    const tick = async () => {
+      if (Date.now() > deadline) { linkCodeEl.textContent = "Code expired — try again."; linkBtn.disabled = false; return; }
+      const p = await bridge.linkPoll(s.device_code);
+      const d = p.data || {};
+      if (d.status === "complete") {
+        linkCodeEl.textContent = d.bundle_error ? `Linked; role not fetched yet (${d.bundle_error}).` : "";
+        linkBtn.disabled = false;
+        refreshLink();
+        return;
+      }
+      if (d.status === "denied" || d.status === "expired" || d.status === "error") {
+        linkCodeEl.textContent = "Not linked: " + (d.error || d.status);
+        linkBtn.disabled = false;
+        return;
+      }
+      if (d.status === "slow_down") wait += 5000;
+      setTimeout(tick, wait);
+    };
+    setTimeout(tick, wait);
+  });
+
+  refreshLink();
 
   document.getElementById("bricksCheck").addEventListener("click", checkBricks);
   onlyOutdated.addEventListener("change", renderBricks);
