@@ -76,23 +76,27 @@ test("every door that can put something on screen or in the ears asks quietMode 
   // The sweep of 2026-09-23 found these doors in main.cjs; a door that loses its
   // check is a popup over a game again. Source-level on purpose: main.cjs cannot be
   // loaded in a unit test (it takes the running desk's single-instance lock).
-  const main = require("node:fs").readFileSync(require("node:path").join(__dirname, "main.cjs"), "utf8");
-  const bodyOf = (marker, span = 1400) => {
-    const at = main.indexOf(marker);
+  const read = (file) => require("node:fs").readFileSync(require("node:path").join(__dirname, file), "utf8");
+  const main = read("main.cjs");
+  // The MCP window action and the bridge's console/desktop doors moved to
+  // integration-doors.cjs (slice 3); they are read THERE, not dropped.
+  const doors = read("integration-doors.cjs");
+  const bodyOf = (source, marker, span = 1400) => {
+    const at = source.indexOf(marker);
     assert.ok(at >= 0, `door not found: ${marker}`);
-    return main.slice(at, at + span);
+    return source.slice(at, at + span);
   };
-  for (const marker of [
-    "function handleBridgeEvent(",
-    "async function handleMcpWindowAction(",
-    "function handleProtocolUrl(",
-    "consoleHandler: (pane) =>",
-    "desktopHandler: (mode) =>",
-    "const announceDecisions = (list, isBacklog) =>",
-    "decisionCards.setWindowRouter(",
-    "async function speakAloud(",
+  for (const [source, marker] of [
+    [main, "function handleBridgeEvent("],
+    [doors, "async function handleMcpWindowAction("],
+    [main, "function handleProtocolUrl("],
+    [doors, "consoleHandler: (pane) =>"],
+    [doors, "desktopHandler: (mode) =>"],
+    [main, "const announceDecisions = (list, isBacklog) =>"],
+    [main, "decisionCards.setWindowRouter("],
+    [main, "async function speakAloud("],
   ]) {
-    assert.match(bodyOf(marker), /quietMode\.isQuiet\(\)/, `${marker} does not ask quietMode`);
+    assert.match(bodyOf(source, marker), /quietMode\.isQuiet\(\)/, `${marker} does not ask quietMode`);
   }
   assert.doesNotMatch(main, /AITHER_DECISIONS_POPUP:\s*"1"/, "the desk must not force popups past the owner's off switch");
 });

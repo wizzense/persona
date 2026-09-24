@@ -85,7 +85,6 @@ const { visionSnapshot } = require("./vision-client.cjs");
 const { routeDrop, synthesizeVerdict, stagePath, cleanupStage } = require("./drop-router.cjs");
 const { desktopSnapshot } = require("./browser-client.cjs");
 const { connectSnapshot } = require("./connect-client.cjs");
-const { createBridgeServer, DEFAULT_PORT } = require("./bridge-server.cjs");
 // ONE inventory of what Desk can do and which menus carry it. Menus are rendered
 // from it; nothing lists a capability by hand (docs/UX-REIMPLEMENTATION.md).
 const commandRegistry = require("./command-registry.cjs");
@@ -97,11 +96,6 @@ const { runBlogCommand } = require("./blog-commands.cjs");
 // harness daemon's /wakes window, so the desk, Discord, AitherDesktop and the
 // MCP tool share one reader and one semantics (see wakes-feed.cjs header).
 const wakesFeedClient = require("./wakes-feed.cjs");
-const {
-  createDeskMcpHandler,
-  getAnimationEventName,
-  ANIMATION_EVENT_NAMES,
-} = require("./mcp-server.cjs");
 const {
   createFleetWindow,
   ensureFleetIpc,
@@ -168,9 +162,7 @@ const fs = require("node:fs");
 const {
   getAgentAvatar,
   listAgents,
-  loadMap: loadAgentAvatars,
 } = require("./agent-avatars.cjs");
-const { exportToAitherShell } = require("./aithershell-export.cjs");
 const {
   desktopStatus,
   pushDeskState,
@@ -333,7 +325,6 @@ const debugEnabled = process.env.DESK_DEBUG === "1";
 let avatarWindow = null;
 let deckWindow = null;
 let chatWindow = null;
-let bridge = null;
 let isQuitting = false;
 let latestEvent = null;
 let latestListenerStatus = null;
@@ -375,7 +366,6 @@ let hyprlandConfiguring = false;
 let hyprlandConfigurationTimer = null;
 let hyprlandLastPosition = null;
 let rendererLoadHookAttached = false;
-let mcpAnimationRequestId = 0;
 const pendingRendererEvents = new Map();
 const avatarSlots = new Map(); // Map<slotId, { name, modelUrl }> — tracks spawned slots (not slot 0)
 
@@ -913,34 +903,6 @@ function handleListenerStatus(status) {
   if (availabilityChanged && tray) refreshTrayMenu();
 }
 
-async function handleMcpWindowAction(action) {
-  // An AGENT asked (MCP). While quiet it may show the avatar but never take focus.
-  const focus = !quietMode.isQuiet();
-  if (action === "show") showOverlay({ focus });
-  else if (action === "hide") await hideOverlay();
-  else if (avatarWindow?.isVisible()) await hideOverlay();
-  else showOverlay({ focus });
-  return avatarWindow?.isVisible() ?? false;
-}
-
-function getMcpStatus() {
-  return {
-    windowVisible: avatarWindow?.isVisible() ?? false,
-    voiceState: latestVoiceState,
-    listener: latestListenerStatus,
-  };
-}
-
-function listAvailableAnimations() {
-  const animationsDir = path.join(__dirname, "..", "dist", "assets", "animations");
-  try {
-    const files = fs.readdirSync(animationsDir);
-    return files.filter((file) => file.endsWith(".vrma"));
-  } catch {
-    return [];
-  }
-}
-
 function handleProtocolUrl(rawUrl) {
   const commands = parseProtocolUrl(rawUrl, protocolScheme);
   if (!commands) return false;
@@ -1422,6 +1384,48 @@ const { voicesMuted, toggleVoiceSilence, buildVoiceMenu } = require("./voice-con
   speakAloud: (...args) => speakAloud(...args),
   refreshTrayMenu: () => refreshTrayMenu(),
   castPane: () => roomStageHost.castPaneImpl(roomStageDeps()),
+  debugLog: (...args) => debugLog(...args),
+});
+
+// The MCP handler and the loopback bridge server (the doors other programs use).
+// Built here, after quietMode and voiceAsk exist; started in app.whenReady.
+const integrationDoors = require("./integration-doors.cjs").createIntegrationDoors({
+  quietMode,
+  voiceAsk,
+  decisionCards,
+  commandRegistry,
+  roomStageHost,
+  mainLag,
+  presentState,
+  getAvatarWindow: () => avatarWindow,
+  getVoiceState: () => latestVoiceState,
+  getListenerStatus: () => latestListenerStatus,
+  getWakesFeed: () => wakesFeed,
+  holdWhileQuiet: () => { heldWhileQuiet += 1; },
+  showOverlay: (...args) => showOverlay(...args),
+  hideOverlay: (...args) => hideOverlay(...args),
+  handleBridgeEvent: (...args) => handleBridgeEvent(...args),
+  applyCharacter: (...args) => applyCharacter(...args),
+  applyAgentAvatar: (...args) => applyAgentAvatar(...args),
+  captureRoster: (...args) => captureRoster(...args),
+  captureRosterStatus: (...args) => captureRosterStatus(...args),
+  spawnAvatarSlot: (...args) => spawnAvatarSlot(...args),
+  removeAvatarSlot: (...args) => removeAvatarSlot(...args),
+  fleetAction: (...args) => fleetAction(...args),
+  commandAction: (...args) => commandAction(...args),
+  speakAloud: (...args) => speakAloud(...args),
+  openInbox: (...args) => openInbox(...args),
+  openConsole: (...args) => openConsole(...args),
+  focusPane: (...args) => focusPane(...args),
+  runCommand: (...args) => runCommand(...args),
+  commandContext: (...args) => commandContext(...args),
+  showLivingDesktop: (...args) => showLivingDesktop(...args),
+  showDesktopApp: (...args) => showDesktopApp(...args),
+  desktopStatus: (...args) => desktopStatus(...args),
+  getCommandAgent: (...args) => getCommandAgent(...args),
+  getFleetControl: (...args) => getFleetControl(...args),
+  createCommandWindow: (...args) => createCommandWindow(...args),
+  createFleetWindow: (...args) => createFleetWindow(...args),
   debugLog: (...args) => debugLog(...args),
 });
 
@@ -3201,139 +3205,8 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
       }
     });
 
-    const mcpHandler = createDeskMcpHandler({
-      onAnimation: (animation) => {
-        let animationEvent;
-        if (animation.startsWith("FILE:")) {
-          animationEvent = animation;
-        } else {
-          const eventName = getAnimationEventName(animation);
-          // Report the miss instead of dropping it. Returning undefined here made
-          // play_animation answer "Desk is playing the X animation" for a clip that
-          // was never played, so a caller could not tell a typo from a working request —
-          // the worst outcome, because it teaches them the feature works.
-          if (eventName == null) return false;
-          animationEvent = eventName;
-        }
-        mcpAnimationRequestId += 1;
-        handleBridgeEvent({
-          type: "animation",
-          animation: animationEvent,
-          source: "mcp",
-          requestId: mcpAnimationRequestId,
-        });
-        return true;
-      },
-      onWindowAction: handleMcpWindowAction,
-      getStatus: getMcpStatus,
-      listCharacters: () => ({
-        active: getActiveCharacter(),
-        characters: listCharacters(),
-      }),
-      onCharacter: (name) => applyCharacter(name),
-      onAgent: (agent) => applyAgentAvatar(agent),
-      listAgentAvatars: () => loadAgentAvatars(),
-      onExportPortrait: async () => {
-        const name = getActiveCharacter() || "desk";
-        showOverlay();
-        return exportToAitherShell(avatarWindow, name, handleBridgeEvent);
-      },
-      listAnimations: () => {
-        const builtIn = Object.keys(ANIMATION_EVENT_NAMES);
-        const custom = listAvailableAnimations().map((file) => `FILE:${file}`);
-        return [...builtIn, ...custom];
-      },
-      onSpawnAvatar: (slotId, name) => spawnAvatarSlot(slotId, name),
-      onRemoveAvatar: (slotId) => removeAvatarSlot(slotId),
-      onFleet: (action, opts) => fleetAction(action, opts),
-      onCommand: (text, opts) => commandAction(text, opts),
-      // U28: the MCP `speak` tool door -- origin STAMPED here, same reason as
-      // the bridge's speakHandler above.
-      onSpeak: ({ text, voice, speed }) => speakAloud(text, voice, speed, undefined, "mcp:speak"),
-      onAsk: ({ question, timeoutMs }) => voiceAsk.ask(question, { timeoutMs }),
-      onDesktop: (surface) => {
-        if (surface === "overlay") showLivingDesktop();
-        else if (surface === "app") showDesktopApp();
-        return { ok: true, opened: surface === "status" ? null : surface, ...desktopStatus() };
-      },
-    });
-    bridge = createBridgeServer({
-      port: Number(process.env.DESK_BRIDGE_PORT || DEFAULT_PORT),
-      onEvent: handleBridgeEvent,
-      mcpHandler,
-      // The Aitheros Online overlay renders the STATIC site, whose
-      // /api/decisions is a build stub — this loopback read is how its bell
-      // sees the queue at all. Read-only; answering stays in the queue window.
-      decisionsProvider: () => decisionCards.lastOpen(),
-      // Read-only: the hosted web surfaces see the same wake snapshot the deck
-      // does. Mutations are NOT offered here — they go to the daemon window.
-      wakesProvider: () => wakesFeed,
-      fleetHandler: (verb, { fresh = false } = {}) => fleetAction(verb === "open" ? "open_panel" : verb, { fresh }),
-      // awsh /desktop, adk desk desktop, awconnect's popup and `desk://` all land here.
-      // U28: this is the POST /speak door -- origin STAMPED here, never read
-      // off the request body (see speakAloud's own doc).
-      speakHandler: ({ text, voice, speed, slot }) => speakAloud(text, voice, speed, slot, "bridge:/speak"),
-      // The registry over loopback: what `awsh /desk` and `adk desk` list and run.
-      commandsHandler: {
-        list: () => commandRegistry.paletteRows(commandContext()),
-        run: async (id, arg) => {
-          const command = commandRegistry.byId(id);
-          if (!command || !command.surfaces.includes("palette") || command.dynamic) {
-            return { ok: false, error: `unknown command "${id}" -- GET /commands lists them` };
-          }
-          const verdict = await runCommand(id, arg, { surface: "bridge" });
-          return { ok: true, id, label: commandRegistry.labelOf(command, commandContext()), ...(verdict && typeof verdict === "object" ? { verdict } : {}) };
-        },
-      },
-      consoleHandler: (pane) => {
-        // POST /console/open is the escalation ladder's desk rung (and any script).
-        // While quiet it is HELD and says so, so the caller retries after the game
-        // instead of marking the rung delivered.
-        if (quietMode.isQuiet()) {
-          heldWhileQuiet += 1;
-          return { ok: false, held: true, reason: `quiet: ${quietMode.state().reason}`, pane };
-        }
-        if (pane === "inbox" || pane === "cards") return { ok: openInbox() !== false, pane: "inbox" };
-        openConsole();
-        return { ok: focusPane(pane) !== false, pane };
-      },
-      stageStatusProvider: () => ({ ...(roomStageHost.status() || { room: false }), mainLag, present: { mode: presentState.present, gpu: presentState.gpu } }),
-      // POST /roster/capture (bearer): full-body frames for the rater. GET: progress.
-      rosterCaptureHandler: (req) => (req.method === "GET" ? captureRosterStatus() : captureRoster(req)),
-      avatarBoundsProvider: () =>
-        avatarWindow && !avatarWindow.isDestroyed() && avatarWindow.isVisible()
-          ? avatarWindow.getBounds()
-          : null,
-      desktopHandler: (mode) => {
-        if (mode !== "status" && quietMode.isQuiet()) {
-          return { ok: false, held: true, reason: `quiet: ${quietMode.state().reason}`, ...desktopStatus() };
-        }
-        if (mode === "overlay") showLivingDesktop();
-        else if (mode === "app") showDesktopApp();
-        return { ok: true, opened: mode === "status" ? null : mode, ...desktopStatus() };
-      },
-      commandHandler: (req) => {
-        if (req.action === "history") {
-          return getCommandAgent(getFleetControl()).history(req.limit);
-        } else if (req.action === "send") {
-          return commandAction(req.text, { source: "bridge" });
-        } else if (req.action === "open") {
-          if (quietMode.isQuiet()) return { ok: false, held: true, reason: `quiet: ${quietMode.state().reason}` };
-          // `game command` / `adk desk command --open` raise the window for the owner.
-          createCommandWindow(getFleetControl(), { createFleetWindow });
-          return { ok: true, opened: true };
-        }
-      },
-    });
-    try {
-      await bridge.listen();
-    } catch (error) {
-      console.error(
-        "[desk] local integration server unavailable:",
-        error instanceof Error ? error.message : String(error),
-      );
-      bridge = null;
-    }
+    // The MCP handler and the loopback bridge: integration-doors.cjs.
+    await integrationDoors.startBridge();
 
     createTray();
     maybePromptForFirstCharacter();
@@ -3568,7 +3441,7 @@ app.on("before-quit", () => {
   settingsSync?.stop();
   audioListener?.stop();
   globalShortcut.unregisterAll();
-  void bridge?.close().catch((error) => debugLog("integration server close failed", error));
+  integrationDoors.closeBridge();
 });
 
 app.on("window-all-closed", () => {
