@@ -767,6 +767,8 @@ function sendBubble(slotId, text, { muted = false, durationMs = 0 } = {}) {
 
 /** The Voices page's ▶ (room-stage-host castPaneImpl.preview). Muting still applies. */
 const PREVIEW_ORIGIN = "service:awdesk-preview";
+/** Origins that answer something the owner just did, so quiet mode lets them speak. */
+const QUIET_SPEAKERS = new Set([PREVIEW_ORIGIN, "service:awdesk-voice", "service:awdesk-voice-answer"]);
 
 async function speakAloud(text, voice = "nova", speed = undefined, slotId = "slot0", origin = "service:awdesk") {
   let effectiveVoice = voice || "nova";
@@ -778,6 +780,12 @@ async function speakAloud(text, voice = "nova", speed = undefined, slotId = "slo
   let effectiveVolume = 1;
   // Fails OPEN like the gate itself: with no verdict, the words are shown.
   let captioned = true;
+  // Quiet: a game is full-screen or Do not disturb is on. Only what the owner just
+  // did themselves may speak (a preview, the desk answering them); the rest is shown.
+  if (!QUIET_SPEAKERS.has(origin) && quietMode.isQuiet()) {
+    const shown = sendBubble(slotId, text, { muted: true });
+    return { ok: false, reason: `quiet: ${quietMode.state().reason}`, captioned: shown > 0 };
+  }
   if (typeof resolveSpeech === "function") {
     let gate;
     try {
@@ -1347,6 +1355,50 @@ function toggleMicMute() {
 }
 
 // "Mute all voices" + the right-click Voice picker live in voice-controls.cjs.
+// Quiet mode (owner, 2026-09-23: cards "popping up on my main screen while im playing
+// games"): every path that interrupts -- a card popup, the console jumping forward,
+// speech -- asks quietMode first. Cards that arrive while quiet are HELD and summed up
+// once when the game ends; nothing is dropped.
+let heldWhileQuiet = 0;
+function inputPrefs() {
+  try {
+    const { load, resolveInput } = require("./cast-config.cjs");
+    return resolveInput(load().snapshot);
+  } catch {
+    return {};
+  }
+}
+const quietMode = require("./quiet-mode.cjs").createQuietMode({
+  readPrefs: () => inputPrefs(),
+  ownPids: () => {
+    try { return app.getAppMetrics().map((m) => m.pid); } catch { return [process.pid]; }
+  },
+  onChange: (now, was) => {
+    debugLog("quiet", now.quiet ? `ON (${now.reason})` : "off", was.quiet ? `(was: ${was.reason})` : "");
+    if (tray) refreshTrayMenu();
+    if (!now.quiet && was.quiet && heldWhileQuiet > 0) {
+      const n = heldWhileQuiet;
+      heldWhileQuiet = 0;
+      // ONE line, never the popups it held: the owner just came back, not asked.
+      void speakAloud(n === 1 ? "One decision came in while you were busy." : `${n} decisions came in while you were busy.`,
+        undefined, undefined, "slot0", "service:awdesk-decisions");
+    }
+  },
+  log: (...args) => debugLog(...args),
+});
+
+function toggleDoNotDisturb() {
+  try {
+    const { write } = require("./cast-config.cjs");
+    const next = !inputPrefs().doNotDisturb;
+    write((draft) => { draft.input = { ...(draft.input || {}), doNotDisturb: next }; return draft; });
+    quietMode.state();
+    refreshTrayMenu();
+  } catch (error) {
+    debugLog("toggleDoNotDisturb failed", error && error.message);
+  }
+}
+
 const { voicesMuted, toggleVoiceSilence, buildVoiceMenu } = require("./voice-controls.cjs").createVoiceControls({
   BrowserWindow,
   speakAloud: (...args) => speakAloud(...args),
@@ -1791,6 +1843,8 @@ function commandContext() {
     listening: listeningNow(),
     micMuted: micMuted(),
     voicesMuted: voicesMuted(),
+    doNotDisturb: Boolean(inputPrefs().doNotDisturb),
+    quietReason: quietMode.state().reason,
     talkMode: talkMode(),
     openMic: openMicOn,
     overlayOpen: desktop.open,
@@ -1906,6 +1960,7 @@ function runCommand(id, arg, { surface = "menu", slotId = null } = {}) {
     }
     case "voice.mute": return void toggleMicMute();
     case "voice.silence": return void toggleVoiceSilence();
+    case "attention.dnd": return void toggleDoNotDisturb();
     // voice.pick is a dynamic submenu: its rows carry their own clicks.
     case "voice.pick": return;
     // U27's room.steer record (palette surface only -- no slot in hand here;
@@ -2519,7 +2574,11 @@ function openConsole() {
 // in another. The ladder is now explicit and every rung is a surface that already
 // exists: the deck window if the Cards pane is DETACHED into it, otherwise the
 // console, and awask's popup only when neither is there to take it.
-decisionCards.setWindowRouter((_kind, id) => openInbox(id));
+decisionCards.setWindowRouter((_kind, id) => {
+  // A card asking to be SHOWN while a game is full-screen waits in the badge.
+  if (quietMode.isQuiet()) { heldWhileQuiet += 1; return true; }
+  return openInbox(id);
+});
 
 function createTray() {
   const iconPath = path.join(__dirname, "..", "build", "icon.png");
@@ -3672,6 +3731,12 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
     // 2026-09-21: "it doesnt prompt me, ask permission, give me anything to
     // click or respond to"). speakAloud + openInbox exist; wire them here.
     const announceDecisions = (list, isBacklog) => {
+      if (quietMode.isQuiet()) {
+        // Held, not dropped: the badge still counts them and the end of the game
+        // gets ONE spoken line (quietMode onChange). No popup, no voice, no focus.
+        heldWhileQuiet += list.length;
+        return;
+      }
       try {
         const lead = (list[isBacklog ? 0 : list.length - 1]) || {};
         const title = String(lead.title || "a decision").slice(0, 120);
@@ -3710,6 +3775,8 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
       } catch { /* a prompt must never crash the poll */ }
     };
     let decisionsAnnounced = null; // null until the first poll seeds the backlog
+    quietMode.start();
+    await quietMode.ready();
     decisionWatchStop = decisionCards.watch({
       onChange: (cards) => {
         openDecisions = cards;
@@ -3801,6 +3868,7 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
 app.on("activate", () => showOverlay({ focus: true }));
 
 app.on("before-quit", () => {
+  quietMode.stop();
   isQuitting = true;
   clearTimeout(hyprlandConfigurationTimer);
   if (relayFeedTimer) clearInterval(relayFeedTimer);
