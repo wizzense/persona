@@ -5,7 +5,8 @@
  * pane detaches through, the deck and chat panels, the standalone file-page
  * windows (ROUTE_WINDOWS: the Command, Fleet, Sessions, Stage, Settings and Cast windows so far),
  * the hosted aitherium.com windows (HOSTED_WINDOWS: the living-desktop overlay and
- * the AitherDesktop app window), openConsole, and the three
+ * the AitherDesktop app window), the detached-avatar solo windows (SOLO_WINDOW),
+ * openConsole, and the three
  * doors that land on those surfaces: openInbox, openTalkWindow and openModelBrowser.
  *
  * Moved out of main.cjs in slice 3 of docs/UX-REIMPLEMENTATION.md (step 12, plan
@@ -366,6 +367,51 @@ function buildHostedWindow(id, { electron, partition }) {
   return win;
 }
 
+/**
+ * The detached-avatar SOLO windows (P3, moved from detached-avatar-window.cjs): one
+ * avatar popped out of the shared canvas into its own always-on-top, frameless,
+ * transparent box, on the avatar scene's bundle and preload. MULTI-instance -- one
+ * window per avatar slot, handle id `solo:<slotId>` -- so this only builds. The
+ * module keeps the rest: its slot map and single-instance focus, the `?solo=`
+ * renderer URL and its navigation fence, the floating level, all-workspaces, the
+ * right-click Return/Close menu and the merge-back callback.
+ */
+const SOLO_WINDOW = {
+  preload: "preload.cjs",
+  window: {
+    width: 420,
+    height: 620,
+    minWidth: 260,
+    minHeight: 360,
+    frame: false,
+    transparent: true,
+    backgroundColor: "#00000000",
+    hasShadow: false,
+    roundedCorners: false,
+    autoHideMenuBar: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+  },
+  // The avatar's name when the caller has one; the desk's name otherwise.
+  defaultTitle: "Desk",
+};
+
+/** Build one solo window for `slotId`. Always builds (single-instance per slot is the
+ *  module's); the handle is readable via routeWindow(`solo:<slotId>`) until 'closed'. */
+function buildSoloWindow(slotId, { electron, title } = {}) {
+  const id = `solo:${slotId}`;
+  const win = constructWindow(
+    electron.BrowserWindow,
+    { ...SOLO_WINDOW.window, title: title || SOLO_WINDOW.defaultTitle },
+    SOLO_WINDOW.preload,
+  );
+  routeWindows[id] = win;
+  win.on("closed", () => {
+    if (routeWindows[id] === win) routeWindows[id] = null;
+  });
+  return win;
+}
+
 function createPresentation({
   electron,
   rendererUrl,
@@ -677,8 +723,10 @@ module.exports = {
   PANELS,
   ROUTE_WINDOWS,
   HOSTED_WINDOWS,
+  SOLO_WINDOW,
   openRouteWindow,
   closeRouteWindow,
   buildHostedWindow,
+  buildSoloWindow,
   routeWindow,
 };

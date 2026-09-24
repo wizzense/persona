@@ -11,10 +11,15 @@
 
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
-const { BrowserWindow, Menu } = require("electron");
+const electron = require("electron");
 const { isAllowedRendererNavigation } = require("./navigation-policy.cjs");
+// The window is BUILT by presentation.cjs (slice 3, P3: SOLO_WINDOW -- size, frame,
+// transparency, always-on-top, preload and title live there); this module keeps
+// everything after construction. presentation.cjs never requires this module, so a
+// module-scope require is not a cycle.
+const { buildSoloWindow } = require("./presentation.cjs");
 
-const detachedWindows = new Map(); // slotId -> BrowserWindow
+const detachedWindows = new Map(); // slotId -> its solo window
 
 function rendererUrlFor(modelUrl) {
   const base =
@@ -45,27 +50,7 @@ function openDetachedAvatar(slotId, modelUrl, title, { onMergeBack } = {}) {
     return detachedWindows.get(slotId);
   }
 
-  const win = new BrowserWindow({
-    width: 420,
-    height: 620,
-    minWidth: 260,
-    minHeight: 360,
-    frame: false,
-    transparent: true,
-    backgroundColor: "#00000000",
-    hasShadow: false,
-    roundedCorners: false,
-    autoHideMenuBar: true,
-    alwaysOnTop: true,
-    skipTaskbar: true,
-    title: title || "Desk",
-    webPreferences: {
-      preload: path.join(__dirname, "preload.cjs"),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-    },
-  });
+  const win = buildSoloWindow(slotId, { electron, title });
   win.setAlwaysOnTop(true, "floating");
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
 
@@ -79,7 +64,7 @@ function openDetachedAvatar(slotId, modelUrl, title, { onMergeBack } = {}) {
   // Frameless + transparent means no native close button, same as the main avatar
   // window — right-click gives the way out (and the way back into the shared scene).
   win.webContents.on("context-menu", () => {
-    Menu.buildFromTemplate([
+    electron.Menu.buildFromTemplate([
       {
         label: "Return to main scene",
         click: () => {

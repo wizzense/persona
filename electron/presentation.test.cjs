@@ -16,7 +16,6 @@ const { createPresentation } = require("./presentation.cjs");
  */
 const STILL_OUTSIDE = {
   "avatar-window.cjs": 1, // P3: the avatar overlay (left main.cjs in step 13)
-  "detached-avatar-window.cjs": 1, // P3: the 'solo:<slot>' windows
   "console-window.cjs": 1, // P5: the console itself
 };
 
@@ -40,7 +39,82 @@ test("window constructions outside presentation.cjs are exactly the ones left fo
     "a window constructor appeared outside presentation.cjs, or one moved and its STILL_OUTSIDE entry was not deleted",
   );
   const total = Object.values(outside).reduce((a, b) => a + b, 0);
-  assert.equal(total, 3, "the ratchet only goes down: 13 before step 12, 11 after it, 10 once command moved, 9 once fleet moved, 8 once sessions moved, 7 once stage moved, 6 once settings moved, 5 once cast moved, 3 once the living-desktop overlay and app window moved");
+  assert.equal(total, 2, "the ratchet only goes down: 13 before step 12, 11 after it, 10 once command moved, 9 once fleet moved, 8 once sessions moved, 7 once stage moved, 6 once settings moved, 5 once cast moved, 3 once the living-desktop overlay and app window moved, 2 once the detached-avatar solo windows moved");
+});
+
+test("detached-avatar-window.cjs never builds its own window again (P3: solo windows)", () => {
+  // Read as text: in a plain `node`, require("electron") is a path string, so the
+  // module's context menu cannot be driven here; the build it hands over is below.
+  const source = fs.readFileSync(path.join(__dirname, "detached-avatar-window.cjs"), "utf8");
+  assert.doesNotMatch(source, /\bBrowserWindow\b/, "detached-avatar-window.cjs names BrowserWindow again");
+  assert.match(source, /buildSoloWindow\(slotId, \{ electron, title \}\)/, "openDetachedAvatar no longer builds through presentation");
+  // What stays with the module: the floating level, every workspace, the solo URL's
+  // navigation fence and the right-click way out.
+  assert.match(source, /win\.setAlwaysOnTop\(true, "floating"\)/);
+  assert.match(source, /win\.setVisibleOnAllWorkspaces\(true, \{ visibleOnFullScreen: true \}\)/);
+  assert.match(source, /isAllowedRendererNavigation\(targetUrl, rendererUrl\)/);
+  assert.match(source, /label: "Return to main scene"/);
+  const mod = require("./detached-avatar-window.cjs");
+  for (const name of ["openDetachedAvatar", "closeDetachedAvatar", "isOpen", "listDetached"]) {
+    assert.equal(typeof mod[name], "function", `${name} is kept for main.cjs`);
+  }
+  assert.equal(mod.isOpen("slot-x"), false);
+  assert.deepEqual(mod.listDetached(), []);
+  mod.closeDetachedAvatar("slot-x"); // no-op when absent
+});
+
+test("the solo windows keep the detached avatar's exact options, one per slot", () => {
+  const { SOLO_WINDOW, buildSoloWindow, routeWindow } = require("./presentation.cjs");
+  const built = [];
+  class FakeWindow {
+    constructor(options) {
+      this.options = options;
+      this.destroyed = false;
+      this.handlers = {};
+      built.push(this);
+    }
+    isDestroyed() { return this.destroyed; }
+    on(event, fn) { this.handlers[event] = fn; }
+    close() { this.destroyed = true; if (this.handlers.closed) this.handlers.closed(); }
+  }
+  const electron = { BrowserWindow: FakeWindow };
+  const options = (title) => ({
+    width: 420,
+    height: 620,
+    minWidth: 260,
+    minHeight: 360,
+    frame: false,
+    transparent: true,
+    backgroundColor: "#00000000",
+    hasShadow: false,
+    roundedCorners: false,
+    autoHideMenuBar: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    title,
+    webPreferences: {
+      preload: path.join(__dirname, "preload.cjs"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  assert.equal(SOLO_WINDOW.preload, "preload.cjs");
+  assert.equal(routeWindow("solo:a"), null);
+  const a = buildSoloWindow("a", { electron, title: "Aria" });
+  assert.deepEqual(a.options, options("Aria"));
+  assert.equal("partition" in a.options.webPreferences, false, "a solo avatar shares the default session");
+  const b = buildSoloWindow("b", { electron });
+  assert.deepEqual(b.options, options("Desk"), "no title falls back to the desk's name");
+  assert.deepEqual(buildSoloWindow("c", { electron, title: "" }).options, options("Desk"));
+  assert.equal(routeWindow("solo:a"), a, "multi-instance: one handle per slot");
+  assert.equal(routeWindow("solo:b"), b);
+  a.close();
+  assert.equal(routeWindow("solo:a"), null, "the handle is dropped on 'closed'");
+  assert.equal(routeWindow("solo:b"), b, "closing one slot leaves the others");
+  b.close();
+  built[2].close();
+  assert.equal(built.length, 3);
 });
 
 test("living-desktop-window.cjs never builds its own window again (P4: hosted 'overlay' + 'desktop')", () => {
