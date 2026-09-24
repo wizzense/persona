@@ -3,7 +3,7 @@
 /**
  * presentation.cjs -- the desk's window plane: the route registry every console
  * pane detaches through, the deck and chat panels, the standalone file-page
- * windows (ROUTE_WINDOWS: the Command and Fleet windows so far), openConsole, and the three
+ * windows (ROUTE_WINDOWS: the Command, Fleet and Sessions windows so far), openConsole, and the three
  * doors that land on those surfaces: openInbox, openTalkWindow and openModelBrowser.
  *
  * Moved out of main.cjs in slice 3 of docs/UX-REIMPLEMENTATION.md (step 12, plan
@@ -168,6 +168,22 @@ const ROUTE_WINDOWS = {
       minHeight: 560,
       show: false,
       title: "Aither Fleet",
+      backgroundColor: "#0f1218",
+      autoHideMenuBar: true,
+    },
+  },
+  // The Sessions window (P2, moved from sessions-window.cjs): the Sessions pane's
+  // standalone twin, read-only list + tail. The module keeps its two IPC handlers.
+  sessions: {
+    file: "sessions.html",
+    preload: "sessions-preload.cjs",
+    window: {
+      width: 980,
+      height: 720,
+      minWidth: 640,
+      minHeight: 460,
+      show: false,
+      title: "Aither Sessions",
       backgroundColor: "#0f1218",
       autoHideMenuBar: true,
     },
