@@ -185,7 +185,22 @@ test("resolveSpeech: a malformed cast file falls to the LAST-GOOD snapshot, not 
 
 // ─── fail-open on an internal error ─────────────────────────────────────────
 
-test("resolveSpeech: never throws -- a garbage ctx still returns an allowed verdict", () => {
+/** Run `fn` with CAST_FILE() pointed at an EMPTY tmp dir. The no-context path reads the
+ *  real %APPDATA%\Desk\cast.json otherwise -- and since "Mute all voices" is one click
+ *  (2026-09-23) the owner's box is often muted on purpose, which is not a gate bug.
+ *  Synchronous body, so the env var cannot race another test. */
+function withEmptyCast(fn) {
+  const before = process.env.DESK_CAST_FILE;
+  process.env.DESK_CAST_FILE = castFileIn(tmpDir());
+  try {
+    return fn();
+  } finally {
+    if (before === undefined) delete process.env.DESK_CAST_FILE;
+    else process.env.DESK_CAST_FILE = before;
+  }
+}
+
+test("resolveSpeech: never throws -- a garbage ctx still returns an allowed verdict", () => withEmptyCast(() => {
   assert.doesNotThrow(() => {
     const gate = resolveSpeech(undefined);
     assert.equal(gate.allowed, true);
@@ -194,7 +209,7 @@ test("resolveSpeech: never throws -- a garbage ctx still returns an allowed verd
     const gate = resolveSpeech({ origin: 12345, slotId: {}, text: null });
     assert.equal(typeof gate.allowed, "boolean");
   });
-});
+}));
 
 // ─── loudness travels through the gate as ONE number ────────────────────────
 
@@ -246,14 +261,14 @@ test("resolveSpeech: the fail-open verdict is FULL volume, never silence", () =>
   assert.equal(gate.volume, 1, "and at FULL volume — the fail-open default is not a quiet one");
 });
 
-test("resolveSpeech: with no context at all it still fails OPEN on the real config", () => {
-  // The no-argument path reads whatever this box has configured, so the NUMBER is the owner's
-  // to choose and is not asserted here. What must hold on any box is that it neither throws nor
-  // silences: an agent that never speaks is the failure this guards.
+test("resolveSpeech: with no context at all it still fails OPEN when nothing is configured", () => withEmptyCast(() => {
+  // It read the owner's REAL config and so went red whenever the owner had muted the room --
+  // a verdict about the owner's choice, not about the gate. What must hold is that the no-context
+  // path neither throws nor silences on its own: an agent that never speaks is the failure.
   const gate = resolveSpeech(undefined);
   assert.equal(gate.allowed, true, "no context must never resolve to muted");
   assert.ok(typeof gate.volume === "number" && gate.volume > 0, `a positive volume: ${gate.volume}`);
-});
+}));
 
 // ─── the caption verdict rides the same gate ────────────────────────────────
 

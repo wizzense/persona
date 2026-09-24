@@ -70,8 +70,10 @@ const GROUPS = Object.freeze({
  * ITEMS are one list; only the reading order differs.
  */
 const LAYOUT = Object.freeze({
-  tray: Object.freeze(["go", "desktop", "avatar", "window-size", "talk", "stage", "fleet", "arc", "blog", "app"]),
-  "avatar-menu": Object.freeze(["talk", "body", "stage", "window-size", "avatar", "slot", "desktop", "go"]),
+  // 2026-09-23 redesign: where to go, then what you HEAR (voices, mic), then the
+  // avatar, then the nested places. Voice controls sat seventh, under five submenus.
+  tray: Object.freeze(["go", "talk", "avatar", "desktop", "window-size", "stage", "fleet", "arc", "blog", "app"]),
+  "avatar-menu": Object.freeze(["talk", "body", "avatar", "stage", "window-size", "slot", "desktop", "go"]),
   // The rail reads top to bottom: what is waiting, where to go, who to talk to,
   // the desktop. The bell stays on top -- it is the one bead read without a click.
   beads: Object.freeze(["go", "talk", "desktop"]),
@@ -121,13 +123,13 @@ const COMMANDS = Object.freeze([
     label: (ctx = {}) => {
       const waiting = Number(ctx.decisionsWaiting || 0);
       const total = Number(ctx.decisionsTotal || 0);
-      if (waiting > 0) return `Inbox — ${waiting} decision${waiting === 1 ? "" : "s"} waiting`;
-      if (total > 0) return `Inbox — ${total} card${total === 1 ? "" : "s"}`;
-      return "Inbox";
+      if (waiting > 0) return `Decisions — ${waiting} waiting`;
+      if (total > 0) return `Decisions — ${total} card${total === 1 ? "" : "s"}`;
+      return "Decisions";
     },
   }),
   Object.freeze({
-    id: "console.open", label: "Aither Console…", group: "go", icon: "grid",
+    id: "console.open", label: "Open Aither…", group: "go", icon: "grid",
     surfaces: ["tray", "avatar-menu", "palette", "beads", "jumplist"],
   }),
   // 🚩 AitherOS Online -- the Living Desktop held over the real one. It is what the

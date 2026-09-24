@@ -103,7 +103,7 @@ test("a dynamic command with no submenu is DROPPED, never rendered dead", () => 
   const labels = (template) => template.map((row) => row.label).filter(Boolean);
   const bare = labels(buildMenu("tray", () => {}, { submenus: {} }));
   assert.ok(!bare.includes("Characters"), "a roster picker with no roster behind it is a row that does nothing");
-  assert.ok(bare.includes("Aither Console…"), "static rows must still render");
+  assert.ok(bare.includes("Open Aither…"), "static rows must still render");
   const fed = labels(buildMenu("tray", () => {}, { submenus: { "characters.pick": [{ label: "x" }] } }));
   assert.ok(fed.includes("Characters"), "a supplied submenu must render");
 });
@@ -261,9 +261,9 @@ test("the beads are registry rows, and the deck-action door accepts an id", () =
 
 test("counting labels say what is actually waiting", () => {
   const label = (ctx) => byId("inbox.open").label(ctx);
-  assert.equal(label({ decisionsWaiting: 1, decisionsTotal: 3 }), "Inbox — 1 decision waiting");
-  assert.equal(label({ decisionsWaiting: 0, decisionsTotal: 3 }), "Inbox — 3 cards");
-  assert.equal(label({}), "Inbox");
+  assert.equal(label({ decisionsWaiting: 1, decisionsTotal: 3 }), "Decisions — 1 waiting");
+  assert.equal(label({ decisionsWaiting: 0, decisionsTotal: 3 }), "Decisions — 3 cards");
+  assert.equal(label({}), "Decisions");
 });
 
 test("every command either has a handler or a dynamic submenu", () => {

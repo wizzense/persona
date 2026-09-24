@@ -31,6 +31,8 @@ if (href.includes("settings.html")) {
   require("./sessions-preload.cjs");
 } else if (href.includes("stage.html")) {
   require("./stage-preload.cjs");
+} else if (href.includes("home.html")) {
+  require("./home-preload.cjs");
 } else if (href.includes("cast.html")) {
   require("./cast-preload.cjs");
 } else if (!href.includes("console.html")) {

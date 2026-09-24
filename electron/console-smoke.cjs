@@ -53,6 +53,11 @@ const EXPECTED_BRIDGE = {
   stage: "aitherStage",
   // The Cast pane (cast.html / cast-preload.cjs): who appears and how they sound.
   cast: "aitherCast",
+  // These three were missing, so the smoke failed on panes that worked -- an arm
+  // that is red for the wrong reason hides the day it is red for the right one.
+  home: "aitherHome",
+  settings: "settingsBridge",
+  characters: "deskBridge",
 };
 
 async function run() {
@@ -134,6 +139,19 @@ async function run() {
   check("shell has its bridge", shell.bridge === "object", `typeof = ${shell.bridge}`);
   check("rail lists every pane", shell.tabs === PANES.length,
     `${shell.tabs} tabs vs ${PANES.length} panes`);
+
+  // The owner's screenshot (2026-09-23) had CONTROL and PRESENCE printed twice. Read
+  // the RENDERED rail: every place once, and the selected pane's place highlighted.
+  const rail = await win.webContents.executeJavaScript(`(() => {
+    const names = [...document.querySelectorAll('.place .name')].map((n) => n.textContent);
+    const on = document.querySelector('.place[aria-selected="true"]');
+    return { names, on: on ? on.dataset.place : '' };
+  })()`);
+  const { PLACES } = require("./console-window.cjs");
+  check("the rail shows each place exactly once",
+    rail.names.length === PLACES.length && new Set(rail.names).size === rail.names.length,
+    JSON.stringify(rail.names));
+  check("the pane asked for lights up its PLACE", rail.on === "avatars", `selected place = ${rail.on}`);
 
   // 2. Each framed pane loads AND sees its own bridge. This is the assertion no
   //    static test can make: nodeIntegrationInSubFrames either injected the

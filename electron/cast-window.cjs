@@ -112,6 +112,26 @@ function castHandlers(getImpl) {
       }
     },
 
+    // Async too: a preview waits on the voice service. Only the voice id crosses
+    // from the renderer -- the line is fixed in main, so this door cannot be
+    // used to make the desk say arbitrary words.
+    "desk:cast-preview": async (_event, voice) => {
+      const id = typeof voice === "string" ? voice.trim() : "";
+      if (!id || id.length > 40 || !/^[A-Za-z0-9-]+$/.test(id)) {
+        return { ok: false, error: "preview: a voice id is required" };
+      }
+      try {
+        const fn = impl().preview;
+        if (typeof fn !== "function") return { ok: false, error: "preview: not available" };
+        const result = await fn({ voice: id });
+        if (!isPlainObject(result)) return { ok: false, error: "preview: the voice service did not answer" };
+        // speakAloud reports a refusal as {ok:false, reason}; the pane reads `error`.
+        return result.ok === false && !result.error ? { ...result, error: `preview: ${result.reason || "not spoken"}` } : result;
+      } catch (error) {
+        return { ok: false, error: `preview: ${String((error && error.message) || error)}` };
+      }
+    },
+
     "desk:cast-set-actor": (_event, key, patch) =>
       invalidArg("setActor", key, "key") ||
       call("setActor", () => impl().setActor?.({ key: String(key), patch: isPlainObject(patch) ? patch : {} })),

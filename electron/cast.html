@@ -2,200 +2,181 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>Cast</title>
+<title>Voices</title>
 <link rel="stylesheet" href="aither-tokens.css" />
+<link rel="stylesheet" href="aither-ui.css" />
 <style>
-  /* Colours, type and scrollbars come from aither-tokens.css -- GENERATED from Veil's
-     tokens by AitherOS/dev/tools/gen_desk_tokens.py. This pane used to re-declare its
-     own --bg/--panel/--line/--fg palette by hand; five panes did, none matched the
-     family. What stays here is only what this pane MEANS by a colour. */
-  :root {
-    --red: var(--destructive);
-    --amber: var(--warning);
-  }
-  * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
-    font: 13px/1.45 var(--font-sans); }
-  body { display: grid; grid-template-rows: 44px auto 1fr auto; height: 100vh; }
+  /* Components come from aither-ui.css, colours from aither-tokens.css. What stays
+     here is LAYOUT only -- widths and one collapse rule -- never a restyled component. */
 
-  .bar { display: flex; align-items: center; gap: 10px; padding: 0 14px;
-    border-bottom: 1px solid var(--line); }
-  /* ONE chrome. Inside the console the shell's bar already names this pane, so the
-     pane's own title is the double header from the owner's 2026-09-20 screenshots.
-     console-preload.cjs sets .embedded per frame; detached into its own window the
-     page is not embedded and keeps its title, because there it is the only one. */
+  /* ONE chrome: inside the console the shell's bar already names this pane.
+     console-preload.cjs sets .embedded per frame; detached, the title stays. */
   .embedded .bar .title { display: none; }
-  .bar .title { font-weight: 600; }
-  .bar .state { color: var(--muted); font-size: 12px; flex: 1; min-width: 0;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .chip { appearance: none; border: 1px solid var(--line); background: var(--btn);
-    color: var(--muted); border-radius: 6px; padding: 5px 10px; cursor: pointer;
-    font: 12px/1.2 system-ui; }
-  .chip:hover { background: var(--btn-hi); color: var(--fg); }
-  .chip.on { color: var(--fg); border-color: color-mix(in oklch, var(--brand), var(--background) 60%); }
-  .chip.danger:hover { color: var(--red); border-color: color-mix(in oklch, var(--bad), var(--background) 62%); }
-  .chip.small { padding: 3px 8px; font-size: 11px; }
+  [hidden] { display: none !important; }
 
-  .banner { display: none; padding: 8px 14px; background: color-mix(in oklch, var(--bad), var(--background) 84%); color: var(--red);
-    border-bottom: 1px solid color-mix(in oklch, var(--bad), var(--background) 62%); font-size: 12px; }
-  .banner.show { display: block; }
-  .banner code { background: color-mix(in oklch, var(--bad), var(--background) 90%); padding: 1px 5px; border-radius: 4px; }
-  .banner details { margin-top: 4px; color: var(--amber); }
-  .banner summary { cursor: pointer; }
+  /* The "All voices" card: three controls side by side, wrapping on a narrow pane. */
+  .master { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    align-items: end; }
+  .voice-pick { display: flex; gap: 6px; min-width: 200px; }
+  .fader { display: flex; align-items: center; gap: 8px; min-width: 150px; }
+  .fader .ui-note { min-width: 72px; white-space: nowrap; }
 
-  #content { overflow-y: auto; min-height: 0; }
-  section { border-bottom: 1px solid var(--line); padding: 12px 14px; }
-  section h2 { margin: 0 0 4px; font-size: 12px; letter-spacing: .04em;
-    text-transform: uppercase; color: var(--muted); display: flex; align-items: center; gap: 8px; }
-  section .lede { color: var(--muted); font-size: 11px; margin: 0 0 10px; }
-
-  .row { display: flex; align-items: flex-start; gap: 10px; padding: 8px 0;
-    border-bottom: 1px solid var(--btn); flex-wrap: wrap; }
-  .row:last-child { border-bottom: none; }
-  .row .who { flex: 1 1 160px; min-width: 140px; display: grid; gap: 2px; }
-  .row .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .row .sub { color: var(--muted); font-size: 11px; }
-  .row .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; flex: 2 1 320px; }
-  .field { display: grid; gap: 2px; }
-  .field label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
-  .field .from { font-size: 10px; color: var(--muted); }
-  /* The physics faders: one stacked block per body, each fader with its own readout. */
-  .field.physics { flex: 1 1 100%; gap: 4px; }
-  .field.physics .controls { flex-wrap: nowrap; }
-  .field.physics .controls .from { min-width: 110px; }
-  select, input[type=text], input[type=number], textarea { background: var(--btn); color: var(--fg);
-    border: 1px solid var(--line); border-radius: 5px; padding: 4px 6px; font: 12px system-ui; }
-  select { min-width: 110px; }
-  input[type=number] { width: 68px; }
-  textarea { width: 100%; min-width: 220px; resize: vertical; font: inherit; box-sizing: border-box; }
-  input[type=range] { width: 130px; vertical-align: middle; accent-color: var(--fg); }
-  .ck { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--muted); }
-  .tag { font-size: 10px; border-radius: 999px; padding: 1px 7px; border: 1px solid var(--line);
-    color: var(--muted); white-space: nowrap; }
-  .tag.warn { color: var(--amber); border-color: color-mix(in oklch, var(--warn), var(--background) 66%); }
-  .problem { font-size: 10px; color: var(--red); }
-  .empty { color: var(--muted); padding: 6px 0; font-size: 12px; }
-  .sample { color: var(--muted); font-size: 11px; font-style: italic; max-width: 320px;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px 14px; }
-
-  footer { border-top: 1px solid var(--line); padding: 8px 14px; color: var(--muted);
-    font-size: 11px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-  footer .err { color: var(--red); flex: 1; min-width: 200px; }
-  footer .path { font-size: 10px; color: var(--muted); overflow: hidden; text-overflow: ellipsis;
-    white-space: nowrap; max-width: 380px; }
+  /* Advanced cards collapse to their heading. */
+  details.ui-card > summary { cursor: pointer; list-style: none; }
+  details.ui-card > summary::-webkit-details-marker { display: none; }
+  details.ui-card:not([open]) > summary { margin-bottom: 0; }
+  .actor-adv { flex-direction: column; align-items: stretch; }
 </style>
 </head>
-<body>
-  <div class="bar">
-    <span class="title">Cast</span>
-    <span class="state" id="state">reading the cast…</span>
-    <button class="chip" id="capture">Capture current arrangement</button>
-    <button class="chip" id="refresh">Refresh</button>
-  </div>
+<body class="ui">
+  <header class="ui-head bar">
+    <h1 class="title">Voices</h1>
+    <span class="ui-sub" id="state">reading the cast…</span>
+    <span class="ui-grow"></span>
+    <span class="ui-note ui-bad" id="err" role="status"></span>
+    <button class="ui-btn ui-ghost ui-small" id="refresh">Refresh</button>
+  </header>
 
-  <div class="banner" id="banner">
-    <div id="bannerText"></div>
-    <details id="problemsDetails">
-      <summary id="problemsSummary">problems</summary>
-      <div id="problemsList"></div>
-    </details>
-  </div>
+  <main class="ui-body">
+    <div class="ui-stack">
+      <div class="ui-card" id="banner" hidden>
+        <div class="ui-note ui-bad" id="bannerText"></div>
+        <details id="problemsDetails">
+          <summary class="ui-note" id="problemsSummary">problems</summary>
+          <div id="problemsList"></div>
+        </details>
+      </div>
 
-  <div id="content">
-    <section id="onStageSection">
-      <h2>On stage / known actors</h2>
-      <p class="lede">Every body currently standing, plus every actor the file names even when it
-        is not on stage right now. Each control writes straight to <code>cast.json</code> —
-        ASSIGN here never SWITCHES the resident's own model the way the tray menu does.</p>
-      <div id="onStageList"></div>
-    </section>
+      <section class="ui-card" id="allVoicesCard">
+        <div class="ui-card-head">
+          <h2>All voices</h2>
+          <span class="ui-grow"></span>
+          <span class="ui-badge" id="masterBadge"></span>
+        </div>
+        <div class="master" id="allVoices"></div>
+      </section>
 
-    <section id="whoMaySection">
-      <h2>Who may speak</h2>
-      <p class="lede">Origins the room has actually seen, whether or not the file grants them
-        anything yet. An origin nobody configured is audible by default unless it is a relay
-        channel (those start silent) — this list is how a legitimately new agent stops being
-        mysteriously mute in one click.</p>
-      <div id="whoMayList"></div>
-    </section>
+      <section class="ui-card" id="speakersCard">
+        <div class="ui-card-head">
+          <h2>Who speaks</h2>
+          <span class="ui-grow"></span>
+          <span class="ui-note" id="speakersCount"></span>
+        </div>
+        <p class="ui-lede">Everyone on stage (the resident first), then every origin the room has
+          heard. Pick a voice by name, press ▶ to hear it, and switch a speaker off to silence it —
+          its speech bubbles keep showing the words.</p>
+        <table class="ui-table">
+          <thead>
+            <tr><th>Speaker</th><th>Voice</th><th></th><th>Volume</th><th>Speaks</th><th></th></tr>
+          </thead>
+          <tbody id="speakers"></tbody>
+        </table>
+      </section>
 
-    <section id="stageSection">
-      <h2>Stage defaults</h2>
-      <p class="lede">Unset fields fall through to the built-in (shown as placeholder). The ✕
-        button clears a field back to unset, distinct from typing a value that happens to match
-        the default.</p>
-      <div class="grid" id="stageGrid"></div>
-    </section>
+      <details class="ui-card" id="bodiesCard">
+        <summary class="ui-card-head">
+          <h2>Advanced · Bodies &amp; characters</h2>
+          <span class="ui-grow"></span>
+          <button class="ui-btn ui-small" id="capture">Capture current arrangement</button>
+        </summary>
+        <p class="ui-lede">Which character, speed, presence and physics each body gets. Every control
+          writes straight to <code>cast.json</code> — it never SWITCHES the resident's own model the
+          way the tray menu does.</p>
+        <div class="ui-list" id="bodiesList"></div>
+      </details>
 
-    <section id="contentSection">
-      <h2>What this desk will show</h2>
-      <p class="lede">Mature characters need an adult opt-in <em>and</em> a verified age.
-        You can turn them on from here — the desk asks the platform, because only the
-        platform can attest the age half — and you can always turn them off, even with
-        the fleet down. Under that, this desk has its own ceiling, and a character nobody
-        has rated stays hidden with the mature ones until you rate the roster.</p>
-      <div class="grid" id="contentGrid"></div>
-      <div id="contentHidden"></div>
-    </section>
+      <details class="ui-card" id="voiceServiceCard">
+        <summary class="ui-card-head"><h2>Advanced · Voice service</h2></summary>
+        <p class="ui-lede">Speed, length and the AitherVoice endpoint the desk dials. Unset fields fall
+          through to the built-in (shown as placeholder); Reset clears a field back to unset.</p>
+        <div class="ui-grid" id="voiceGrid"></div>
+      </details>
 
-    <section id="physicsSection">
-      <h2>Physics for everyone</h2>
-      <p class="lede">How much every body moves — hair, tails, cloth and the body's own soft chains.
-        Each fader multiplies what the model's author set (×1 = as authored), so the same
-        setting tames every model in the roster. A per-actor Physics block on a row above
-        overrides these for that body only. Writes <code>defaults.physics</code>.</p>
-      <div class="grid" id="physicsGrid"></div>
-    </section>
+      <details class="ui-card" id="filterCard">
+        <summary class="ui-card-head"><h2>Advanced · Speech filter</h2></summary>
+        <p class="ui-lede">What is cut from a message before it is spoken.</p>
+        <div class="ui-grid" id="filterGrid"></div>
+      </details>
 
-    <section id="voiceSection">
-      <h2>Voice defaults</h2>
-      <p class="lede">The endpoint host/port/path is what the desk dials for AitherVoice — today
-        it is hardcoded to 127.0.0.1:8084 in code; here it is a setting.</p>
-      <div class="grid" id="voiceGrid"></div>
-    </section>
+      <details class="ui-card" id="channelsCard">
+        <summary class="ui-card-head"><h2>Advanced · Channels</h2></summary>
+        <p class="ui-lede">Relay channels start silent until named voiced here. Presence set on a
+          channel applies to everyone speaking in it unless an actor overrides it.</p>
+        <div class="ui-list" id="channelsList"></div>
+      </details>
 
-    <section id="deskSection">
-      <h2>Desk behaviour</h2>
-      <p class="lede">Which backend the Command window's agent runs on, what it is told, and
-        whether the desk looks at images you drop on it. Each was an environment variable or a
-        constant in code; the small print under a field says where its current value comes from.</p>
-      <div class="grid" id="deskGrid"></div>
-    </section>
+      <details class="ui-card" id="stageCard">
+        <summary class="ui-card-head"><h2>Advanced · Stage</h2></summary>
+        <p class="ui-lede">How many bodies stand, how long they stay, how fast the room is read.</p>
+        <div class="ui-grid" id="stageGrid"></div>
+      </details>
 
-    <section id="syncSection">
-      <h2>Sync to your other machines</h2>
-      <p class="lede">Off until you turn it on. Point it at a file in a folder you already sync, or
-        at a profile URL. This section itself never leaves this machine — it holds local paths.</p>
-      <div class="state" id="syncState"></div>
-      <div class="grid" id="syncGrid"></div>
-    </section>
-  </div>
+      <details class="ui-card" id="contentCard">
+        <summary class="ui-card-head"><h2>Advanced · What this desk will show</h2></summary>
+        <p class="ui-lede">Mature characters need an adult opt-in <em>and</em> a verified age. Turning
+          them on asks the platform — only it can attest the age half — and turning them off always
+          works, even with the fleet down. Under that, this desk has its own ceiling, and a character
+          nobody has rated stays hidden with the mature ones until you rate the roster.</p>
+        <div class="ui-grid" id="contentGrid"></div>
+        <div id="contentHidden"></div>
+      </details>
 
-  <footer>
-    <span class="err" id="err"></span>
-    <span class="path" id="castPath"></span>
-  </footer>
+      <details class="ui-card" id="physicsCard">
+        <summary class="ui-card-head"><h2>Advanced · Physics for everyone</h2></summary>
+        <p class="ui-lede">How much every body moves. Each fader multiplies what the model's author set
+          (×1 = as authored). A body's own Physics under Bodies overrides these for that body only.</p>
+        <div id="physicsGrid"></div>
+      </details>
+
+      <details class="ui-card" id="deskCard">
+        <summary class="ui-card-head"><h2>Advanced · Desk behaviour</h2></summary>
+        <p class="ui-lede">Which backend the Command window's agent runs on, what it is told, and whether
+          the desk looks at images dropped on it. The small print says where a value comes from.</p>
+        <div class="ui-grid" id="deskGrid"></div>
+      </details>
+
+      <details class="ui-card" id="syncCard">
+        <summary class="ui-card-head"><h2>Advanced · Sync to your other machines</h2></summary>
+        <p class="ui-lede">Off until you turn it on. Point it at a file in a folder you already sync, or
+          at a profile URL. This section itself never leaves this machine — it holds local paths.</p>
+        <p class="ui-note" id="syncState"></p>
+        <div class="ui-grid" id="syncGrid"></div>
+      </details>
+
+      <p class="ui-note ui-mono" id="castPath"></p>
+    </div>
+  </main>
 
 <script>
 "use strict";
 
-// The Cast pane. It authors cast.json through window.aitherCast; it holds no
-// state of its own beyond the last describe() result. Every write re-reads
-// (the ipc handler re-reads cast.json fresh — see cast-config.cjs's write())
-// so two open Cast panes never clobber each other on the fields they did NOT
-// touch, only on the one they both edited at once (last write wins, same as
-// every other settings file in this tree).
+// The Voices page. It authors cast.json through window.aitherCast and holds no
+// state beyond the last describe() result. Every write re-reads the file in main
+// (cast-config's write()), so two open panes only clobber the one field both
+// edited at once -- the same rule as every other settings file in this tree.
 
 const PRESENCE_LEVELS = ["off", "quiet", "normal", "chatty"];
-const VOICES = [
-  // AitherVoice short names (nova/shimmer = Aria/Jenny, US women; alloy/echo/onyx = US men; fable = Ryan, GB man).
-  "nova", "shimmer", "alloy", "echo", "onyx", "fable",
-  // Any `en-*Neural` id passes straight through to edge-tts; these are the US women.
-  "en-US-AnaNeural", "en-US-JennyNeural", "en-US-AriaNeural", "en-US-MichelleNeural", "en-US-EmmaNeural", "en-US-AvaNeural",
+
+// Named voices, id -> what a human hears. The id is what cast.json stores; the
+// label is the only thing the owner should ever have to read.
+const VOICE_CHOICES = [
+  ["nova", "Aria — US woman"],
+  ["shimmer", "Jenny — US woman"],
+  ["en-US-AvaNeural", "Ava — US woman"],
+  ["en-US-EmmaNeural", "Emma — US woman"],
+  ["en-US-AnaNeural", "Ana — US girl"],
+  ["alloy", "Alloy — US man"],
+  ["echo", "Echo — US man"],
+  ["onyx", "Onyx — US man, deep"],
+  ["fable", "Ryan — British man"],
+  ["en-GB-SoniaNeural", "Sonia — British woman"],
 ];
-// Mirrors cast-config.cjs's BUILTIN_STAGE / BUILTIN_VOICE — placeholders only,
+const VOICE_LABEL = new Map(VOICE_CHOICES);
+const OTHER_VOICE = "__other__";
+// "Other…" accepts any edge-tts English neural id; the service passes it straight through.
+const NEURAL_ID = /^en-[A-Za-z]{2,3}-[A-Za-z]+Neural$/;
+
+// Mirrors cast-config.cjs's BUILTIN_STAGE / BUILTIN_VOICE -- placeholders only,
 // never sent unless the owner actually edits the field.
 const STAGE_DEFAULT = { maxBodies: 3, idleSeconds: 600, cooldownSeconds: 20, gapMs: 350, pollMs: 2000, resident: "" };
 const VOICE_DEFAULT = {
@@ -204,9 +185,8 @@ const VOICE_DEFAULT = {
   speechFilterMaxChars: 220, speechFilterAllowCode: false,
 };
 
-// Mirrors cast-config.cjs's BUILTIN_PHYSICS / PHYSICS_FIELDS. Every knob is a
-// multiplier over the model's authored spring values; `jiggle` reaches ONLY
-// the body chains -- chest and hips (useVrmLoader.ts BODY_JIGGLE_CHAIN).
+// Mirrors cast-config.cjs's BUILTIN_PHYSICS. Every knob multiplies the model's
+// authored spring values; `jiggle` reaches ONLY the chest and hip chains.
 const PHYSICS_DEFAULT = { enabled: true, weight: 1, stiffness: 1, damping: 1, jiggle: 1 };
 const PHYSICS_KNOBS = [
   { key: "weight", label: "Weight", max: 3, hint: "how hard hair and tails hang down" },
@@ -225,13 +205,12 @@ function say(message) {
   errEl.textContent = message || "";
 }
 
-/** Every call reports; a verb that failed must not look like one that did
- *  nothing (same rule stage.html's `call` follows). */
+/** Every call reports; a verb that failed must not look like one that did nothing. */
 async function call(promise, what) {
   try {
     const result = await promise;
     if (!result || result.ok !== true) {
-      say((result && result.error) || `${what} did not answer`);
+      say((result && (result.error || result.reason)) || `${what} did not answer`);
       return null;
     }
     say("");
@@ -242,62 +221,15 @@ async function call(promise, what) {
   }
 }
 
+/** Write, then re-read -- the page shows what the FILE says, never what it hoped. */
+function save(promise, what) {
+  return call(promise, what).then(() => refresh());
+}
+
 function numOrNull(value) {
   if (value === "" || value === null || value === undefined) return null;
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
-}
-
-/** The physics faders, shared by every actor row and the "everyone" section.
- *  `resolved` is the effective block (with `from` provenance per knob) and
- *  `own` is the record's OWN physics sub-object -- what a write must carry in
- *  full, because setActor/setDefaults merge one level deep and `physics` is
- *  one value to them. A knob set to null is dropped from `own` (back to the
- *  tier below); the readout is "x1.25", never a percentage, because these are
- *  multipliers over what the model's author chose. Writes on RELEASE only,
- *  like every other fader here. */
-function physicsBlock({ resolved, from, own, onSave }) {
-  const wrap = el("div", "field physics");
-  wrap.appendChild(el("label", null, "Physics"));
-  const effective = { ...PHYSICS_DEFAULT, ...(resolved || {}) };
-  const ownBlock = own && typeof own === "object" ? own : {};
-  const write = (knob, value) => {
-    const next = { ...ownBlock };
-    if (value === null || value === undefined) delete next[knob];
-    else next[knob] = value;
-    onSave(next);
-  };
-
-  const enabledLabel = el("label", "ck");
-  const enabledBox = document.createElement("input");
-  enabledBox.type = "checkbox";
-  enabledBox.checked = effective.enabled !== false;
-  enabledBox.addEventListener("change", () => write("enabled", enabledBox.checked ? null : false));
-  enabledLabel.append(enabledBox, document.createTextNode("moving (off freezes every chain at rest)"));
-  wrap.appendChild(enabledLabel);
-
-  for (const knob of PHYSICS_KNOBS) {
-    const row = el("div", "controls");
-    const input = document.createElement("input");
-    input.type = "range";
-    input.min = "0";
-    input.max = String(knob.max);
-    input.step = "0.05";
-    input.value = String(effective[knob.key]);
-    input.title = knob.hint;
-    const text = () => `${knob.label} ×${Number(input.value).toFixed(2)}`;
-    const readout = el("span", "from", text());
-    input.addEventListener("input", () => { readout.textContent = text(); });
-    input.addEventListener("change", () => write(knob.key, numOrNull(input.value)));
-    const clear = el("button", "chip small", "✕");
-    clear.title = "reset to the tier below";
-    clear.addEventListener("click", () => write(knob.key, null));
-    row.append(input, readout, clear);
-    wrap.appendChild(row);
-    const fromText = from && from[knob.key] && from[knob.key] !== "builtin" ? from[knob.key] : null;
-    if (fromText) wrap.appendChild(el("div", "from", fromText));
-  }
-  return wrap;
 }
 
 function el(tag, className, text) {
@@ -306,6 +238,141 @@ function el(tag, className, text) {
   if (text !== undefined) node.textContent = text;
   return node;
 }
+
+function button(text, className, onClick) {
+  const b = el("button", `ui-btn ${className || ""}`.trim(), text);
+  b.type = "button";
+  b.addEventListener("click", onClick);
+  return b;
+}
+
+/** A labelled field. `help` is the small print under it (usually provenance). */
+function field(labelText, control, help) {
+  const wrap = el("div", "ui-field");
+  wrap.appendChild(el("label", null, labelText));
+  wrap.appendChild(control);
+  if (help) wrap.appendChild(el("div", "ui-help", help));
+  return wrap;
+}
+
+/** An on/off switch; `text` says what ON means. */
+function switchEl(text, checked, onChange) {
+  const label = el("label", "ui-switch");
+  const box = document.createElement("input");
+  box.type = "checkbox";
+  box.checked = checked;
+  box.addEventListener("change", () => onChange(box.checked));
+  label.append(box, el("span", null, text));
+  return label;
+}
+
+function voiceLabel(id) {
+  return VOICE_LABEL.get(id) || id;
+}
+
+/**
+ * The named-voice dropdown. Value = the voice id cast.json stores; label = the
+ * person you will hear. A custom id already in the file is kept as its own
+ * option so the control shows the truth, and "Other…" reveals a text box for any
+ * en-*Neural id. `chosen()` is what ▶ Preview should play right now.
+ */
+function voicePicker({ current, unsetLabel, onPick, name }) {
+  const wrap = el("div", "voice-pick");
+  const select = el("select", "ui-select");
+  select.setAttribute("aria-label", name ? `Voice for ${name}` : "Voice");
+  if (unsetLabel) {
+    const unset = el("option", null, unsetLabel);
+    unset.value = "";
+    select.appendChild(unset);
+  }
+  if (current && !VOICE_LABEL.has(current)) {
+    const custom = el("option", null, `${current} (custom)`);
+    custom.value = current;
+    select.appendChild(custom);
+  }
+  for (const [id, label] of VOICE_CHOICES) {
+    const opt = el("option", null, label);
+    opt.value = id;
+    select.appendChild(opt);
+  }
+  const other = el("option", null, "Other…");
+  other.value = OTHER_VOICE;
+  select.appendChild(other);
+  select.value = current || "";
+
+  const customInput = el("input", "ui-input");
+  customInput.type = "text";
+  customInput.maxLength = 40;
+  customInput.placeholder = "en-US-JennyNeural";
+  customInput.hidden = true;
+
+  select.addEventListener("change", () => {
+    if (select.value === OTHER_VOICE) {
+      customInput.hidden = false;
+      if (typeof customInput.focus === "function") customInput.focus();
+      return;
+    }
+    customInput.hidden = true;
+    onPick(select.value || null);
+  });
+  customInput.addEventListener("change", () => {
+    const id = customInput.value.trim();
+    if (!id) return;
+    if (!NEURAL_ID.test(id)) {
+      say(`"${id}" is not an English neural voice id (e.g. en-US-JennyNeural)`);
+      return;
+    }
+    onPick(id);
+  });
+  wrap.append(select, customInput);
+  const chosen = () => {
+    if (select.value !== OTHER_VOICE) return select.value;
+    const id = customInput.value.trim();
+    return NEURAL_ID.test(id) ? id : "";
+  };
+  return { node: wrap, select, customInput, chosen };
+}
+
+/** ▶ -- plays the sample line in `voice` through the resident's mouth. */
+function previewButton(getVoice) {
+  const b = button("▶", "ui-small", async () => {
+    const voice = getVoice();
+    if (!voice) {
+      say("Pick a voice to preview first");
+      return;
+    }
+    b.disabled = true;
+    try {
+      await call(window.aitherCast.preview(voice), "Preview");
+    } finally {
+      b.disabled = false;
+    }
+  });
+  b.title = "Preview this voice";
+  b.setAttribute("aria-label", "Preview voice");
+  return b;
+}
+
+/** A fader. The readout follows the thumb live (`input`); the WRITE happens on
+ *  release (`change`) -- a write per pixel of drag would rewrite cast.json, and
+ *  wake its watcher, dozens of times a second. */
+function fader({ value, min, max, step, readout, onSave, label }) {
+  const wrap = el("div", "fader");
+  const input = el("input", "ui-range");
+  input.type = "range";
+  input.min = String(min);
+  input.max = String(max);
+  input.step = String(step);
+  input.value = String(value);
+  if (label) input.setAttribute("aria-label", label);
+  const text = el("span", "ui-note", readout(Number(input.value)));
+  input.addEventListener("input", () => { text.textContent = readout(Number(input.value)); });
+  input.addEventListener("change", () => onSave(numOrNull(input.value)));
+  wrap.append(input, text);
+  return { node: wrap, input, text };
+}
+
+const pct = (v) => `${Math.round(Number(v) * 100)}%`;
 
 // ─── banner ──────────────────────────────────────────────────────────────
 
@@ -316,35 +383,227 @@ function renderBanner() {
   const path = last && last.snapshot && last.snapshot.meta && last.snapshot.meta.path;
   castPathEl.textContent = path ? `cast: ${path}` : "";
   if (!error && problems.length === 0) {
-    banner.classList.remove("show");
+    banner.hidden = true;
     return;
   }
-  banner.classList.add("show");
-  const text = document.getElementById("bannerText");
-  text.textContent = error
+  banner.hidden = false;
+  document.getElementById("bannerText").textContent = error
     ? `cast.json problem${path ? ` (${path})` : ""}: ${error}`
     : `${problems.length} field${problems.length === 1 ? "" : "s"} in cast.json did not validate and fell through to the next tier.`;
-  const summary = document.getElementById("problemsSummary");
-  summary.textContent = `${problems.length} problem${problems.length === 1 ? "" : "s"}`;
+  document.getElementById("problemsSummary").textContent = `${problems.length} problem${problems.length === 1 ? "" : "s"}`;
   const list = document.getElementById("problemsList");
   list.replaceChildren();
   for (const p of problems) {
-    list.appendChild(el("div", "problem", `${p.path}: ${JSON.stringify(p.value)} — ${p.reason}`));
+    list.appendChild(el("div", "ui-note ui-bad", `${p.path}: ${JSON.stringify(p.value)} — ${p.reason}`));
   }
 }
 
-// ─── on stage / known actors ─────────────────────────────────────────────
+// ─── All voices ──────────────────────────────────────────────────────────
+
+function renderAllVoices() {
+  const host = document.getElementById("allVoices");
+  host.replaceChildren();
+  const voice = (last && last.snapshot && last.snapshot.voice) || {};
+  const muted = voice.muted === true;
+  const badge = document.getElementById("masterBadge");
+  badge.textContent = muted ? "Muted" : "On";
+  badge.className = `ui-badge ${muted ? "ui-warn" : "ui-ok"}`;
+
+  // ON = voices play. The file stores the inverse (`voice.muted`) -- the exact
+  // key cast-config reads; a `mute` key would be dropped into problems[] silently.
+  host.appendChild(field("Voices",
+    switchEl(muted ? "Off — everyone is silent" : "On — everyone may speak", !muted,
+      (on) => { void save(window.aitherCast.setVoice({ muted: !on }), "Voices"); }),
+    "Off silences the whole room; speech bubbles keep showing the words."));
+
+  const master = fader({
+    value: voice.volume == null ? VOICE_DEFAULT.volume : voice.volume,
+    min: 0, max: 1, step: 0.05, readout: pct, label: "Master volume",
+    onSave: (v) => { void save(window.aitherCast.setVoice({ volume: v }), "Volume"); },
+  });
+  master.node.appendChild(button("Reset", "ui-ghost ui-small", () => {
+    void save(window.aitherCast.setVoice({ volume: null }), "Volume");
+  }));
+  host.appendChild(field("Master volume", master.node, "Every speaker's own fader multiplies this."));
+
+  const picker = voicePicker({
+    current: voice.defaultVoice || "",
+    unsetLabel: `Built-in (${voiceLabel(VOICE_DEFAULT.defaultVoice)})`,
+    name: "everyone",
+    onPick: (id) => { void save(window.aitherCast.setVoice({ defaultVoice: id }), "Default voice"); },
+  });
+  picker.node.appendChild(previewButton(() => picker.chosen() || VOICE_DEFAULT.defaultVoice));
+  host.appendChild(field("Default voice", picker.node, "Anyone without a voice of their own uses this."));
+}
+
+// ─── Who speaks ──────────────────────────────────────────────────────────
+
+/** One list of speakers: on stage (resident first, as describe() orders it),
+ *  then origins the room has heard (newest first), then actors the file names
+ *  that are neither. Keyed by origin, so nobody appears twice. */
+function speakers() {
+  const out = [];
+  const byKey = new Set();
+  const snapshot = (last && last.snapshot) || {};
+  const actors = snapshot.actors || {};
+  const seen = (last && last.seen) || {};
+  const push = (row) => {
+    if (!row.key || byKey.has(row.key)) return;
+    byKey.add(row.key);
+    out.push({ ...row, record: actors[row.key] || null });
+  };
+  for (const row of (last && last.onStage) || []) {
+    const name = (row.resolution && row.resolution.displayName) || row.agent || row.actorId || row.origin;
+    push({
+      key: row.origin,
+      // WHO first, body second -- never the VRM's file name as the headline.
+      title: row.resident ? `${name || "aither"} (resident)` : name,
+      meta: [row.resident && row.character ? `body ${row.character}` : null, row.actorKind, row.actorId, row.slotId]
+        .filter(Boolean).join(" · "),
+      tag: row.resident ? "resident" : "on stage",
+      resolution: row.resolution || null,
+      resident: row.resident === true,
+      kind: row.actorKind,
+      onStage: row,
+    });
+  }
+  const seenKeys = Object.keys(seen)
+    .sort((a, b) => String(seen[b].lastSeen || "").localeCompare(String(seen[a].lastSeen || "")));
+  for (const key of seenKeys) {
+    const s = seen[key] || {};
+    const bits = [s.kind, s.channel].filter(Boolean);
+    if (s.count) bits.push(`heard ${s.count}×`);
+    if (s.lastSeen) bits.push(`last ${s.lastSeen}`);
+    push({ key, title: (actors[key] && actors[key].displayName) || key, meta: bits.join(" · "), tag: "heard",
+      sample: s.sample || "", kind: s.kind, resolution: null });
+  }
+  for (const key of Object.keys(actors)) {
+    push({ key, title: actors[key].displayName || key, meta: key, tag: "configured", resolution: null });
+  }
+  return out;
+}
+
+/** Does this speaker talk? speak:false or presence off/quiet silences it --
+ *  the same three verdicts cast-config's resolver returns as `voiced:false`.
+ *  A relay origin nobody configured starts silent. */
+function speaksNow(sp) {
+  const src = sp.resolution || sp.record || {};
+  if (src.speak === false) return false;
+  if (src.presence === "off" || src.presence === "quiet") return false;
+  if (!sp.resolution && !sp.record && sp.kind === "relay") return false;
+  return true;
+}
+
+function audibleBadge(sp) {
+  if (sp.resolution) {
+    return sp.resolution.voiced === false
+      ? el("span", "ui-badge ui-warn", sp.resolution.voicedReason || "not audible")
+      : el("span", "ui-badge ui-ok", "audible");
+  }
+  // Not resolved live: this describes the DEFAULT, not a verdict.
+  return el("span", "ui-badge", sp.kind === "relay" ? "silent by default (relay)" : "audible by default");
+}
+
+function speakerRow(sp) {
+  const tr = el("tr");
+  tr.setAttribute("data-key", sp.key);
+  const res = sp.resolution || {};
+  const own = sp.record || {};
+
+  const who = el("td");
+  who.appendChild(el("div", "ui-title", sp.title));
+  if (sp.meta) who.appendChild(el("div", "ui-meta ui-note", sp.meta));
+  if (sp.sample) who.appendChild(el("div", "ui-note", `“${sp.sample.slice(0, 80)}”`));
+  const badges = el("div", "ui-row");
+  badges.append(el("span", "ui-badge", sp.tag), audibleBadge(sp));
+  who.appendChild(badges);
+  for (const p of (Array.isArray(res.problems) ? res.problems : [])) {
+    who.appendChild(el("div", "ui-note ui-bad", `${p.path}: ${p.reason}`));
+  }
+  tr.appendChild(who);
+
+  // Voice: the actor's OWN override; unset = whatever the tiers below resolve.
+  const resolvedVoice = res.voice || null;
+  const picker = voicePicker({
+    current: own.voice || "",
+    unsetLabel: resolvedVoice && !own.voice ? `Automatic (${voiceLabel(resolvedVoice)})` : "Automatic",
+    name: sp.title,
+    onPick: (id) => { void save(window.aitherCast.setActor(sp.key, { voice: id }), "Voice"); },
+  });
+  const voiceCell = el("td");
+  voiceCell.appendChild(picker.node);
+  if (res.voiceFrom && !own.voice) voiceCell.appendChild(el("div", "ui-note", `from ${res.voiceFrom}`));
+  tr.appendChild(voiceCell);
+
+  const previewCell = el("td");
+  const defaultVoice = (last && last.snapshot && last.snapshot.voice && last.snapshot.voice.defaultVoice)
+    || VOICE_DEFAULT.defaultVoice;
+  previewCell.appendChild(previewButton(() => picker.chosen() || resolvedVoice || defaultVoice));
+  tr.appendChild(previewCell);
+
+  // 0..200%: voices are not equally loud at the source, so a quiet one can be
+  // boosted to MATCH. It multiplies the master; the readout says what PLAYS.
+  const master = typeof res.masterVolume === "number" ? res.masterVolume
+    : (last && last.snapshot && last.snapshot.voice && typeof last.snapshot.voice.volume === "number"
+      ? last.snapshot.voice.volume : 1);
+  const roomMuted = res.muted === true || (last && last.snapshot && last.snapshot.voice && last.snapshot.voice.muted === true);
+  const volumeValue = res.volume != null ? res.volume : (own.volume != null ? own.volume : 1);
+  const vol = fader({
+    value: volumeValue, min: 0, max: 2, step: 0.05, label: `Volume for ${sp.title}`,
+    readout: (v) => (roomMuted ? `${pct(v)} (muted)` : `${pct(v)} → ${pct(v * master)}`),
+    onSave: (v) => { void save(window.aitherCast.setActor(sp.key, { volume: v }), "Volume"); },
+  });
+  const volCell = el("td");
+  volCell.appendChild(vol.node);
+  if (res.volumeFrom) volCell.appendChild(el("div", "ui-note", `from ${res.volumeFrom}`));
+  tr.appendChild(volCell);
+
+  // OFF = muteOrigin (speak:false, the body stays); ON = reveal, which also
+  // lifts a presence off/quiet grant -- one switch, both kinds of silence.
+  const speaks = speaksNow(sp);
+  const speakCell = el("td");
+  speakCell.appendChild(switchEl(speaks ? "Speaks" : "Silenced", speaks, (on) => {
+    void save(on ? window.aitherCast.reveal(sp.key) : window.aitherCast.muteOrigin(sp.key), on ? "Unmute" : "Silence");
+  }));
+  tr.appendChild(speakCell);
+
+  const resetCell = el("td");
+  const reset = button("Reset", "ui-ghost ui-small", () => {
+    void save(window.aitherCast.setActor(sp.key, { voice: null }), "Reset voice");
+  });
+  reset.title = "Drop this speaker's own voice; it goes back to Automatic";
+  reset.disabled = !own.voice;
+  resetCell.appendChild(reset);
+  tr.appendChild(resetCell);
+  return tr;
+}
+
+function renderSpeakers() {
+  const body = document.getElementById("speakers");
+  body.replaceChildren();
+  const rows = speakers();
+  document.getElementById("speakersCount").textContent = rows.length ? `${rows.length} speaker${rows.length === 1 ? "" : "s"}` : "";
+  if (rows.length === 0) {
+    const tr = el("tr");
+    const td = el("td", "ui-empty", "Nobody is on stage and nothing has spoken into this desk yet.");
+    td.setAttribute("colspan", "6");
+    tr.appendChild(td);
+    body.appendChild(tr);
+    return;
+  }
+  for (const sp of rows) body.appendChild(speakerRow(sp));
+}
+
+// ─── Advanced: bodies & characters ───────────────────────────────────────
 
 function rosterSelect(current) {
-  const select = document.createElement("select");
+  const select = el("select", "ui-select");
   const none = el("option", null, "(unset — hashed)");
   none.value = "";
   select.appendChild(none);
   const roster = (last && last.roster) || [];
-  // A configured character that fell out of the safe roster (content rating
-  // flipped, or the model is missing) is still offered here as its OWN option
-  // so the field shows what is actually in the file rather than silently
-  // hiding it — the row's provenance/problem line says why it is not taking.
+  // A configured character that fell out of the safe roster is still offered as
+  // its OWN option, so the field shows what is in the file rather than hiding it.
   const names = current && !roster.includes(current) ? [current, ...roster] : roster;
   for (const name of names) {
     const opt = el("option", null, name);
@@ -355,279 +614,134 @@ function rosterSelect(current) {
   return select;
 }
 
-function fieldBlock(labelText, control, fromText) {
-  const field = el("div", "field");
-  const label = el("label", null, labelText);
-  field.appendChild(label);
-  field.appendChild(control);
-  if (fromText) field.appendChild(el("div", "from", fromText));
-  return field;
+/** The physics faders, shared by every body and "everyone". `own` is the
+ *  record's OWN physics sub-object -- a write must carry it in full, because
+ *  setActor/setDefaults merge one level deep and `physics` is one value to them.
+ *  A knob set to null is dropped (back to the tier below). */
+function physicsBlock({ resolved, from, own, onSave }) {
+  const wrap = el("div", "ui-field");
+  wrap.appendChild(el("label", null, "Physics"));
+  const effective = { ...PHYSICS_DEFAULT, ...(resolved || {}) };
+  const ownBlock = own && typeof own === "object" ? own : {};
+  const write = (knob, value) => {
+    const next = { ...ownBlock };
+    if (value === null || value === undefined) delete next[knob];
+    else next[knob] = value;
+    onSave(next);
+  };
+  wrap.appendChild(switchEl("moving (off freezes every chain at rest)", effective.enabled !== false,
+    (on) => write("enabled", on ? null : false)));
+  for (const knob of PHYSICS_KNOBS) {
+    const f = fader({
+      value: effective[knob.key], min: 0, max: knob.max, step: 0.05, label: knob.label,
+      readout: (v) => `${knob.label} ×${Number(v).toFixed(2)}`,
+      onSave: (v) => write(knob.key, v),
+    });
+    f.input.title = knob.hint;
+    f.node.appendChild(button("Reset", "ui-ghost ui-small", () => write(knob.key, null)));
+    wrap.appendChild(f.node);
+    const fromText = from && from[knob.key] && from[knob.key] !== "builtin" ? from[knob.key] : null;
+    if (fromText) wrap.appendChild(el("div", "ui-help", fromText));
+  }
+  return wrap;
 }
 
-/** One editable actor row, shared by the on-stage list and the "known but not
- *  on stage" list — the ONLY difference is whether a live `resolution` (with
- *  provenance) exists or the raw `record` from snapshot.actors is all there is. */
-function actorRow({ key, title, subtitle, resolution, record, tag, resident = false }) {
-  const row = el("div", "row");
+function bodyRow({ key, title, meta, resolution, record, resident }) {
+  const item = el("div", "ui-item actor-adv");
+  const head = el("div", "ui-row");
+  const who = el("div", "ui-grow");
+  who.appendChild(el("div", "ui-title", title));
+  if (meta) who.appendChild(el("div", "ui-meta", meta));
+  head.appendChild(who);
+  head.appendChild(button("Clear override", "ui-danger ui-small", () => {
+    void save(window.aitherCast.clearActor(key), "Clear");
+  }));
+  item.appendChild(head);
 
-  const who = el("div", "who");
-  who.appendChild(el("div", "name", title));
-  if (subtitle) who.appendChild(el("div", "sub", subtitle));
-  if (tag) {
-    const t = el("span", "tag", tag);
-    who.appendChild(t);
+  const grid = el("div", "ui-grid");
+  const get = (f) => (resolution ? resolution[f] : record && record[f]);
+  const fromOf = (f) => (resolution ? resolution[`${f}From`] : null);
+  const setActor = (patch, what) => { void save(window.aitherCast.setActor(key, patch), what); };
+
+  // The resident's model/presence/body come from the tray and the stage, not
+  // from this record: those controls would write a field nothing reads for it.
+  if (!resident) {
+    const charSelect = rosterSelect(get("character"));
+    charSelect.addEventListener("change", () => setActor({ character: charSelect.value || null }, "Character"));
+    grid.appendChild(field("Character", charSelect,
+      resolution ? resolution.characterFrom : (record && "character" in record ? "actors" : null)));
   }
-  if (resolution && Array.isArray(resolution.problems) && resolution.problems.length) {
-    for (const p of resolution.problems) {
-      who.appendChild(el("div", "problem", `${p.path}: ${p.reason}`));
+
+  const speed = el("input", "ui-input");
+  speed.type = "number";
+  speed.min = "0.25";
+  speed.max = "4";
+  speed.step = "0.05";
+  if (get("speed") != null) speed.value = get("speed");
+  speed.addEventListener("change", () => setActor({ speed: numOrNull(speed.value) }, "Speed"));
+  grid.appendChild(field("Speed", speed, fromOf("speed")));
+
+  if (!resident) {
+    const presence = el("select", "ui-select");
+    for (const level of PRESENCE_LEVELS) {
+      const opt = el("option", null, level);
+      opt.value = level;
+      presence.appendChild(opt);
     }
+    presence.value = get("presence") || "normal";
+    presence.addEventListener("change", () => setActor({ presence: presence.value }, "Presence"));
+    grid.appendChild(field("Presence", presence, fromOf("presence")));
+    grid.appendChild(field("Body", switchEl("stands on stage", get("body") !== false,
+      (on) => setActor({ body: on }, "Body"))));
   }
-  row.appendChild(who);
+  grid.appendChild(field("Bubble", switchEl("shows what it says", get("bubble") !== false,
+    (on) => setActor({ bubble: on }, "Bubble"))));
+  item.appendChild(grid);
 
-  const controls = el("div", "controls");
-
-  const current = resolution || record || {};
-  const character = resolution ? resolution.character : record && record.character;
-  const characterFrom = resolution ? resolution.characterFrom : (record && "character" in record ? "actors" : null);
-  // The resident's model comes from the tray (.active-character) and the stage,
-  // not from this record: a Character/Presence/Speak/Body control here would
-  // write a field nothing reads for it. Volume, bubble and physics DO reach it.
-  if (!resident) {
-    const charSelect = rosterSelect(character);
-    charSelect.addEventListener("change", () => {
-      void call(window.aitherCast.setActor(key, { character: charSelect.value || null }), "Character");
-      void refresh();
-    });
-    controls.appendChild(fieldBlock("Character", charSelect, characterFrom));
-  }
-
-  const voiceInput = document.createElement("input");
-  voiceInput.type = "text";
-  voiceInput.setAttribute("list", "voice-options");
-  voiceInput.maxLength = 40;
-  voiceInput.value = (resolution ? resolution.voice : record && record.voice) || "";
-  voiceInput.addEventListener("change", () => {
-    void call(window.aitherCast.setActor(key, { voice: voiceInput.value.trim() || null }), "Voice");
-    void refresh();
-  });
-  controls.appendChild(fieldBlock("Voice", voiceInput, resolution ? resolution.voiceFrom : null));
-
-  const speedInput = document.createElement("input");
-  speedInput.type = "number";
-  speedInput.min = "0.25";
-  speedInput.max = "4";
-  speedInput.step = "0.05";
-  const speedValue = resolution ? resolution.speed : record && record.speed;
-  if (speedValue != null) speedInput.value = speedValue;
-  speedInput.addEventListener("change", () => {
-    void call(window.aitherCast.setActor(key, { speed: numOrNull(speedInput.value) }), "Speed");
-    void refresh();
-  });
-  controls.appendChild(fieldBlock("Speed", speedInput, resolution ? resolution.speedFrom : null));
-
-  // This speaker's own fader, 0..200%: voices are not equally loud at the source,
-  // so a quiet one can be boosted to MATCH. It multiplies the master, never
-  // overrides it -- the label says what will actually play.
-  const volumeInput = document.createElement("input");
-  volumeInput.type = "range";
-  volumeInput.min = "0";
-  volumeInput.max = "2";
-  volumeInput.step = "0.05";
-  const volumeValue = resolution ? resolution.volume : record && record.volume;
-  volumeInput.value = String(volumeValue == null ? 1 : volumeValue);
-  const volumeLabel = () => {
-    const own = Math.round(Number(volumeInput.value) * 100);
-    const master = resolution && typeof resolution.masterVolume === "number" ? resolution.masterVolume : 1;
-    const muted = resolution && resolution.muted === true;
-    return muted ? `Volume ${own}% (room muted)` : `Volume ${own}% → plays at ${Math.round(own * master)}%`;
-  };
-  const volumeBlock = fieldBlock(volumeLabel(), volumeInput, resolution ? resolution.volumeFrom : null);
-  volumeInput.addEventListener("input", () => {
-    const lbl = volumeBlock.querySelector("label");
-    if (lbl) lbl.textContent = volumeLabel();
-  });
-  volumeInput.addEventListener("change", () => {
-    void call(window.aitherCast.setActor(key, { volume: numOrNull(volumeInput.value) }), "Volume");
-    void refresh();
-  });
-  controls.appendChild(volumeBlock);
-
-  if (!resident) {
-  const presenceSelect = document.createElement("select");
-  for (const level of PRESENCE_LEVELS) {
-    const opt = el("option", null, level);
-    opt.value = level;
-    presenceSelect.appendChild(opt);
-  }
-  presenceSelect.value = (resolution ? resolution.presence : record && record.presence) || "normal";
-  presenceSelect.addEventListener("change", () => {
-    void call(window.aitherCast.setActor(key, { presence: presenceSelect.value }), "Presence");
-    void refresh();
-  });
-  controls.appendChild(fieldBlock("Presence", presenceSelect, resolution ? resolution.presenceFrom : null));
-
-  const speakLabel = el("label", "ck");
-  const speakBox = document.createElement("input");
-  speakBox.type = "checkbox";
-  speakBox.checked = (resolution ? resolution.speak : record && record.speak) !== false;
-  speakBox.addEventListener("change", () => {
-    void call(window.aitherCast.setActor(key, { speak: speakBox.checked }), "Speak");
-    void refresh();
-  });
-  speakLabel.append(speakBox, document.createTextNode("speak"));
-  controls.appendChild(speakLabel);
-
-  const bodyLabel = el("label", "ck");
-  const bodyBox = document.createElement("input");
-  bodyBox.type = "checkbox";
-  bodyBox.checked = (resolution ? resolution.body : record && record.body) !== false;
-  bodyBox.addEventListener("change", () => {
-    void call(window.aitherCast.setActor(key, { body: bodyBox.checked }), "Body");
-    void refresh();
-  });
-  bodyLabel.append(bodyBox, document.createTextNode("body"));
-  controls.appendChild(bodyLabel);
-  }
-
-  const bubbleLabel = el("label", "ck");
-  const bubbleBox = document.createElement("input");
-  bubbleBox.type = "checkbox";
-  bubbleBox.checked = (resolution ? resolution.bubble : record && record.bubble) !== false;
-  bubbleBox.addEventListener("change", () => {
-    void call(window.aitherCast.setActor(key, { bubble: bubbleBox.checked }), "Bubble");
-    void refresh();
-  });
-  bubbleLabel.append(bubbleBox, document.createTextNode("bubble"));
-  controls.appendChild(bubbleLabel);
-
-  // This body's own physics. `own` is actors[key].physics from the live
-  // snapshot (the record for a not-on-stage row IS that), so a write carries
-  // the sibling knobs the owner already set instead of dropping them.
+  // `own` is actors[key].physics from the live snapshot, so a write carries the
+  // sibling knobs the owner already set instead of dropping them.
   const snapshotActors = (last && last.snapshot && last.snapshot.actors) || {};
-  const ownRecord = (snapshotActors[key] || record || {});
-  controls.appendChild(physicsBlock({
+  const ownRecord = snapshotActors[key] || record || {};
+  item.appendChild(physicsBlock({
     resolved: resolution ? resolution.physics : { ...PHYSICS_DEFAULT, ...((record && record.physics) || {}) },
     from: resolution ? resolution.physicsFrom : null,
     own: ownRecord.physics,
-    onSave: (physics) => {
-      void call(window.aitherCast.setActor(key, { physics: Object.keys(physics).length ? physics : null }), "Physics")
-        .then(() => refresh());
-    },
+    onSave: (physics) => setActor({ physics: Object.keys(physics).length ? physics : null }, "Physics"),
   }));
-
-  const clear = el("button", "chip small danger", "Clear override");
-  clear.addEventListener("click", async () => {
-    if (await call(window.aitherCast.clearActor(key), "Clear")) void refresh();
-  });
-  controls.appendChild(clear);
-
-  row.appendChild(controls);
-  void current; // read above field-by-field; kept for clarity, not reused directly
-  return row;
+  return item;
 }
 
-function renderOnStage() {
-  const listEl = document.getElementById("onStageList");
-  listEl.replaceChildren();
+function renderBodies() {
+  const list = document.getElementById("bodiesList");
+  list.replaceChildren();
   const onStage = (last && last.onStage) || [];
-  const snapshot = (last && last.snapshot) || {};
-  const configuredKeys = new Set(Object.keys(snapshot.actors || {}));
+  const actors = (last && last.snapshot && last.snapshot.actors) || {};
   const onStageKeys = new Set(onStage.map((row) => row.origin));
-
-  if (onStage.length === 0 && configuredKeys.size === 0) {
-    listEl.appendChild(el("div", "empty", "Nobody is on stage, and the file names no actor yet."));
+  if (onStage.length === 0 && Object.keys(actors).length === 0) {
+    list.appendChild(el("div", "ui-empty", "Nobody is on stage, and the file names no actor yet."));
     return;
   }
-
   for (const row of onStage) {
-    const title = (row.resolution && row.resolution.displayName) || row.agent || row.actorId || row.origin;
-    const subtitle = [row.actorKind, row.actorId, row.slotId].filter(Boolean).join(" · ");
-    listEl.appendChild(actorRow({
+    const name = (row.resolution && row.resolution.displayName) || row.agent || row.actorId || row.origin;
+    list.appendChild(bodyRow({
       key: row.origin,
-      // WHO first, body second: "aither (resident) -- body 通常版-tall", never the VRM's
-      // file name as the headline (owner screenshots 2026-09-21: every pane led with "通常版").
-      title: row.resident ? `${title || "aither"} (resident)${row.character ? ` — body ${row.character}` : ""}` : title,
-      subtitle,
+      title: row.resident ? `${name || "aither"} (resident)${row.character ? ` — body ${row.character}` : ""}` : name,
+      meta: [row.actorKind, row.actorId, row.slotId].filter(Boolean).join(" · "),
       resolution: row.resolution,
-      tag: row.resident ? "resident · slot0" : "on stage",
       resident: row.resident === true,
     }));
   }
-
-  for (const key of configuredKeys) {
-    if (onStageKeys.has(key)) continue; // already rendered above, with a live resolution
-    const record = snapshot.actors[key] || {};
-    listEl.appendChild(actorRow({
-      key, title: record.displayName || key, subtitle: key, record, tag: "configured · not on stage",
-    }));
+  for (const key of Object.keys(actors)) {
+    if (onStageKeys.has(key)) continue;
+    list.appendChild(bodyRow({ key, title: actors[key].displayName || key, meta: `${key} · not on stage`, record: actors[key] }));
   }
 }
 
-// ─── who may speak ────────────────────────────────────────────────────────
+// ─── Advanced: plain fields ──────────────────────────────────────────────
 
-function whoRow(key, seenRow, onStageRow) {
-  const row = el("div", "row");
-  const who = el("div", "who");
-  who.appendChild(el("div", "name", key));
-  const bits = [seenRow.kind, seenRow.channel].filter(Boolean);
-  if (seenRow.count) bits.push(`seen ${seenRow.count}x`);
-  if (seenRow.lastSeen) bits.push(`last ${seenRow.lastSeen}`);
-  who.appendChild(el("div", "sub", bits.join(" · ")));
-  if (seenRow.sample) who.appendChild(el("div", "sample", `"${seenRow.sample}"`));
-
-  let voicedTag;
-  if (onStageRow && onStageRow.resolution) {
-    voicedTag = onStageRow.resolution.voiced
-      ? el("span", "tag", "audible")
-      : el("span", "tag warn", onStageRow.resolution.voicedReason || "not audible");
-  } else {
-    // Not on stage right now — presence/voice have not been resolved for this
-    // origin, so this is a description of the DEFAULT, not a live verdict:
-    // relay origins start silent until their channel is named voiced; every
-    // other origin defaults to audible (presence:"normal").
-    voicedTag = el("span", "tag", seenRow.kind === "relay" ? "silent by default (relay)" : "audible by default");
-  }
-  who.appendChild(voicedTag);
-  row.appendChild(who);
-
-  const controls = el("div", "controls");
-  const voice = el("button", "chip small", "Voice it");
-  voice.addEventListener("click", async () => {
-    if (await call(window.aitherCast.reveal(key), "Voice it")) void refresh();
-  });
-  const mute = el("button", "chip small danger", "Mute");
-  mute.addEventListener("click", async () => {
-    if (await call(window.aitherCast.muteOrigin(key), "Mute")) void refresh();
-  });
-  controls.append(voice, mute);
-  row.appendChild(controls);
-  return row;
-}
-
-function renderWhoMaySpeak() {
-  const listEl = document.getElementById("whoMayList");
-  listEl.replaceChildren();
-  const seen = (last && last.seen) || {};
-  const keys = Object.keys(seen);
-  if (keys.length === 0) {
-    listEl.appendChild(el("div", "empty", "Nothing has spoken into this desk yet."));
-    return;
-  }
-  const onStageByKey = new Map(((last && last.onStage) || []).map((row) => [row.origin, row]));
-  // Newest sighting first — that is what "who just showed up and is mute" needs.
-  keys.sort((a, b) => String(seen[b].lastSeen || "").localeCompare(String(seen[a].lastSeen || "")));
-  for (const key of keys) {
-    listEl.appendChild(whoRow(key, seen[key], onStageByKey.get(key)));
-  }
-}
-
-// ─── stage / voice defaults ───────────────────────────────────────────────
-
-function numberField(labelText, value, placeholder, opts, onSave) {
-  const wrap = el("div", "field");
-  wrap.appendChild(el("label", null, labelText));
-  const row = el("div", "controls");
-  const input = document.createElement("input");
+function numberField(labelText, value, placeholder, opts, onSave, help) {
+  const row = el("div", "ui-row");
+  const input = el("input", "ui-input");
   input.type = "number";
   if (opts && opts.min !== undefined) input.min = String(opts.min);
   if (opts && opts.max !== undefined) input.max = String(opts.max);
@@ -635,103 +749,126 @@ function numberField(labelText, value, placeholder, opts, onSave) {
   input.placeholder = String(placeholder);
   if (value !== null && value !== undefined) input.value = value;
   input.addEventListener("change", () => onSave(numOrNull(input.value)));
-  const clear = el("button", "chip small", "✕");
-  clear.title = "reset to built-in default";
-  clear.addEventListener("click", () => {
-    input.value = "";
-    onSave(null);
-  });
-  row.append(input, clear);
-  wrap.appendChild(row);
-  return wrap;
+  row.append(input, button("Reset", "ui-ghost ui-small", () => { input.value = ""; onSave(null); }));
+  return field(labelText, row, help);
 }
 
-function textField(labelText, value, placeholder, onSave) {
-  const wrap = el("div", "field");
-  wrap.appendChild(el("label", null, labelText));
-  const row = el("div", "controls");
-  const input = document.createElement("input");
+function textField(labelText, value, placeholder, onSave, help) {
+  const row = el("div", "ui-row");
+  const input = el("input", "ui-input");
   input.type = "text";
   input.placeholder = String(placeholder);
   input.value = value || "";
   input.addEventListener("change", () => onSave(input.value.trim() || null));
-  const clear = el("button", "chip small", "✕");
-  clear.title = "reset to built-in default";
-  clear.addEventListener("click", () => {
-    input.value = "";
-    onSave(null);
-  });
-  row.append(input, clear);
-  wrap.appendChild(row);
-  return wrap;
+  row.append(input, button("Reset", "ui-ghost ui-small", () => { input.value = ""; onSave(null); }));
+  return field(labelText, row, help);
 }
 
-/** A fader. The readout follows the thumb live (`input`); the WRITE happens on
- *  release (`change`) -- a write per pixel of drag would rewrite cast.json, and
- *  wake its watcher, dozens of times a second. `null` = back to the tier below. */
-function sliderField(labelText, value, builtin, opts, onSave, fromText) {
-  const wrap = el("div", "field");
-  wrap.appendChild(el("label", null, labelText));
-  const row = el("div", "controls");
-  const input = document.createElement("input");
-  input.type = "range";
-  input.min = String(opts.min);
-  input.max = String(opts.max);
-  input.step = String(opts.step);
-  const shown = value === null || value === undefined ? builtin : value;
-  input.value = String(shown);
-  const readout = el("span", "from", `${Math.round(Number(shown) * 100)}%`);
-  input.addEventListener("input", () => { readout.textContent = `${Math.round(Number(input.value) * 100)}%`; });
-  input.addEventListener("change", () => onSave(numOrNull(input.value)));
-  const clear = el("button", "chip small", "✕");
-  clear.title = "reset to the tier below";
-  clear.addEventListener("click", () => onSave(null));
-  row.append(input, readout, clear);
-  wrap.appendChild(row);
-  if (fromText) wrap.appendChild(el("div", "from", fromText));
-  return wrap;
+function areaField(labelText, value, placeholder, help, onSave) {
+  const input = el("textarea", "ui-input");
+  input.rows = 3;
+  input.placeholder = String(placeholder);
+  input.value = value || "";
+  input.addEventListener("change", () => onSave(input.value.trim() || null));
+  return field(labelText, input, help);
 }
 
 function checkField(labelText, text, checked, onSave) {
-  const wrap = el("div", "field");
-  wrap.appendChild(el("label", null, labelText));
-  const label = el("label", "ck");
-  const box = document.createElement("input");
-  box.type = "checkbox";
-  box.checked = checked;
-  box.addEventListener("change", () => onSave(box.checked));
-  label.append(box, document.createTextNode(text));
-  wrap.appendChild(label);
-  return wrap;
+  return field(labelText, switchEl(text, checked, onSave));
+}
+
+function renderVoiceService() {
+  const grid = document.getElementById("voiceGrid");
+  grid.replaceChildren();
+  const voice = (last && last.snapshot && last.snapshot.voice) || {};
+  const endpoint = voice.endpoint || {};
+  const put = (patch, what) => { void save(window.aitherCast.setVoice(patch), what || "Voice"); };
+  // endpoint is its OWN sub-object on a shallow merge: a patch touching one
+  // sub-field must carry the WHOLE sub-object or it wipes its siblings.
+  const putEndpoint = (f, v) => put({ endpoint: { ...endpoint, [f]: v } }, "Endpoint");
+
+  grid.appendChild(numberField("Default speed", voice.defaultSpeed, VOICE_DEFAULT.defaultSpeed,
+    { min: 0.25, max: 4, step: 0.05 }, (v) => put({ defaultSpeed: v })));
+  grid.appendChild(numberField("Max chars", voice.maxChars, VOICE_DEFAULT.maxChars,
+    { min: 40, max: 2000, step: 10 }, (v) => put({ maxChars: v })));
+  grid.appendChild(numberField("Affect intensity", voice.affectIntensity, VOICE_DEFAULT.affectIntensity,
+    { min: 0, max: 1, step: 0.1 }, (v) => put({ affectIntensity: v })));
+  grid.appendChild(textField("Endpoint host", endpoint.host, VOICE_DEFAULT.endpointHost, (v) => putEndpoint("host", v)));
+  grid.appendChild(numberField("Endpoint port", endpoint.port, VOICE_DEFAULT.endpointPort,
+    { min: 1, max: 65535, step: 1 }, (v) => putEndpoint("port", v)));
+  grid.appendChild(textField("Endpoint path", endpoint.path, VOICE_DEFAULT.endpointPath, (v) => putEndpoint("path", v)));
+}
+
+function renderFilter() {
+  const grid = document.getElementById("filterGrid");
+  grid.replaceChildren();
+  const voice = (last && last.snapshot && last.snapshot.voice) || {};
+  const filter = voice.speechFilter || {};
+  // Same whole-sub-object rule as the endpoint.
+  const put = (f, v) => { void save(window.aitherCast.setVoice({ speechFilter: { ...filter, [f]: v } }), "Speech filter"); };
+  grid.appendChild(numberField("Speech filter max chars", filter.maxChars, VOICE_DEFAULT.speechFilterMaxChars,
+    { min: 40, max: 2000, step: 10 }, (v) => put("maxChars", v)));
+  grid.appendChild(checkField("Speech filter allows code", "read code blocks aloud",
+    filter.allowCode === true, (v) => put("allowCode", v)));
+}
+
+function renderChannels() {
+  const list = document.getElementById("channelsList");
+  list.replaceChildren();
+  const channels = (last && last.snapshot && last.snapshot.channels) || {};
+  const names = new Set(Object.keys(channels));
+  for (const s of Object.values((last && last.seen) || {})) if (s && s.channel) names.add(s.channel);
+  if (names.size === 0) {
+    list.appendChild(el("div", "ui-empty", "No relay channel has been heard or configured yet."));
+    return;
+  }
+  for (const name of [...names].sort()) {
+    const rec = channels[name] || {};
+    const item = el("div", "ui-item");
+    item.setAttribute("data-channel", name);
+    item.appendChild(el("div", "ui-grow ui-title", name));
+    item.appendChild(switchEl(rec.voiced === true ? "Voiced" : "Silent", rec.voiced === true, (on) => {
+      void save(window.aitherCast.setChannel(name, { voiced: on }), "Channel");
+    }));
+    const presence = el("select", "ui-select");
+    const inherit = el("option", null, "presence: inherit");
+    inherit.value = "";
+    presence.appendChild(inherit);
+    for (const level of PRESENCE_LEVELS) {
+      const opt = el("option", null, `presence: ${level}`);
+      opt.value = level;
+      presence.appendChild(opt);
+    }
+    presence.value = rec.presence || "";
+    presence.addEventListener("change", () => {
+      void save(window.aitherCast.setChannel(name, { presence: presence.value || null }), "Channel");
+    });
+    const presenceWrap = el("div");
+    presenceWrap.appendChild(presence);
+    item.appendChild(presenceWrap);
+    list.appendChild(item);
+  }
 }
 
 function renderStage() {
   const grid = document.getElementById("stageGrid");
   grid.replaceChildren();
   const stage = (last && last.snapshot && last.snapshot.stage) || {};
-  const save = (patch) => { void call(window.aitherCast.setStage(patch), "Stage").then(() => refresh()); };
-
-  grid.appendChild(numberField("Max bodies", stage.maxBodies, STAGE_DEFAULT.maxBodies,
-    { min: 0, max: 6, step: 1 }, (v) => save({ maxBodies: v })));
-  grid.appendChild(numberField("Idle seconds", stage.idleSeconds, STAGE_DEFAULT.idleSeconds,
-    { min: 30, step: 1 }, (v) => save({ idleSeconds: v })));
-  grid.appendChild(numberField("Cooldown seconds", stage.cooldownSeconds, STAGE_DEFAULT.cooldownSeconds,
-    { min: 0, step: 1 }, (v) => save({ cooldownSeconds: v })));
-  grid.appendChild(numberField("Gap ms", stage.gapMs, STAGE_DEFAULT.gapMs,
-    { min: 0, step: 10 }, (v) => save({ gapMs: v })));
-  grid.appendChild(numberField("Poll ms", stage.pollMs, STAGE_DEFAULT.pollMs,
-    { min: 250, step: 50 }, (v) => save({ pollMs: v })));
-  grid.appendChild(textField("Resident override", stage.resident, "(live .active-character)",
-    (v) => save({ resident: v })));
+  const put = (patch) => { void save(window.aitherCast.setStage(patch), "Stage"); };
+  grid.appendChild(numberField("Max bodies", stage.maxBodies, STAGE_DEFAULT.maxBodies, { min: 0, max: 6, step: 1 }, (v) => put({ maxBodies: v })));
+  grid.appendChild(numberField("Idle seconds", stage.idleSeconds, STAGE_DEFAULT.idleSeconds, { min: 30, step: 1 }, (v) => put({ idleSeconds: v })));
+  grid.appendChild(numberField("Cooldown seconds", stage.cooldownSeconds, STAGE_DEFAULT.cooldownSeconds, { min: 0, step: 1 }, (v) => put({ cooldownSeconds: v })));
+  grid.appendChild(numberField("Gap ms", stage.gapMs, STAGE_DEFAULT.gapMs, { min: 0, step: 10 }, (v) => put({ gapMs: v })));
+  grid.appendChild(numberField("Poll ms", stage.pollMs, STAGE_DEFAULT.pollMs, { min: 250, step: 50 }, (v) => put({ pollMs: v })));
+  grid.appendChild(textField("Resident override", stage.resident, "(live .active-character)", (v) => put({ resident: v })));
   grid.appendChild(checkField("Speech bubbles", "show what each avatar says over its head (stays on while muted)",
-    stage.bubbles !== false, (v) => save({ bubbles: v })));
+    stage.bubbles !== false, (v) => put({ bubbles: v })));
 }
 
 const CONTENT_RATINGS = ["general", "r15", "r18"];
 
-/** The three limits, most authoritative first. The first two are READ-ONLY here
- *  on purpose: the platform gate needs age verification, and the live safety
- *  plane is a fleet service. Only the ceiling is this desk's to set. */
+/** The three limits, most authoritative first. Only the ceiling is this desk's
+ *  to set; the gate opens only through the platform (age attestation). */
 function renderContent() {
   const grid = document.getElementById("contentGrid");
   const hiddenEl = document.getElementById("contentHidden");
@@ -739,40 +876,23 @@ function renderContent() {
   hiddenEl.replaceChildren();
   const content = (last && last.content) || null;
   if (!content) {
-    grid.appendChild(el("div", "empty", "The content limits could not be read."));
+    grid.appendChild(el("div", "ui-empty", "The content limits could not be read."));
     return;
   }
-  const save = (patch) => {
-    void call(window.aitherCast.setSection("content", patch), "Content").then(() => refresh());
-  };
+  const put = (patch) => { void save(window.aitherCast.setSection("content", patch), "Content"); };
 
-  // The gate is a CONTROL, not a readout. It used to be a sentence pointing at
-  // "the platform's safety settings" -- which exist, and whose toggle wrote a file
-  // inside the Genesis container that this desk never reads. The owner saw a lock
-  // with nowhere to go (2026-09-20). Opening still goes through the platform, which
-  // is the only thing that can attest age verification; closing is always available.
-  const gate = el("div", "field");
-  gate.appendChild(el("label", null, "Mature content"));
-  const gateControls = el("div", "controls");
-  const gateState = el("span", null, content.gateOpen ? "unlocked" : "locked");
-  gateControls.appendChild(gateState);
-  const gateBtn = document.createElement("button");
-  gateBtn.type = "button";
-  gateBtn.textContent = content.gateOpen ? "Turn off" : "Turn on";
-  const gateWhy = el("div", "from", content.gateOpen
+  const gateRow = el("div", "ui-row");
+  gateRow.appendChild(el("span", `ui-badge ${content.gateOpen ? "ui-warn" : ""}`.trim(), content.gateOpen ? "unlocked" : "locked"));
+  const gateWhy = el("div", "ui-help", content.gateOpen
     ? "the platform says this account opted in AND verified its age"
-    : "turning it on asks the platform — it needs an opt-in and a verified age. "
-      + "Turning it off always works, even offline.");
-  gateBtn.addEventListener("click", () => {
+    : "turning it on asks the platform — it needs an opt-in and a verified age. Turning it off always works, even offline.");
+  const gateBtn = button(content.gateOpen ? "Turn off" : "Turn on", "ui-small", () => {
     gateBtn.disabled = true;
     gateBtn.textContent = content.gateOpen ? "turning off…" : "asking the platform…";
     Promise.resolve(window.aitherCast.setAdultContent(!content.gateOpen))
       .then((res) => {
-        // The verb RESOLVES {ok:false} rather than rejecting, so a refusal is data:
-        // show the platform's own reason instead of a generic failure.
-        if (res && res.ok === false) {
-          gateWhy.textContent = res.error || "the platform refused.";
-        }
+        // The verb RESOLVES {ok:false}: a refusal is data -- show the platform's reason.
+        if (res && res.ok === false) gateWhy.textContent = res.error || "the platform refused.";
         return refresh();
       })
       .catch((error) => {
@@ -780,37 +900,34 @@ function renderContent() {
         gateBtn.disabled = false;
       });
   });
-  gateControls.appendChild(gateBtn);
-  gate.appendChild(gateControls);
+  gateRow.appendChild(gateBtn);
+  const gate = field("Mature content", gateRow);
   gate.appendChild(gateWhy);
   grid.appendChild(gate);
 
-  const plane = el("div", "field");
-  plane.appendChild(el("label", null, "Safety plane"));
   const verdict = content.safetyExplicitAllowed;
-  plane.appendChild(el("div", "controls",
-    verdict === null || verdict === undefined ? "no answer" : (verdict ? "permits explicit" : "forbids explicit")));
-  plane.appendChild(el("div", "from", "AitherSafety, live. It can only tighten what is above."));
-  grid.appendChild(plane);
+  grid.appendChild(field("Safety plane",
+    el("span", "ui-badge", verdict === null || verdict === undefined ? "no answer" : (verdict ? "permits explicit" : "forbids explicit")),
+    "AitherSafety, live. It can only tighten what is above."));
 
-  const select = document.createElement("select");
+  const select = el("select", "ui-select");
   for (const value of CONTENT_RATINGS) {
     const opt = el("option", null, value === "r18" ? "r18 (whatever the platform allows)" : value);
     opt.value = value;
     select.appendChild(opt);
   }
   select.value = content.maxRating || "r18";
-  select.addEventListener("change", () => save({ maxRating: select.value }));
-  grid.appendChild(fieldBlock("This desk's ceiling", select,
+  select.addEventListener("change", () => put({ maxRating: select.value }));
+  grid.appendChild(field("This desk's ceiling", select,
     content.from && content.from.maxRating !== "builtin" ? content.from.maxRating : null));
 
   grid.appendChild(checkField("Hide unrated characters",
-    "a character nobody has judged is hidden with the mature ones (only while mature content is locked)",
-    content.hideUnrated !== false, (v) => save({ hideUnrated: v })));
+    "hide never-rated characters with the mature ones (only while mature content is locked)",
+    content.hideUnrated !== false, (v) => put({ hideUnrated: v })));
 
   const hidden = Array.isArray(content.hidden) ? content.hidden : [];
   if (hidden.length === 0) {
-    hiddenEl.appendChild(el("div", "empty", "Nothing is hidden right now."));
+    hiddenEl.appendChild(el("p", "ui-note", "Nothing is hidden right now."));
     return;
   }
   const label = {
@@ -820,7 +937,7 @@ function renderContent() {
   };
   const counts = {};
   for (const row of hidden) counts[row.why] = (counts[row.why] || 0) + 1;
-  hiddenEl.appendChild(el("div", "sub",
+  hiddenEl.appendChild(el("p", "ui-note",
     `${hidden.length} character(s) hidden: ` +
     Object.entries(counts).map(([why, n]) => `${n} ${label[why] || why}`).join(" · ")));
 }
@@ -837,91 +954,9 @@ function renderPhysics() {
     from,
     own,
     onSave: (physics) => {
-      void call(window.aitherCast.setDefaults({ physics: Object.keys(physics).length ? physics : null }), "Physics")
-        .then(() => refresh());
+      void save(window.aitherCast.setDefaults({ physics: Object.keys(physics).length ? physics : null }), "Physics");
     },
   }));
-}
-
-function renderVoice() {
-  const grid = document.getElementById("voiceGrid");
-  grid.replaceChildren();
-  const voice = (last && last.snapshot && last.snapshot.voice) || {};
-  const endpoint = voice.endpoint || {};
-  const speechFilter = voice.speechFilter || {};
-  const save = (patch) => { void call(window.aitherCast.setVoice(patch), "Voice").then(() => refresh()); };
-  // endpoint/speechFilter are their OWN sub-objects on a shallow merge
-  // (cast-config's setVoice: draft.voice = {...draft.voice, ...patch}) — a
-  // patch touching one sub-field must carry the WHOLE sub-object or it would
-  // wipe the other two fields sitting beside it.
-  const saveEndpoint = (field, v) => save({ endpoint: { ...endpoint, [field]: v } });
-  const saveFilter = (field, v) => save({ speechFilter: { ...speechFilter, [field]: v } });
-
-  // Loudness first: it is the control the owner reaches for most. Master x each
-  // speaker's own fader (set per actor above) is what actually plays.
-  grid.appendChild(sliderField("Master volume", voice.volume, VOICE_DEFAULT.volume,
-    { min: 0, max: 1, step: 0.05 }, (v) => save({ volume: v })));
-  grid.appendChild(checkField("Mute everyone", "silence the whole room; speech bubbles keep showing the words",
-    voice.muted === true, (v) => save({ muted: v })));
-
-  const voiceWrap = el("div", "field");
-  voiceWrap.appendChild(el("label", null, "Default voice"));
-  const voiceInput = document.createElement("input");
-  voiceInput.type = "text";
-  voiceInput.setAttribute("list", "voice-options");
-  voiceInput.maxLength = 40;
-  voiceInput.placeholder = VOICE_DEFAULT.defaultVoice;
-  voiceInput.value = voice.defaultVoice || "";
-  voiceInput.addEventListener("change", () => save({ defaultVoice: voiceInput.value.trim() || null }));
-  voiceWrap.appendChild(voiceInput);
-  grid.appendChild(voiceWrap);
-
-  grid.appendChild(numberField("Default speed", voice.defaultSpeed, VOICE_DEFAULT.defaultSpeed,
-    { min: 0.25, max: 4, step: 0.05 }, (v) => save({ defaultSpeed: v })));
-  grid.appendChild(numberField("Max chars", voice.maxChars, VOICE_DEFAULT.maxChars,
-    { min: 40, max: 2000, step: 10 }, (v) => save({ maxChars: v })));
-  grid.appendChild(numberField("Affect intensity", voice.affectIntensity, VOICE_DEFAULT.affectIntensity,
-    { min: 0, max: 1, step: 0.1 }, (v) => save({ affectIntensity: v })));
-
-  grid.appendChild(textField("Endpoint host", endpoint.host, VOICE_DEFAULT.endpointHost,
-    (v) => saveEndpoint("host", v)));
-  grid.appendChild(numberField("Endpoint port", endpoint.port, VOICE_DEFAULT.endpointPort,
-    { min: 1, max: 65535, step: 1 }, (v) => saveEndpoint("port", v)));
-  grid.appendChild(textField("Endpoint path", endpoint.path, VOICE_DEFAULT.endpointPath,
-    (v) => saveEndpoint("path", v)));
-
-  grid.appendChild(numberField("Speech filter max chars", speechFilter.maxChars, VOICE_DEFAULT.speechFilterMaxChars,
-    { min: 40, max: 2000, step: 10 }, (v) => saveFilter("maxChars", v)));
-  const allowWrap = el("div", "field");
-  allowWrap.appendChild(el("label", null, "Speech filter allows code"));
-  const allowLabel = el("label", "ck");
-  const allowBox = document.createElement("input");
-  allowBox.type = "checkbox";
-  allowBox.checked = speechFilter.allowCode === true;
-  allowBox.addEventListener("change", () => saveFilter("allowCode", allowBox.checked));
-  allowLabel.append(allowBox, document.createTextNode("allow code blocks through the speech filter"));
-  allowWrap.appendChild(allowLabel);
-  grid.appendChild(allowWrap);
-}
-
-function areaField(labelText, value, placeholder, fromText, onSave) {
-  const wrap = el("div", "field");
-  wrap.appendChild(el("label", null, labelText));
-  const input = document.createElement("textarea");
-  input.rows = 3;
-  input.placeholder = String(placeholder);
-  input.value = value || "";
-  input.addEventListener("change", () => onSave(input.value.trim() || null));
-  wrap.appendChild(input);
-  if (fromText) wrap.appendChild(el("div", "from", fromText));
-  return wrap;
-}
-
-/** A text field that also shows WHERE the value in force comes from. */
-function sourcedText(labelText, value, placeholder, fromText, onSave) {
-  const wrap = textField(labelText, value, placeholder, onSave);
-  if (fromText) wrap.appendChild(el("div", "from", fromText));
-  return wrap;
 }
 
 function renderDesk() {
@@ -934,35 +969,29 @@ function renderDesk() {
   const vision = snapshot.vision || {};
   const rm = resolved.models || {};
   const rv = resolved.vision || {};
-  const save = (section, patch) => {
-    void call(window.aitherCast.setSection(section, patch), section).then(() => refresh());
-  };
+  const put = (section, patch) => { void save(window.aitherCast.setSection(section, patch), section); };
 
-  grid.appendChild(sourcedText("Command agent backend", models.commandProfile, rm.commandProfile || "deepseek",
-    rm.commandProfileFrom ? `in force: ${rm.commandProfile} (${rm.commandProfileFrom})` : null,
-    (v) => save("models", { commandProfile: v })));
+  grid.appendChild(textField("Command agent backend", models.commandProfile, rm.commandProfile || "deepseek",
+    (v) => put("models", { commandProfile: v }),
+    rm.commandProfileFrom ? `in force: ${rm.commandProfile} (${rm.commandProfileFrom})` : null));
   grid.appendChild(areaField("Command agent persona", prompts.commandPersona,
     "e.g. You are Aither, the operator of this machine.",
     "added BEFORE the built-in instruction; it cannot replace the decision-card rule",
-    (v) => save("prompts", { commandPersona: v })));
+    (v) => put("prompts", { commandPersona: v })));
   grid.appendChild(areaField("Extra instructions", prompts.commandAppend,
-    "e.g. Keep the final summary under 60 words.",
-    "added AFTER the built-in instruction",
-    (v) => save("prompts", { commandAppend: v })));
+    "e.g. Keep the final summary under 60 words.", "added AFTER the built-in instruction",
+    (v) => put("prompts", { commandAppend: v })));
   grid.appendChild(checkField("Vision", "look at images and video frames dropped on the avatar",
-    (rv.enabled !== undefined ? rv.enabled : vision.enabled) !== false,
-    (v) => save("vision", { enabled: v })));
-  grid.appendChild(areaField("What to look for", vision.imagePrompt,
-    "(the built-in description prompt)", null,
-    (v) => save("vision", { imagePrompt: v })));
+    (rv.enabled !== undefined ? rv.enabled : vision.enabled) !== false, (v) => put("vision", { enabled: v })));
+  grid.appendChild(areaField("What to look for", vision.imagePrompt, "(the built-in description prompt)", null,
+    (v) => put("vision", { imagePrompt: v })));
 }
 
 function syncLine(label, row) {
   if (!row) return `${label}: not run yet`;
   // First line only: the CLI's output can be several, and this is one status row.
   const firstLine = String(row.output || "").split(/\r?\n/)[0];
-  const detail = firstLine ? ` — ${firstLine}` : "";
-  return `${label}: ${row.verdict}${detail} (${row.at || ""})`;
+  return `${label}: ${row.verdict}${firstLine ? ` — ${firstLine}` : ""} (${row.at || ""})`;
 }
 
 function renderSync() {
@@ -970,24 +999,20 @@ function renderSync() {
   grid.replaceChildren();
   const sync = (last && last.snapshot && last.snapshot.sync) || {};
   const status = (last && last.sync) || null;
-  const stateEl2 = document.getElementById("syncState");
-  stateEl2.textContent = !status
+  document.getElementById("syncState").textContent = !status
     ? "sync status unavailable"
     : status.enabled
       ? `on → ${status.target} · ${syncLine("pull", status.pull)} · ${syncLine("push", status.push)}`
       : `off — ${status.reason}`;
-  const save = (patch) => { void call(window.aitherCast.setSection("sync", patch), "Sync").then(() => refresh()); };
-
-  grid.appendChild(checkField("Sync", "keep this cast in step with my other machines", sync.enabled === true,
-    (v) => save({ enabled: v })));
-  grid.appendChild(textField("Profile file", sync.profile, "D:/Dropbox/awsettings.json", (v) => save({ profile: v })));
-  grid.appendChild(textField("Profile URL", sync.url, "https://…/api/settings/preferences", (v) => save({ url: v })));
+  const put = (patch) => { void save(window.aitherCast.setSection("sync", patch), "Sync"); };
+  grid.appendChild(checkField("Sync", "keep this cast in step with my other machines", sync.enabled === true, (v) => put({ enabled: v })));
+  grid.appendChild(textField("Profile file", sync.profile, "D:/Dropbox/awsettings.json", (v) => put({ profile: v })));
+  grid.appendChild(textField("Profile URL", sync.url, "https://…/api/settings/preferences", (v) => put({ url: v })));
   grid.appendChild(textField("Bearer token FILE (a path, never the token)", sync.tokenFile, "~/.aither/session-bearer",
-    (v) => save({ tokenFile: v })));
-  grid.appendChild(checkField("On start", "pull when the desk starts", sync.pullOnStart !== false,
-    (v) => save({ pullOnStart: v })));
+    (v) => put({ tokenFile: v })));
+  grid.appendChild(checkField("On start", "pull when the desk starts", sync.pullOnStart !== false, (v) => put({ pullOnStart: v })));
   grid.appendChild(checkField("On change", "push a few seconds after a setting changes", sync.pushOnChange !== false,
-    (v) => save({ pushOnChange: v })));
+    (v) => put({ pushOnChange: v })));
 }
 
 // ─── refresh loop ─────────────────────────────────────────────────────────
@@ -996,25 +1021,29 @@ async function refresh() {
   const result = await call(window.aitherCast.describe(), "Describe");
   if (result) last = result;
   if (!last) {
-    stateEl.textContent = "cast pane unavailable";
+    stateEl.textContent = "voices unavailable";
     return;
   }
-  const onStageCount = (last.onStage || []).length;
-  const seenCount = Object.keys(last.seen || {}).length;
-  stateEl.textContent = `${onStageCount} on stage · ${seenCount} seen`;
+  const muted = last.snapshot && last.snapshot.voice && last.snapshot.voice.muted === true;
+  stateEl.textContent = `${(last.onStage || []).length} on stage · ${Object.keys(last.seen || {}).length} heard${muted ? " · all muted" : ""}`;
   renderBanner();
-  renderOnStage();
-  renderWhoMaySpeak();
+  renderAllVoices();
+  renderSpeakers();
+  renderBodies();
+  renderVoiceService();
+  renderFilter();
+  renderChannels();
   renderStage();
   renderContent();
   renderPhysics();
-  renderVoice();
   renderDesk();
   renderSync();
 }
 
 document.getElementById("refresh").addEventListener("click", () => void refresh());
-document.getElementById("capture").addEventListener("click", async () => {
+document.getElementById("capture").addEventListener("click", async (event) => {
+  // The button sits in a <summary>; a click must not also fold the card.
+  if (event && typeof event.preventDefault === "function") event.preventDefault();
   const result = await call(window.aitherCast.captureStage(), "Capture");
   if (result) {
     say(result.captured ? `captured ${result.captured} place${result.captured === 1 ? "" : "s"}` : "nothing on stage to capture");
@@ -1022,21 +1051,14 @@ document.getElementById("capture").addEventListener("click", async () => {
   }
 });
 
-// Shared <datalist> for every free-text voice input on the page.
-const datalist = document.createElement("datalist");
-datalist.id = "voice-options";
-for (const name of VOICES) {
-  const opt = document.createElement("option");
-  opt.value = name;
-  datalist.appendChild(opt);
+// Bodies arrive and leave as the room speaks, and a mute is one click elsewhere
+// (the tray, another pane) -- so poll. But never re-render under the owner's
+// hand: a rebuild mid-pick closes the dropdown and drops a half-typed id.
+function editing() {
+  const active = document.activeElement;
+  return Boolean(active && ["SELECT", "INPUT", "TEXTAREA"].includes(active.tagName));
 }
-document.body.appendChild(datalist);
-
-// A body arrives/leaves as the room speaks and a mute is a one-click action
-// elsewhere (the tray, another Cast window) — poll rather than push, same
-// interval stage.html uses, so this pane never shows an arrangement that
-// changed five minutes ago.
-setInterval(() => void refresh(), 4000);
+setInterval(() => { if (!editing()) void refresh(); }, 4000);
 void refresh();
 </script>
 </body>

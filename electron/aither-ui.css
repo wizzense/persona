@@ -1,0 +1,122 @@
+/*
+ * aither-ui.css -- the Desk's ONE component layer (UX-REIMPLEMENTATION slice 4).
+ *
+ * aither-tokens.css (GENERATED) owns colour, type and spacing. This file owns what a
+ * page is BUILT from: the page header, sub-tabs, cards, tables, buttons, fields,
+ * badges, empty states. Every pane links both, in that order, and declares no
+ * component CSS of its own -- a pane-local .btn is how seven panes ended up with
+ * seven buttons. A pane may still lay itself out (grid areas, widths); it may not
+ * restyle a component. Colour literals are not allowed here either: tokens only.
+ */
+
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; min-height: 100%; background: var(--bg-sunk); color: var(--fg);
+  font: 13px/1.5 var(--font-sans); -webkit-font-smoothing: antialiased; }
+body.ui { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+
+/* ── page frame: header, optional sub-tabs, scrolling body ───────────────── */
+.ui-head { flex: none; display: flex; align-items: center; gap: 12px;
+  padding: 16px 24px 12px; }
+.ui-head h1 { margin: 0; font-size: 18px; font-weight: 650; letter-spacing: -.01em; }
+.ui-head .ui-sub { color: var(--muted); font-size: 12px; }
+.ui-head .ui-grow { flex: 1; }
+
+.ui-tabs { flex: none; display: flex; gap: 2px; padding: 0 20px; border-bottom: 1px solid var(--line); }
+.ui-tab { appearance: none; border: 0; background: none; color: var(--muted); cursor: pointer;
+  font: 550 13px/1 var(--font-sans); padding: 10px 12px 11px; position: relative; }
+.ui-tab:hover { color: var(--fg); }
+.ui-tab[aria-selected="true"] { color: var(--fg); }
+.ui-tab[aria-selected="true"]::after { content: ""; position: absolute; left: 8px; right: 8px;
+  bottom: -1px; height: 2px; border-radius: 2px; background: var(--brand); }
+.ui-tab .ui-count { margin-left: 6px; }
+
+.ui-body { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 24px 32px; }
+.ui-body.ui-flush { padding: 0; overflow: hidden; }
+.ui-stack { display: flex; flex-direction: column; gap: 16px; max-width: 1080px; }
+.ui-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ui-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+
+/* ── cards and sections ─────────────────────────────────────────────────── */
+.ui-card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  padding: 14px 16px; }
+.ui-card.ui-tight { padding: 10px 12px; }
+.ui-card-head { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; }
+.ui-card-head h2, .ui-section { margin: 0; font-size: 11px; font-weight: 650; letter-spacing: .07em;
+  text-transform: uppercase; color: var(--surface-400); }
+.ui-card-head .ui-grow { flex: 1; }
+.ui-lede { margin: 0 0 10px; color: var(--muted); font-size: 12px; }
+
+/* ── buttons ────────────────────────────────────────────────────────────── */
+.ui-btn { appearance: none; display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid var(--line); background: var(--btn); color: var(--fg);
+  border-radius: 7px; padding: 6px 12px; font: 550 12px/1.2 var(--font-sans); cursor: pointer;
+  transition: background .12s, border-color .12s, color .12s; white-space: nowrap; }
+.ui-btn:hover { background: var(--btn-hi); }
+.ui-btn:disabled { opacity: .45; cursor: not-allowed; }
+.ui-btn.ui-primary { background: var(--brand); border-color: transparent; color: var(--primary-foreground); }
+.ui-btn.ui-primary:hover { filter: brightness(1.1); }
+.ui-btn.ui-danger { color: var(--bad); }
+.ui-btn.ui-ghost { background: none; border-color: transparent; color: var(--muted); }
+.ui-btn.ui-ghost:hover { color: var(--fg); background: var(--surface-900); }
+.ui-btn.ui-small { padding: 4px 9px; font-size: 11px; }
+.ui-btn[aria-pressed="true"] { background: var(--surface-800); border-color: var(--brand); }
+
+/* ── fields ─────────────────────────────────────────────────────────────── */
+.ui-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.ui-field > label, .ui-label { font-size: 11px; font-weight: 550; color: var(--muted); }
+.ui-field .ui-help { font-size: 11px; color: var(--muted); }
+.ui-input, .ui-select, select.ui-select, textarea.ui-input { appearance: none; width: 100%;
+  background: var(--bg-deep); color: var(--fg); border: 1px solid var(--line); border-radius: 7px;
+  padding: 7px 10px; font: 13px/1.3 var(--font-sans); outline: none; }
+.ui-select { padding-right: 28px; cursor: pointer;
+  background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+    linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position: calc(100% - 15px) 55%, calc(100% - 10px) 55%;
+  background-size: 5px 5px; background-repeat: no-repeat; }
+.ui-input:focus, .ui-select:focus { border-color: var(--brand); }
+.ui-switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
+.ui-switch input { appearance: none; width: 32px; height: 18px; border-radius: 999px; margin: 0;
+  background: var(--surface-700); position: relative; cursor: pointer; transition: background .15s; }
+.ui-switch input::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px;
+  border-radius: 50%; background: var(--fg); transition: transform .15s; }
+.ui-switch input:checked { background: var(--brand); }
+.ui-switch input:checked::after { transform: translateX(14px); }
+input[type="range"].ui-range { width: 100%; accent-color: var(--brand); }
+
+/* ── tables / lists ─────────────────────────────────────────────────────── */
+.ui-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.ui-table th { text-align: left; font-size: 11px; font-weight: 600; color: var(--muted);
+  padding: 6px 10px; border-bottom: 1px solid var(--line); }
+.ui-table td { padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.ui-table tr:last-child td { border-bottom: 0; }
+.ui-table tr:hover td { background: var(--surface-900); }
+.ui-list { display: flex; flex-direction: column; }
+.ui-item { display: flex; align-items: center; gap: 10px; padding: 9px 4px;
+  border-bottom: 1px solid var(--line); }
+.ui-item:last-child { border-bottom: 0; }
+.ui-item .ui-grow { flex: 1; min-width: 0; }
+.ui-item .ui-title { font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ui-item .ui-meta { color: var(--muted); font-size: 11px; }
+
+/* ── status ─────────────────────────────────────────────────────────────── */
+.ui-badge { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600;
+  padding: 2px 8px; border-radius: 999px; background: var(--surface-800); color: var(--surface-200); }
+.ui-badge.ui-ok { color: var(--ok); }
+.ui-badge.ui-warn { color: var(--warn); }
+.ui-badge.ui-bad { color: var(--bad); }
+.ui-count { display: inline-block; min-width: 18px; padding: 1px 6px; border-radius: 999px;
+  background: var(--warn); color: var(--background); font-size: 10px; font-weight: 700; text-align: center; }
+.ui-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--surface-500); flex: none; }
+.ui-dot.ui-ok { background: var(--ok); } .ui-dot.ui-warn { background: var(--warn); } .ui-dot.ui-bad { background: var(--bad); }
+
+.ui-empty { color: var(--muted); padding: 24px 8px; text-align: center; font-size: 12px; }
+.ui-empty strong { display: block; color: var(--fg); font-size: 14px; margin-bottom: 4px; }
+.ui-note { font-size: 12px; color: var(--muted); }
+.ui-note.ui-bad { color: var(--bad); }
+.ui-mono { font-family: var(--font-mono); font-size: 12px; }
+kbd { font: 10px var(--font-mono); border: 1px solid var(--line); border-radius: 4px;
+  padding: 1px 5px; color: var(--surface-300); background: var(--surface-900); }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--surface-800); border-radius: 10px; border: 2px solid var(--bg-sunk); }
+::-webkit-scrollbar-track { background: transparent; }

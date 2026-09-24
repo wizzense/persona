@@ -5,7 +5,7 @@
  * because the pane is an iframe under nodeIntegrationInSubFrames -- same
  * wiring stage-preload.cjs uses for stage.html.
  *
- * Twelve verbs over cast-config.cjs's (U01) write surface and
+ * Thirteen verbs over cast-config.cjs's (U01) write surface and
  * room-stage-host.cjs's castPaneImpl (U07) read surface. See cast-window.cjs
  * for the desk:cast-* channel names this mirrors 1:1, and its `call()` for
  * why every one of these resolves to `{ok, ...}` rather than ever rejecting.
@@ -45,4 +45,7 @@ contextBridge.exposeInMainWorld("aitherCast", {
   /** Clear a mute and set presence back to "normal" -- the inverse of muteOrigin
    *  AND of a presence:"off"/"quiet" grant. */
   reveal: (key) => ipcRenderer.invoke("desk:cast-reveal", String(key || "")),
+  /** Say a fixed sample line in `voice` through the resident, so a voice can be
+   *  heard before it is assigned. Only the id crosses; main owns the words. */
+  preview: (voice) => ipcRenderer.invoke("desk:cast-preview", String(voice || "")),
 });

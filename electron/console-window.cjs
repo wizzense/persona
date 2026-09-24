@@ -56,21 +56,21 @@ function electron() {
  * comes up blank in the other.
  */
 const PANES = Object.freeze([
+  // Home (owner, 2026-09-23: "completely redesign all of this"): the one page that
+  // answers "does anything need me, and is it all running" without visiting five.
+  // It has no window of its own, so it cannot be detached (see PLACES/detachable).
+  Object.freeze({
+    id: "home", label: "Home", hint: "What needs you, what is running", section: "Now", icon: "home",
+    place: "home", kind: "file", file: "home.html", detachable: false,
+  }),
   // FIRST on purpose (owner, 2026-09-13: "no proper notification area"): the
   // inbox — decision cards and the agents' messages — is what the tray badge,
   // the taskbar overlay and the bell all open. Same renderer as the old "Desk
   // panel" (?deck=1), so a detached inbox is that window.
   Object.freeze({
-    id: "cards", label: "Inbox", hint: "Decisions and messages", section: "Now", icon: "bell",
+    id: "cards", label: "Decisions", hint: "What is waiting on you", section: "Now", icon: "bell",
+    place: "decisions",
     kind: "view", query: "deck=1",
-  }),
-  Object.freeze({
-    id: "command", label: "Command", hint: "Say it in a sentence", section: "Control", icon: "terminal",
-    kind: "file", file: "command.html",
-  }),
-  Object.freeze({
-    id: "fleet", label: "Fleet", hint: "Containers, VRAM, doors", section: "Control", icon: "server",
-    kind: "file", file: "fleet-control.html",
   }),
   // Slice 1 of COCKPIT-DESIGN: the unified session directory (daemon-owned
   // sessions + DISCOVERED interactive Claude Code tabs), read-only with live
@@ -79,11 +79,18 @@ const PANES = Object.freeze([
   // answers "no open target" and the rail stays honest).
   Object.freeze({
     id: "sessions", label: "Sessions", hint: "Every Claude session, live", section: "Agents", icon: "layers",
+    place: "agents",
     kind: "file", file: "sessions.html",
   }),
   Object.freeze({
     id: "chat", label: "Chat", hint: "The company room", section: "Agents", icon: "chat",
+    place: "agents",
     kind: "view", query: "chat=1",
+  }),
+  Object.freeze({
+    id: "command", label: "Command", hint: "Say it in a sentence", section: "Control", icon: "terminal",
+    place: "agents",
+    kind: "file", file: "command.html",
   }),
   // Plan 40 slice G, the surface half: who is standing on the stage and the
   // arrangements, in a list. Every other way to manage a body is a GESTURE on
@@ -92,21 +99,8 @@ const PANES = Object.freeze([
   // stage in the first place.
   Object.freeze({
     id: "stage", label: "Stage", hint: "Who is standing, and where", section: "Presence", icon: "users",
+    place: "avatars",
     kind: "file", file: "stage.html",
-  }),
-  // Plan 40 cast pane: who appears and how they sound, authored in cast.json
-  // (U01) instead of a nested tray submenu click. `kind: "file"` on purpose --
-  // it needs no vite build, and src/** is the peer's territory this unit does
-  // not touch.
-  Object.freeze({
-    id: "cast", label: "Cast", hint: "Who appears, and how they sound", section: "Presence", icon: "mic",
-    kind: "file", file: "cast.html",
-  }),
-  // Plan: the ONE shared settings page (owner 2026-09-22: "there still isnt
-  // just a shared settings page"). kind:"file" -- no vite build.
-  Object.freeze({
-    id: "settings", label: "Settings", hint: "Voice, hotkeys, devices", section: "Control", icon: "settings",
-    kind: "file", file: "settings.html",
   }),
   // Owner, 2026-09-20: the Inbox pane was rendering decision cards, wakes, relay messages,
   // the stage slots, the spawn chips AND the whole Models & Market grid in one scroll
@@ -115,7 +109,29 @@ const PANES = Object.freeze([
   // component with a view prop, so the two panes cannot drift.
   Object.freeze({
     id: "characters", label: "Characters", hint: "Bodies, spawns and the market", section: "Presence", icon: "users",
+    place: "avatars",
     kind: "view", query: "characters=1",
+  }),
+  // Plan 40 cast pane: who appears and how they sound, authored in cast.json
+  // (U01) instead of a nested tray submenu click. `kind: "file"` on purpose --
+  // it needs no vite build, and src/** is the peer's territory this unit does
+  // not touch.
+  Object.freeze({
+    id: "cast", label: "Voices", hint: "Who speaks, in which voice, how loud", section: "Presence", icon: "mic",
+    place: "avatars",
+    kind: "file", file: "cast.html",
+  }),
+  Object.freeze({
+    id: "fleet", label: "Fleet", hint: "Containers, VRAM, doors", section: "Control", icon: "server",
+    place: "fleet",
+    kind: "file", file: "fleet-control.html",
+  }),
+  // Plan: the ONE shared settings page (owner 2026-09-22: "there still isnt
+  // just a shared settings page"). kind:"file" -- no vite build.
+  Object.freeze({
+    id: "settings", label: "Settings", hint: "Voice, hotkeys, devices", section: "Control", icon: "settings",
+    place: "settings",
+    kind: "file", file: "settings.html",
   }),
   // 🚩 HOSTED, not framed, and the difference is the login. The AitherDesktop
   // shell keeps its session in the persist:living-desktop partition -- that is
@@ -126,8 +142,26 @@ const PANES = Object.freeze([
   // pane and the window are one profile.
   Object.freeze({
     id: "desktop", label: "AitherOS Online", hint: "The living desktop, signed in", section: "Online", icon: "desktop",
+    place: "online",
     kind: "hosted", partition: "persist:living-desktop",
   }),
+]);
+
+/**
+ * The rail. Eleven panes under six headings (two of them printed twice) became
+ * five places; a place with several panes shows them as tabs over the stage.
+ * Pane ids did not change, so every deep link -- "Cast & voices…", "Chat with…",
+ * a card arriving -- still lands on its pane, now inside its place.
+ * `footer` places sit under the spacer: things you visit, not places you work.
+ */
+const PLACES = Object.freeze([
+  Object.freeze({ id: "home", label: "Home", icon: "home" }),
+  Object.freeze({ id: "decisions", label: "Decisions", icon: "bell" }),
+  Object.freeze({ id: "agents", label: "Agents", icon: "layers" }),
+  Object.freeze({ id: "avatars", label: "Avatars", icon: "users" }),
+  Object.freeze({ id: "fleet", label: "Fleet", icon: "server" }),
+  Object.freeze({ id: "settings", label: "Settings", icon: "settings", footer: true }),
+  Object.freeze({ id: "online", label: "AitherOS Online", icon: "desktop", footer: true }),
 ]);
 
 let consoleWindow = null;
@@ -169,7 +203,10 @@ function broadcastAppearance(appearance) {
  */
 function paneSources(rendererUrl) {
   const base = String(rendererUrl || "");
-  return PANES.map((pane) => {
+  return PANES.map((bare) => {
+    const place = PLACES.find((p) => p.id === bare.place) || null;
+    const pane = { ...bare, placeLabel: place ? place.label : bare.label, placeIcon: place ? place.icon : bare.icon,
+      footer: Boolean(place && place.footer), detachable: bare.detachable !== false };
     if (pane.kind === "file") return { ...pane, src: `./${pane.file}` };
     // A hosted pane has no src at all: main paints its own view over the stage
     // rectangle the shell reports. The shell must NOT build an iframe for it.
@@ -622,6 +659,7 @@ function __setWindowsForTest(windows) {
 }
 
 module.exports = {
+  PLACES,
   showConsole,
   focusPane,
   setInboxBadge,

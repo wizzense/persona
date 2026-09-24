@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' file:; script-src 'unsafe-inline'; img-src data:;" />
+<title>Home</title>
+<link rel="stylesheet" href="aither-tokens.css" />
+<link rel="stylesheet" href="aither-ui.css" />
+<style>
+  /* Layout only -- every component comes from aither-ui.css. */
+  .home { display: grid; gap: 16px; grid-template-columns: minmax(0, 3fr) minmax(260px, 2fr); max-width: 1180px; }
+  .home .wide { grid-column: 1 / -1; }
+  @media (max-width: 820px) { .home { grid-template-columns: 1fr; } }
+  .health { display: flex; align-items: center; gap: 10px; }
+  .health .ui-grow { flex: 1; }
+  .card-row { padding: 10px 2px; border-bottom: 1px solid var(--line); display: grid; gap: 6px; }
+  .card-row:last-child { border-bottom: 0; }
+  .card-row .top { display: flex; align-items: center; gap: 8px; }
+  .card-row .top .ui-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+  .card-row .sum { color: var(--muted); font-size: 12px; }
+  .switches { display: grid; gap: 12px; }
+  .switches .line { display: flex; align-items: center; gap: 10px; }
+  .switches .line .ui-grow { flex: 1; }
+  .big { font-size: 28px; font-weight: 700; line-height: 1; }
+  .stats { display: flex; gap: 24px; margin-bottom: 12px; }
+  .stats .ui-meta { color: var(--muted); font-size: 11px; margin-top: 4px; }
+  html.embedded .ui-head h1 { display: none; }
+</style>
+</head>
+<body class="ui">
+  <div class="ui-head">
+    <h1>Home</h1>
+    <span class="ui-sub" id="stamp"></span>
+    <span class="ui-grow"></span>
+    <button class="ui-btn ui-ghost ui-small" id="refresh">Refresh</button>
+  </div>
+  <div class="ui-body">
+    <div class="home">
+      <div class="ui-card ui-tight wide health">
+        <span class="ui-dot" id="health-dot"></span>
+        <span class="ui-grow" id="health-text">Loading…</span>
+        <button class="ui-btn ui-small" data-open="fleet">Fleet</button>
+      </div>
+
+      <section class="ui-card" id="decisions">
+        <div class="ui-card-head">
+          <h2>Needs you</h2><span class="ui-grow"></span>
+          <button class="ui-btn ui-small" data-open="cards">All decisions</button>
+        </div>
+        <div class="stats">
+          <div><div class="big" id="d-waiting">–</div><div class="ui-meta">waiting on you</div></div>
+          <div><div class="big" id="d-today">–</div><div class="ui-meta">new today</div></div>
+          <div><div class="big" id="d-stale">–</div><div class="ui-meta">older than a week</div></div>
+        </div>
+        <div id="d-list" class="ui-list"></div>
+      </section>
+
+      <section class="ui-card">
+        <div class="ui-card-head"><h2>Voice &amp; avatar</h2></div>
+        <div class="switches">
+          <div class="line">
+            <span class="ui-grow"><b>Voices</b><div class="ui-note" id="v-voices-note"></div></span>
+            <label class="ui-switch"><input type="checkbox" id="v-voices" /></label>
+          </div>
+          <div class="line">
+            <span class="ui-grow"><b>Microphone</b><div class="ui-note" id="v-mic-note"></div></span>
+            <label class="ui-switch"><input type="checkbox" id="v-mic" /></label>
+          </div>
+          <div class="line">
+            <span class="ui-grow"><b>Avatar</b><div class="ui-note" id="v-avatar-note"></div></span>
+            <label class="ui-switch"><input type="checkbox" id="v-avatar" /></label>
+          </div>
+          <div class="ui-row">
+            <button class="ui-btn ui-small" data-open="cast">Voices…</button>
+            <button class="ui-btn ui-small" data-open="characters">Characters…</button>
+            <button class="ui-btn ui-small" data-open="stage">Stage…</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="ui-card wide">
+        <div class="ui-card-head">
+          <h2>Sessions</h2><span class="ui-sub ui-note" id="s-count"></span><span class="ui-grow"></span>
+          <button class="ui-btn ui-small" data-open="chat">Chat</button>
+          <button class="ui-btn ui-small" data-open="command">Command</button>
+          <button class="ui-btn ui-small" data-open="sessions">All sessions</button>
+        </div>
+        <div id="s-list" class="ui-list"></div>
+      </section>
+    </div>
+  </div>
+
+<script>
+"use strict";
+const api = window.aitherHome;
+const $ = (id) => document.getElementById(id);
+const el = (tag, cls, text) => {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text != null) node.textContent = text;
+  return node;
+};
+let busy = false;
+
+function renderDecisions(d) {
+  $("d-waiting").textContent = String(d.waiting);
+  $("d-today").textContent = String(d.today);
+  $("d-stale").textContent = String(d.stale);
+  const list = $("d-list");
+  list.replaceChildren();
+  if (!d.top.length) {
+    const empty = el("div", "ui-empty");
+    empty.append(el("strong", null, "Nothing needs you"), el("span", null, d.total ? `${d.total} cards are informational.` : "The inbox is clear."));
+    list.appendChild(empty);
+    return;
+  }
+  for (const card of d.top) {
+    const row = el("div", "card-row");
+    const top = el("div", "top");
+    const dot = el("span", "ui-dot " + (card.urgency === "critical" || card.urgency === "high" ? "ui-bad" : "ui-warn"));
+    const title = el("span", "ui-title", card.title);
+    title.title = card.title;
+    const age = el("span", "ui-meta", card.age);
+    const open = el("button", "ui-btn ui-ghost ui-small", "Open");
+    open.addEventListener("click", () => api.open("cards", card.id));
+    top.append(dot, title, age, open);
+    row.appendChild(top);
+    if (card.summary) row.appendChild(el("div", "sum", card.summary));
+    if (card.options.length) {
+      const opts = el("div", "ui-row");
+      for (const option of card.options) {
+        const button = el("button", "ui-btn ui-small" + (option.recommended ? " ui-primary" : ""), option.label);
+        button.addEventListener("click", async () => {
+          button.disabled = true;
+          const result = await api.answer(card.id, option.key);
+          if (!result || result.ok === false) {
+            button.disabled = false;
+            $("stamp").textContent = (result && result.error) || "could not answer";
+          }
+          void refresh();
+        });
+        opts.appendChild(button);
+      }
+      row.appendChild(opts);
+    }
+    list.appendChild(row);
+  }
+}
+
+function renderSessions(s) {
+  const list = $("s-list");
+  list.replaceChildren();
+  if (!s.ok) {
+    $("s-count").textContent = "";
+    const empty = el("div", "ui-empty");
+    empty.append(el("strong", null, "Sessions unavailable"), el("span", null, s.note));
+    list.appendChild(empty);
+    return;
+  }
+  const parts = Object.entries(s.byStatus).map(([k, v]) => `${v} ${k}`);
+  $("s-count").textContent = `${s.total} · ${parts.join(", ")}`;
+  if (!s.recent.length) {
+    list.appendChild(el("div", "ui-empty", "No active sessions."));
+    return;
+  }
+  for (const row of s.recent) {
+    const item = el("div", "ui-item");
+    const ok = /run|active|busy|work/i.test(row.status);
+    item.appendChild(el("span", "ui-dot " + (ok ? "ui-ok" : "")));
+    const grow = el("div", "ui-grow");
+    grow.append(el("div", "ui-title", row.title), el("div", "ui-meta", [row.harness, row.status, row.activity].filter(Boolean).join(" · ")));
+    item.appendChild(grow);
+    list.appendChild(item);
+  }
+}
+
+function renderVoice(v, a) {
+  $("v-voices").checked = !v.voicesMuted;
+  $("v-voices-note").textContent = v.voicesMuted ? "Muted — bubbles still show" : "Agents speak out loud";
+  $("v-mic").checked = !v.micMuted;
+  $("v-mic-note").textContent = v.micMuted ? "Muted" : `On · ${v.talkMode === "open" ? "open mic" : "press to talk"}`;
+  $("v-avatar").checked = a.shown;
+  $("v-avatar-note").textContent = (a.shown ? "Shown" : "Hidden") + (a.character ? ` · ${a.character}` : "")
+    + (a.bodies ? ` · ${a.bodies} on stage` : "");
+}
+
+async function refresh() {
+  if (busy || !api) return;
+  busy = true;
+  try {
+    const s = await api.summary();
+    renderDecisions(s.decisions);
+    renderSessions(s.sessions);
+    renderVoice(s.voice, s.avatars);
+    $("health-dot").className = "ui-dot " + (s.health.level === "ok" ? "ui-ok" : "ui-warn");
+    $("health-text").textContent = s.health.text;
+    $("stamp").textContent = "updated " + new Date(s.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  } catch (error) {
+    $("health-dot").className = "ui-dot ui-bad";
+    $("health-text").textContent = "Home could not read the desk: " + String((error && error.message) || error);
+  } finally {
+    busy = false;
+  }
+}
+
+// Each switch runs the SAME registry command as the tray, the avatar menu and Ctrl+K.
+$("v-voices").addEventListener("change", async () => { await api.run("voice.silence"); void refresh(); });
+$("v-mic").addEventListener("change", async () => { await api.run("voice.mute"); void refresh(); });
+$("v-avatar").addEventListener("change", async () => { await api.run("avatar.toggle"); void refresh(); });
+for (const button of document.querySelectorAll("[data-open]")) {
+  button.addEventListener("click", () => api.open(button.dataset.open));
+}
+$("refresh").addEventListener("click", () => void refresh());
+if (!api) $("health-text").textContent = "Home has no bridge — open it from the Aither Console.";
+void refresh();
+setInterval(() => { if (!document.hidden) void refresh(); }, 15000);
+</script>
+</body>
+</html>

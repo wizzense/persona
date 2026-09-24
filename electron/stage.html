@@ -4,70 +4,48 @@
 <meta charset="utf-8" />
 <title>Stage</title>
 <link rel="stylesheet" href="aither-tokens.css" />
+<link rel="stylesheet" href="aither-ui.css" />
 <style>
-  /* Colours, type and scrollbars come from aither-tokens.css -- GENERATED from Veil's
-     tokens by AitherOS/dev/tools/gen_desk_tokens.py. This pane used to re-declare its
-     own --bg/--panel/--line/--fg palette by hand; five panes did, none matched the
-     family. What stays here is only what this pane MEANS by a colour. */
-  :root {
-    --red: var(--destructive);
-  }
-  * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
-    font: 13px/1.45 var(--font-sans); }
-  body { display: grid; grid-template-rows: 44px auto 1fr auto; height: 100vh; }
+  /* Components (buttons, cards, lists, badges, empty states) come from aither-ui.css,
+     colours and type from aither-tokens.css (GENERATED from Veil's tokens by
+     AitherOS/dev/tools/gen_desk_tokens.py). This sheet only lays the pane out.
+     `.row` and `.chip` stay on the elements as hooks: console-smoke.cjs counts
+     `#list .row` and `#arrangements .chip`. */
 
-  .bar { display: flex; align-items: center; gap: 10px; padding: 0 14px;
-    border-bottom: 1px solid var(--line); }
   /* ONE chrome. Inside the console the shell's bar already names this pane, so the
      pane's own title is the double header from the owner's 2026-09-20 screenshots.
      console-preload.cjs sets .embedded per frame; detached into its own window the
      page is not embedded and keeps its title, because there it is the only one. */
   .embedded .bar .title { display: none; }
-  .bar .title { font-weight: 600; }
-  .bar .state { color: var(--muted); font-size: 12px; flex: 1; min-width: 0;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .chip { appearance: none; border: 1px solid var(--line); background: var(--btn);
-    color: var(--muted); border-radius: 6px; padding: 5px 10px; cursor: pointer;
-    font: 12px/1.2 system-ui; }
-  .chip:hover { background: var(--btn-hi); color: var(--fg); }
-  .chip.on { color: var(--fg); border-color: color-mix(in oklch, var(--brand), var(--background) 60%); }
-  .chip.danger:hover { color: var(--red); border-color: color-mix(in oklch, var(--bad), var(--background) 62%); }
-
-  .arrangements { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 14px;
-    border-bottom: 1px solid var(--line); }
-
-  #list { overflow-y: auto; min-height: 0; padding: 6px 0; }
-  .row { display: flex; align-items: center; gap: 10px; padding: 9px 14px;
-    border-bottom: 1px solid var(--btn); }
-  .row .who { flex: 1; min-width: 0; display: grid; gap: 2px; }
-  .row .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .row .sub { color: var(--muted); font-size: 11px; }
-  .row .tag { font-size: 10px; border-radius: 999px; padding: 1px 7px;
-    border: 1px solid var(--line); color: var(--muted); }
-  .empty { color: var(--muted); padding: 22px 14px; }
-  .empty strong { display: block; color: var(--fg); margin-bottom: 6px; }
-  footer { border-top: 1px solid var(--line); padding: 8px 14px; color: var(--muted);
-    font-size: 11px; display: flex; gap: 10px; align-items: center; }
-  footer .err { color: var(--red); flex: 1; }
+  .bar .ui-sub { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ui-item .ui-grow { display: grid; gap: 2px; }
+  #err:empty { display: none; }
 </style>
 </head>
-<body>
-  <div class="bar">
-    <span class="title">Stage</span>
-    <span class="state" id="state">reading the stage…</span>
-    <button class="chip" id="refresh">Refresh</button>
-  </div>
+<body class="ui">
+  <header class="ui-head bar">
+    <h1 class="title">Stage</h1>
+    <span class="ui-sub" id="state">reading the stage…</span>
+    <span class="ui-grow"></span>
+    <button class="ui-btn ui-small" id="refresh">Refresh</button>
+  </header>
 
-  <div class="arrangements" id="arrangements"></div>
+  <main class="ui-body">
+    <div class="ui-stack">
+      <section class="ui-card">
+        <div class="ui-card-head"><h2>Arrange</h2></div>
+        <div class="ui-row" id="arrangements"></div>
+      </section>
 
-  <div id="list"></div>
+      <section class="ui-card">
+        <div class="ui-card-head"><h2>On stage</h2><span class="ui-grow"></span><span class="ui-note" id="safety"></span></div>
+        <div class="ui-list" id="list"></div>
+      </section>
 
-  <footer>
-    <span class="err" id="err"></span>
-    <span id="safety"></span>
-    <span>Bodies are also draggable on the stage itself — this pane is the path that needs no aim.</span>
-  </footer>
+      <p class="ui-note ui-bad" id="err"></p>
+      <p class="ui-note">Bodies are also draggable on the stage itself — this pane is the path that needs no aim.</p>
+    </div>
+  </main>
 
 <script>
 "use strict";
@@ -114,7 +92,7 @@ function renderArrangements() {
   holder.replaceChildren();
   for (const item of ARRANGEMENTS) {
     const button = document.createElement("button");
-    button.className = "chip";
+    button.className = "chip ui-btn";
     button.textContent = item.label;
     button.dataset.arrangement = item.id;
     // `focus` needs a subject; without a selection it would silently focus the
@@ -134,10 +112,10 @@ function renderBodies() {
   listEl.replaceChildren();
   if (!bodies.length) {
     const empty = document.createElement("div");
-    empty.className = "empty";
+    empty.className = "ui-empty";
     const head = document.createElement("strong");
     head.textContent = "Nobody is on the stage";
-    const body = document.createElement("p");
+    const body = document.createElement("span");
     body.textContent = "The resident avatar appears here once the window is open, and room "
       + "agents appear as they speak. Arrangements apply to whoever is standing.";
     empty.append(head, body);
@@ -146,26 +124,28 @@ function renderBodies() {
   }
   for (const entry of bodies) {
     const row = document.createElement("div");
-    row.className = "row";
+    row.className = "row ui-item";
 
     const who = document.createElement("div");
-    who.className = "who";
+    who.className = "ui-grow";
     const name = document.createElement("div");
-    name.className = "name";
+    name.className = "ui-title";
     // WHO first (the agent or session), the body's file name second.
     name.textContent = entry.agent || entry.name || entry.slotId;
     const sub = document.createElement("div");
-    sub.className = "sub";
+    sub.className = "ui-meta";
     sub.textContent = [entry.agent ? `body ${entry.name || "?"}` : null, entry.slotId].filter(Boolean).join(" · ");
     who.append(name, sub);
 
     const tag = document.createElement("span");
-    tag.className = "tag";
+    tag.className = "ui-badge" + (entry.resident ? " ui-ok" : "");
     tag.textContent = entry.resident ? "resident" : "room";
 
     const select = document.createElement("button");
-    select.className = "chip" + (selected === entry.slotId ? " on" : "");
-    select.textContent = selected === entry.slotId ? "Selected" : "Select";
+    const isSel = selected === entry.slotId;
+    select.className = "chip ui-btn ui-small";
+    select.setAttribute("aria-pressed", isSel ? "true" : "false");
+    select.textContent = isSel ? "Selected" : "Select";
     select.addEventListener("click", () => {
       selected = selected === entry.slotId ? null : entry.slotId;
       renderBodies();
@@ -173,7 +153,7 @@ function renderBodies() {
     });
 
     const frame = document.createElement("button");
-    frame.className = "chip";
+    frame.className = "chip ui-btn ui-small";
     frame.textContent = "Frame";
     frame.addEventListener("click", () => call(window.aitherStage.focus(entry.slotId), "Frame"));
 
@@ -183,7 +163,7 @@ function renderBodies() {
     // button is not offered rather than offered and refused.
     if (!entry.resident) {
       const remove = document.createElement("button");
-      remove.className = "chip danger";
+      remove.className = "chip ui-btn ui-small ui-danger";
       remove.textContent = "Send away";
       remove.addEventListener("click", async () => {
         if (await call(window.aitherStage.remove(entry.slotId), "Send away")) {

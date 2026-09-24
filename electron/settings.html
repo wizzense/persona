@@ -4,102 +4,85 @@
 <meta charset="utf-8" />
 <title>Settings</title>
 <link rel="stylesheet" href="aither-tokens.css" />
+<link rel="stylesheet" href="aither-ui.css" />
 <style>
-  :root { --red: var(--destructive); --amber: var(--warning); }
-  * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
-    font: 13px/1.45 var(--font-sans); }
-  body { display: grid; grid-template-rows: 44px 1fr; height: 100vh; }
-  .bar { display: flex; align-items: center; gap: 10px; padding: 0 14px;
-    border-bottom: 1px solid var(--line); }
+  /* Components (cards, fields, switches, buttons, lists, badges) come from
+     aither-ui.css, colours and type from aither-tokens.css (GENERATED from Veil's
+     tokens by AitherOS/dev/tools/gen_desk_tokens.py). This sheet only lays the
+     settings out: one card per concern, a label column and a control column. */
+
+  /* ONE chrome: inside the console the shell's bar already names this pane. */
   .embedded .bar .title { display: none; }
-  .bar .title { font-weight: 600; }
-  #content { overflow-y: auto; min-height: 0; }
-  section { border-bottom: 1px solid var(--line); padding: 12px 14px; }
-  section h2 { margin: 0 0 4px; font-size: 12px; letter-spacing: .04em;
-    text-transform: uppercase; color: var(--muted); }
-  section .lede { color: var(--muted); font-size: 11px; margin: 0 0 10px; }
-  .row { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
-  .row label { min-width: 140px; color: var(--muted); font-size: 12px; }
-  select, button { appearance: none; border: 1px solid var(--line); background: var(--btn);
-    color: var(--fg); border-radius: 6px; padding: 6px 10px; cursor: pointer; font: 12px/1.2 system-ui; }
-  select { flex: 1; min-width: 0; }
-  button:hover { background: var(--btn-hi); }
-  button.small { padding: 3px 8px; font-size: 11px; }
-  .pill { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line);
-    border-radius: 999px; padding: 2px 10px; font-size: 11px; color: var(--muted); }
-  .pill.dead { color: var(--red); border-color: color-mix(in oklch, var(--bad), var(--background) 62%); }
-  .note { font-size: 11px; color: var(--amber); margin-top: 4px; }
-  .hotkeys { display: flex; flex-direction: column; gap: 6px; }
-  .hotkey-row { display: flex; align-items: center; gap: 8px; padding: 6px 0;
-    border-bottom: 1px solid color-mix(in oklch, var(--line), transparent 40%); }
-  .hotkey-row .id { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .hotkey-row .accel { font-family: var(--font-mono, monospace); font-size: 12px;
-    background: var(--btn); border: 1px solid var(--line); border-radius: 4px; padding: 2px 8px; }
-  #status { font-size: 11px; color: var(--muted); padding: 4px 14px; }
-  #status.err { color: var(--red); }
+  #status { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #status.err { color: var(--bad); }
   #status.ok { color: var(--fg); }
+  .ui-stack { max-width: 760px; }
+  .setting { display: grid; grid-template-columns: 150px 1fr auto; align-items: center;
+    gap: 10px; margin: 10px 0; }
+  .setting > .ui-label { margin: 0; }
+  .setting.span2 { grid-template-columns: 150px 1fr; }
+  #linkCode:empty { display: none; }
+  .ui-item .ui-grow { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>
 </head>
-<body>
-  <div class="bar"><div class="title">Settings</div></div>
-  <div id="content">
-    <section>
-      <h2>Account</h2>
-      <p class="lede">Link this machine to aitherium.com. One sign-in for awdesk, awsh and adk; what you get depends on your role.</p>
-      <div class="row">
-        <span id="linkState" style="flex:1">checking…</span>
-        <button id="linkBtn" class="small">Link to aitherium.com</button>
-      </div>
-      <div id="linkCode" class="note"></div>
-    </section>
+<body class="ui">
+  <header class="ui-head bar">
+    <h1 class="title">Settings</h1>
+    <span class="ui-sub" id="status"></span>
+  </header>
+  <main class="ui-body" id="content">
+    <div class="ui-stack">
+      <section class="ui-card">
+        <div class="ui-card-head"><h2>Account</h2></div>
+        <p class="ui-lede">Link this machine to aitherium.com. One sign-in for awdesk, awsh and adk; what you get depends on your role.</p>
+        <div class="ui-row">
+          <span id="linkState" class="ui-grow">checking…</span>
+          <button id="linkBtn" class="ui-btn ui-primary ui-small">Link to aitherium.com</button>
+        </div>
+        <p id="linkCode" class="ui-note"></p>
+      </section>
 
-    <section>
-      <h2>Microphone</h2>
-      <p class="lede">Which device captures your voice, and whether it's muted.</p>
-      <div class="row">
-        <label>Input device</label>
-        <select id="micSelect"><option value="">Grant access to list devices…</option></select>
-        <button id="grantMic" class="small">Grant access</button>
-      </div>
-      <div class="row">
-        <label>Muted</label>
-        <button id="muteToggle" class="small">…</button>
-      </div>
-      <p class="note">Takes effect on your next talk (no restart needed). If the saved device disappears, the system default is used instead.</p>
-    </section>
+      <section class="ui-card">
+        <div class="ui-card-head"><h2>Voice &amp; microphone</h2></div>
+        <p class="ui-lede">Which device captures your voice, whether it's muted, and how listening starts and stops.</p>
+        <div class="setting">
+          <label class="ui-label" for="micSelect">Input device</label>
+          <select id="micSelect" class="ui-select"><option value="">Grant access to list devices…</option></select>
+          <button id="grantMic" class="ui-btn ui-small">Grant access</button>
+        </div>
+        <div class="setting span2">
+          <span class="ui-label">Muted</span>
+          <label class="ui-switch"><input type="checkbox" id="muteToggle" /> <span>Mic muted</span></label>
+        </div>
+        <div class="setting span2">
+          <label class="ui-label" for="talkMode">Talk mode</label>
+          <select id="talkMode" class="ui-select">
+            <option value="toggle">Toggle (press to start, press again to stop)</option>
+            <option value="hold">Hands-free — the hotkey records until you stop speaking</option>
+            <option value="open">Open mic — always listening; the hotkey turns it on and off</option>
+          </select>
+        </div>
+        <p class="ui-note">Changes take effect on your next talk (no restart needed). If the saved device disappears, the system default is used instead. Open mic sends each sentence as you finish it and ignores the mic while Aither is speaking; Mute closes it. Clicking the avatar toggles talking and pressing and holding it talks while held, in every mode.</p>
+      </section>
 
-    <section>
-      <h2>Talk mode</h2>
-      <p class="lede">How the mic starts and stops listening.</p>
-      <div class="row">
-        <label>Mode</label>
-        <select id="talkMode">
-          <option value="toggle">Toggle (press to start, press again to stop)</option>
-          <option value="hold">Hands-free — the hotkey records until you stop speaking</option>
-          <option value="open">Open mic — always listening; the hotkey turns it on and off</option>
-        </select>
-      </div>
-      <p class="note">Open mic sends each sentence as you finish it and ignores the mic while Aither is speaking. Mute closes it. Clicking the avatar toggles talking and pressing and holding it talks while held, in every mode.</p>
-    </section>
+      <section class="ui-card">
+        <div class="ui-card-head"><h2>Hotkeys</h2></div>
+        <p class="ui-lede">Click Rebind, then press the key combo you want. Conflicts are checked before saving.</p>
+        <div id="hotkeys" class="ui-list"></div>
+      </section>
 
-    <section>
-      <h2>Hotkeys</h2>
-      <p class="lede">Click Rebind, then press the key combo you want. Conflicts are checked before saving.</p>
-      <div id="hotkeys" class="hotkeys"></div>
-    </section>
-
-    <section>
-      <h2>Updates</h2>
-      <p class="lede">Aither World bricks installed on this machine. Upgrade tests the brick afterwards and rolls back on its own if the test fails.</p>
-      <div class="row">
-        <button id="bricksCheck" class="small">Check for updates</button>
-        <label style="min-width:0"><input type="checkbox" id="bricksOnlyOutdated" checked> only outdated</label>
-      </div>
-      <div id="bricks" class="hotkeys"></div>
-    </section>
-  </div>
-  <div id="status"></div>
+      <section class="ui-card">
+        <div class="ui-card-head">
+          <h2>Updates</h2>
+          <span class="ui-grow"></span>
+          <label class="ui-switch ui-note"><input type="checkbox" id="bricksOnlyOutdated" checked /> only outdated</label>
+          <button id="bricksCheck" class="ui-btn ui-small">Check for updates</button>
+        </div>
+        <p class="ui-lede">Aither World bricks installed on this machine. Upgrade tests the brick afterwards and rolls back on its own if the test fails.</p>
+        <div id="bricks" class="ui-list"></div>
+      </section>
+    </div>
+  </main>
 
 <script>
 (() => {
@@ -115,15 +98,14 @@
 
   function say(text, kind) {
     statusEl.textContent = text || "";
-    statusEl.className = kind || "";
+    statusEl.className = "ui-sub" + (kind ? " " + kind : "");
   }
 
   async function refresh() {
     const res = await bridge.get();
     if (!res || !res.ok) { say("could not read settings: " + (res && res.error || "unknown"), "err"); return; }
     current = res;
-    muteToggle.textContent = res.input.micMuted ? "Unmute" : "Mute";
-    muteToggle.classList.toggle("on", !!res.input.micMuted);
+    muteToggle.checked = !!res.input.micMuted;
     talkModeSel.value = res.input.talkMode || "toggle";
     if (res.input.micDeviceLabel) {
       // Nothing selectable until a grant happens, but show what's saved.
@@ -170,11 +152,15 @@
     say(result.ok ? "saved" : "could not save: " + (result.error || "unknown"), result.ok ? "ok" : "err");
   });
 
-  muteToggle.addEventListener("click", async () => {
+  muteToggle.addEventListener("change", async () => {
     const next = !(current && current.input.micMuted);
     const result = await bridge.setInput({ micMuted: next });
     if (result.ok) await refresh();
-    else say("could not save: " + (result.error || "unknown"), "err");
+    else {
+      // The switch flipped before the save; put it back to what is actually stored.
+      muteToggle.checked = !!(current && current.input.micMuted);
+      say("could not save: " + (result.error || "unknown"), "err");
+    }
   });
 
   talkModeSel.addEventListener("change", async () => {
@@ -197,20 +183,26 @@
 
   function renderHotkeys(rows) {
     hotkeysEl.innerHTML = "";
+    if (!rows.length) {
+      const empty = document.createElement("div");
+      empty.className = "ui-empty";
+      empty.textContent = "no hotkeys registered";
+      hotkeysEl.appendChild(empty);
+    }
     for (const row of rows) {
       const el = document.createElement("div");
-      el.className = "hotkey-row";
+      el.className = "ui-item";
       const idEl = document.createElement("div");
-      idEl.className = "id";
+      idEl.className = "ui-grow";
       idEl.textContent = row.label || row.id;
-      const accelEl = document.createElement("span");
-      accelEl.className = "accel" + (row.dead ? " pill dead" : "");
+      const accelEl = document.createElement(row.dead ? "span" : "kbd");
+      accelEl.className = row.dead ? "ui-badge ui-bad" : "";
       accelEl.textContent = row.accel + (row.dead ? " (held by another app)" : "");
       const rebindBtn = document.createElement("button");
-      rebindBtn.className = "small";
+      rebindBtn.className = "ui-btn ui-small";
       rebindBtn.textContent = "Rebind";
       const resetBtn = document.createElement("button");
-      resetBtn.className = "small";
+      resetBtn.className = "ui-btn ui-small ui-ghost";
       resetBtn.textContent = "Reset";
       resetBtn.disabled = row.accel === row.defaultAccel;
       resetBtn.addEventListener("click", async () => {
@@ -254,32 +246,32 @@
     const rows = onlyOutdated.checked ? bricksRows.filter((r) => r.outdated) : bricksRows;
     if (!rows.length) {
       const empty = document.createElement("div");
-      empty.className = "note";
+      empty.className = "ui-empty";
       empty.textContent = bricksRows.length ? "every installed brick is current" : "not checked yet";
       bricksEl.appendChild(empty);
       return;
     }
     for (const r of rows) {
       const el = document.createElement("div");
-      el.className = "hotkey-row";
+      el.className = "ui-item";
       const name = document.createElement("div");
-      name.className = "id";
+      name.className = "ui-grow";
       name.textContent = r.id;
       const ver = document.createElement("span");
-      ver.className = "accel";
+      ver.className = "ui-mono" + (r.outdated ? " ui-badge ui-warn" : "");
       ver.textContent = r.latest && r.latest !== r.installed ? `${r.installed} → ${r.latest}` : r.installed;
       el.append(name, ver);
       // An editable checkout or a git install is updated outside pip: say so, offer nothing.
       if (r.editable || r.source === "git") {
         const why = document.createElement("span");
-        why.className = "pill";
+        why.className = "ui-badge";
         why.textContent = r.editable ? "source checkout (git)" : "git install";
         el.appendChild(why);
       } else {
         for (const verb of ["upgrade", "test", "rollback"]) {
           if (verb === "upgrade" && !r.outdated) continue;
           const b = document.createElement("button");
-          b.className = "small";
+          b.className = "ui-btn ui-small" + (verb === "upgrade" ? " ui-primary" : verb === "rollback" ? " ui-ghost" : "");
           b.textContent = verb[0].toUpperCase() + verb.slice(1);
           b.addEventListener("click", async () => {
             b.disabled = true;
@@ -295,7 +287,7 @@
       }
       if (r.error && r.source !== "git") {
         const err = document.createElement("span");
-        err.className = "pill dead";
+        err.className = "ui-badge ui-bad";
         err.textContent = r.error;
         el.appendChild(err);
       }
@@ -378,6 +370,7 @@
 
   document.getElementById("bricksCheck").addEventListener("click", checkBricks);
   onlyOutdated.addEventListener("change", renderBricks);
+  renderBricks(); // "not checked yet", rather than an empty card
 
   refresh();
 })();

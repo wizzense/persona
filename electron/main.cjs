@@ -765,6 +765,9 @@ function sendBubble(slotId, text, { muted = false, durationMs = 0 } = {}) {
   return delivered;
 }
 
+/** The Voices page's ▶ (room-stage-host castPaneImpl.preview). Muting still applies. */
+const PREVIEW_ORIGIN = "service:awdesk-preview";
+
 async function speakAloud(text, voice = "nova", speed = undefined, slotId = "slot0", origin = "service:awdesk") {
   let effectiveVoice = voice || "nova";
   let effectiveSpeed = speed;
@@ -791,7 +794,8 @@ async function speakAloud(text, voice = "nova", speed = undefined, slotId = "slo
     }
     if (gate) {
       // An authored voice beats the caller; a HASH-derived one does not (voice-resolve.effectiveVoice).
-      effectiveVoice = effectiveVoiceFor(voice, gate, effectiveVoice);
+      // A PREVIEW is the exception: its whole job is the voice it was asked for.
+      effectiveVoice = origin === PREVIEW_ORIGIN && voice ? voice : effectiveVoiceFor(voice, gate, effectiveVoice);
       if (gate.speed != null) effectiveSpeed = gate.speed;
       if (gate.maxChars != null) effectiveMaxChars = gate.maxChars;
       if (typeof gate.volume === "number" && Number.isFinite(gate.volume)) effectiveVolume = gate.volume;
@@ -2440,6 +2444,59 @@ async function commandAction(text, { source = "unknown" } = {}) {
  * carries all three of open/close/isOpen. A detach with no way back would leave
  * the owner exactly where this started.
  */
+/** Home (console-window PANES "home"): one summary read, three verbs. Registered
+ *  once; every verb is an existing path -- a registry command, focusPane, the
+ *  deck's own answer -- so Home adds no second way to do anything. */
+let homeIpcWired = false;
+function ensureHomeIpc() {
+  if (homeIpcWired) return;
+  homeIpcWired = true;
+  const { buildHomeSummary } = require("./home-summary.cjs");
+  ipcMain.handle("desk:home-summary", async () => {
+    const { listSessions } = require("./sessions-client.cjs");
+    const [sessions, gateway] = await Promise.all([
+      listSessions({ timeoutMs: 3000 }).catch((error) => ({ ok: false, note: String(error?.message || error) })),
+      probeGateway(),
+    ]);
+    return buildHomeSummary({
+      cards: openDecisions,
+      triage: (card) => decisionCards.triageCard(card),
+      sessions,
+      gateway,
+      voice: { voicesMuted: voicesMuted(), micMuted: micMuted(), talkMode: talkMode() },
+      avatars: {
+        shown: Boolean(avatarWindow && !avatarWindow.isDestroyed() && avatarWindow.isVisible()),
+        bodies: avatarSlots.size,
+        character: getActiveCharacter() || "",
+      },
+    });
+  });
+  ipcMain.handle("desk:home-run", (_event, id) => {
+    if (!commandRegistry.byId(id)) return { ok: false, error: `unknown command ${id}` };
+    runCommand(id, undefined, { surface: "home" });
+    return { ok: true };
+  });
+  ipcMain.handle("desk:home-open", (_event, paneId, param) => {
+    focusPane(paneId, param || null);
+    return { ok: true };
+  });
+  ipcMain.handle("desk:home-answer", (_event, id, choice) => {
+    const ok = decisionCards.answerCard(id, choice);
+    if (ok) void postToRelay(RELAY_CHANNEL, `answered ${id}: ${choice} (via desk)`).then(() => refreshRelayFeed());
+    return ok ? { ok: true } : { ok: false, error: "awask refused the answer" };
+  });
+}
+
+/** The MCP gateway's /health, bounded. 127.0.0.1, never localhost (::1 refuses). */
+async function probeGateway() {
+  try {
+    const res = await fetch("http://127.0.0.1:8182/health", { signal: AbortSignal.timeout(1500) });
+    return res.ok ? { ok: true } : { ok: false, note: `HTTP ${res.status}` };
+  } catch (error) {
+    return { ok: false, note: error?.name === "TimeoutError" ? "no answer in 1.5 s" : "not reachable" };
+  }
+}
+
 function openConsole() {
   // 🚩 Wire the pane handlers FIRST. Both pages talk to main the moment they load
   // -- fleet-control.html probes on load, command.html sends on the first Enter --
@@ -2451,6 +2508,7 @@ function openConsole() {
   ensureFleetIpc();
   ensureCommandIpc(getFleetControl(), { createFleetWindow });
   ensureSessionsIpc();
+  ensureHomeIpc();
   ensureStageIpc(stagePaneImpl());
   // The Cast pane (U03/U07): who appears, and how they sound. Guarded --
   // cast-window.cjs may not exist on this box yet (see the guarded require
@@ -2475,6 +2533,12 @@ function openConsole() {
       run: (id, arg) => runCommand(id, arg, { surface: "palette" }),
     },
     windows: {
+      // Home has no window of its own (detachable:false) -- a pane, never a detach.
+      home: {
+        open: () => null,
+        close: () => {},
+        isOpen: () => false,
+      },
       command: {
         open: () => createCommandWindow(getFleetControl(), { createFleetWindow }),
         close: closeCommandWindow,

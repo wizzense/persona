@@ -41,13 +41,16 @@ const DOCUMENTED_CHANNELS = [
   "desk:cast-capture-stage",
   "desk:cast-mute-origin",
   "desk:cast-reveal",
+  // Added deliberately 2026-09-23: hear a voice before assigning it (the Voices
+  // page's ▶). Async like the adult gate -- it waits on the voice service.
+  "desk:cast-preview",
 ];
 
 function handlersFor(impl) {
   return castHandlers(() => impl);
 }
 
-test("the desk:cast-* channel set is EXACTLY the documented twelve -- nothing dropped, nothing extra", () => {
+test("the desk:cast-* channel set is EXACTLY the documented thirteen -- nothing dropped, nothing extra", () => {
   const handlers = handlersFor({});
   assert.deepEqual(Object.keys(handlers).sort(), [...DOCUMENTED_CHANNELS].sort());
   for (const channel of DOCUMENTED_CHANNELS) {
@@ -219,6 +222,39 @@ test("desk:cast-set-section forwards {section, patch}, refuses a missing section
   assert.ok(refused && refused.ok === false, JSON.stringify(refused));
 });
 
+
+test("desk:cast-preview forwards ONLY the voice id and returns the speak verdict", async () => {
+  const seen = [];
+  const handlers = handlersFor({ preview: async (args) => { seen.push(args); return { ok: true, durationMs: 900 }; } });
+  const result = await handlers["desk:cast-preview"](null, "en-US-AvaNeural", "say something else");
+  assert.deepEqual(result, { ok: true, durationMs: 900 });
+  // The renderer cannot choose the words: a third argument never reaches main.
+  assert.deepEqual(seen, [{ voice: "en-US-AvaNeural" }]);
+});
+
+test("desk:cast-preview refuses a missing or malformed voice id before the impl runs", async () => {
+  let called = false;
+  const handlers = handlersFor({ preview: async () => { called = true; return { ok: true }; } });
+  for (const bad of [undefined, "", "   ", 42, {}, "nova; rm -rf", "x".repeat(41)]) {
+    const result = await handlers["desk:cast-preview"](null, bad);
+    assert.equal(result.ok, false, `accepted ${JSON.stringify(bad)}`);
+  }
+  assert.equal(called, false);
+});
+
+test("desk:cast-preview turns speakAloud's {ok:false, reason} into an error the pane shows, and never rejects", async () => {
+  const refused = handlersFor({ preview: async () => ({ ok: false, reason: "voice.muted (voice)" }) });
+  const r1 = await refused["desk:cast-preview"](null, "nova");
+  assert.equal(r1.ok, false);
+  assert.match(r1.error, /voice\.muted/);
+
+  const throwing = handlersFor({ preview: async () => { throw new Error("voice service down"); } });
+  const r2 = await throwing["desk:cast-preview"](null, "nova");
+  assert.deepEqual(r2, { ok: false, error: "preview: voice service down" });
+
+  const missing = await handlersFor({})["desk:cast-preview"](null, "nova");
+  assert.equal(missing.ok, false);
+});
 
 test("setAdultContent REFUSES to open when the platform does not answer, and closes anyway", async () => {
   // The asymmetry is the security property: opening is an age attestation only the
