@@ -81,6 +81,8 @@ test("every door that can put something on screen or in the ears asks quietMode 
   // The MCP window action and the bridge's console/desktop doors moved to
   // integration-doors.cjs (slice 3); they are read THERE, not dropped.
   const doors = read("integration-doors.cjs");
+  // speakAloud moved to speech.cjs (slice 3), quietMode arriving through a getter.
+  const speech = read("speech.cjs");
   const bodyOf = (source, marker, span = 1400) => {
     const at = source.indexOf(marker);
     assert.ok(at >= 0, `door not found: ${marker}`);
@@ -94,7 +96,7 @@ test("every door that can put something on screen or in the ears asks quietMode 
     [doors, "desktopHandler: (mode) =>"],
     [main, "const announceDecisions = (list, isBacklog) =>"],
     [main, "decisionCards.setWindowRouter("],
-    [main, "async function speakAloud("],
+    [speech, "async function speakAloud("],
   ]) {
     assert.match(bodyOf(source, marker), /quietMode\.isQuiet\(\)/, `${marker} does not ask quietMode`);
   }
