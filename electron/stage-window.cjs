@@ -22,7 +22,12 @@
  * (src/stage/arrangements.ts) — main never holds a second copy of the bounds.
  */
 
-const path = require("node:path");
+// The window itself is presentation.cjs's route "stage" (slice 3, P2): its size,
+// title, preload and single-instance show+focus live in ROUTE_WINDOWS.stage.
+// This module keeps the IPC and the injected stageImpl; create/close/isOpen are wrappers.
+const { openRouteWindow, closeRouteWindow, routeWindow } = require("./presentation.cjs");
+
+const ROUTE = "stage";
 
 // Same lazy-require rule as the other window modules: loadable under
 // `node --test` without Electron.
@@ -30,7 +35,6 @@ function electron() {
   return require("electron");
 }
 
-let stageWindow = null;
 let wired = false;
 /** Injected by main.cjs: { bodies(), arrange(name, opts), focus(slotId), remove(slotId) }. */
 let stageImpl = {};
@@ -71,48 +75,17 @@ function ensureStageIpc(impl) {
 
 function createStageWindow() {
   ensureStageIpc();
-  const { BrowserWindow } = electron();
-  if (stageWindow && !stageWindow.isDestroyed()) {
-    stageWindow.show();
-    stageWindow.focus();
-    return stageWindow;
-  }
-  stageWindow = new BrowserWindow({
-    width: 780,
-    height: 620,
-    minWidth: 520,
-    minHeight: 420,
-    show: false,
-    title: "Aither Stage",
-    backgroundColor: "#0f1218",
-    autoHideMenuBar: true,
-    webPreferences: {
-      preload: path.join(__dirname, "stage-preload.cjs"),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-    },
-  });
-  // The same fence every other desk window carries.
-  stageWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-  stageWindow.webContents.on("will-navigate", (event) => event.preventDefault());
-  stageWindow.once("ready-to-show", () => {
-    stageWindow.show();
-    stageWindow.focus();
-  });
-  stageWindow.on("closed", () => {
-    stageWindow = null;
-  });
-  void stageWindow.loadFile(path.join(__dirname, "stage.html"));
-  return stageWindow;
+  // Deny-open, no-navigate, show+focus on ready and the dropped handle on
+  // 'closed' are presentation's openRouteWindow -- the same fence every desk window carries.
+  return openRouteWindow(ROUTE, { electron: electron() });
 }
 
 function closeStageWindow() {
-  if (stageWindow && !stageWindow.isDestroyed()) stageWindow.close();
+  closeRouteWindow(ROUTE);
 }
 
 function isStageWindowOpen() {
-  return Boolean(stageWindow && !stageWindow.isDestroyed());
+  return Boolean(routeWindow(ROUTE));
 }
 
 module.exports = { ensureStageIpc, createStageWindow, closeStageWindow, isStageWindowOpen };

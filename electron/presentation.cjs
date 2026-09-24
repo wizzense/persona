@@ -3,7 +3,7 @@
 /**
  * presentation.cjs -- the desk's window plane: the route registry every console
  * pane detaches through, the deck and chat panels, the standalone file-page
- * windows (ROUTE_WINDOWS: the Command, Fleet and Sessions windows so far), openConsole, and the three
+ * windows (ROUTE_WINDOWS: the Command, Fleet, Sessions and Stage windows so far), openConsole, and the three
  * doors that land on those surfaces: openInbox, openTalkWindow and openModelBrowser.
  *
  * Moved out of main.cjs in slice 3 of docs/UX-REIMPLEMENTATION.md (step 12, plan
@@ -184,6 +184,23 @@ const ROUTE_WINDOWS = {
       minHeight: 460,
       show: false,
       title: "Aither Sessions",
+      backgroundColor: "#0f1218",
+      autoHideMenuBar: true,
+    },
+  },
+  // The Stage window (P2, moved from stage-window.cjs): every body on the stage,
+  // listed, with the arrangements beside them. The module keeps its four IPC
+  // handlers and the injected stageImpl.
+  stage: {
+    file: "stage.html",
+    preload: "stage-preload.cjs",
+    window: {
+      width: 780,
+      height: 620,
+      minWidth: 520,
+      minHeight: 420,
+      show: false,
+      title: "Aither Stage",
       backgroundColor: "#0f1218",
       autoHideMenuBar: true,
     },
