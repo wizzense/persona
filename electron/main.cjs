@@ -2719,6 +2719,17 @@ if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
     ipcMain.on("desk:deck-close", () => {
       if (deckWindow && !deckWindow.isDestroyed()) deckWindow.close();
     });
+    // The Decisions page's bulk bar: 298 cards cannot be triaged one click at a time.
+    // ONE relay line per batch, not one per card (decisions-bulk.cjs builds it).
+    ipcMain.handle("desk:deck-bulk", async (_event, payload) => {
+      const result = await require("./decisions-bulk.cjs").handleBulk(payload, {
+        listOpen: () => openDecisions,
+        answerCard: (id, key, note) => decisionCards.answerCard(id, key, note),
+        cancelCard: (id, note) => decisionCards.cancelCard(id, note),
+      });
+      if (result && result.summary) void postToRelay(RELAY_CHANNEL, result.summary).then(() => refreshRelayFeed());
+      return result;
+    });
     ipcMain.handle("desk:deck-answer", (_event, payload) => {
       const { id, choice } = payload || {};
       const ok = decisionCards.answerCard(id, choice);
