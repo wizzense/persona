@@ -17,7 +17,6 @@ const { createPresentation } = require("./presentation.cjs");
 const STILL_OUTSIDE = {
   "avatar-window.cjs": 1, // P3: the avatar overlay (left main.cjs in step 13)
   "detached-avatar-window.cjs": 1, // P3: the 'solo:<slot>' windows
-  "living-desktop-window.cjs": 2, // P4: the overlay + the desktop app window
   "console-window.cjs": 1, // P5: the console itself
 };
 
@@ -41,7 +40,91 @@ test("window constructions outside presentation.cjs are exactly the ones left fo
     "a window constructor appeared outside presentation.cjs, or one moved and its STILL_OUTSIDE entry was not deleted",
   );
   const total = Object.values(outside).reduce((a, b) => a + b, 0);
-  assert.equal(total, 5, "the ratchet only goes down: 13 before step 12, 11 after it, 10 once command moved, 9 once fleet moved, 8 once sessions moved, 7 once stage moved, 6 once settings moved, 5 once cast moved");
+  assert.equal(total, 3, "the ratchet only goes down: 13 before step 12, 11 after it, 10 once command moved, 9 once fleet moved, 8 once sessions moved, 7 once stage moved, 6 once settings moved, 5 once cast moved, 3 once the living-desktop overlay and app window moved");
+});
+
+test("living-desktop-window.cjs never builds its own window again (P4: hosted 'overlay' + 'desktop')", () => {
+  // Read as text: the module requires electron and wires ipcMain at load.
+  const source = fs.readFileSync(path.join(__dirname, "living-desktop-window.cjs"), "utf8");
+  assert.doesNotMatch(source, /\bBrowserWindow\b/, "living-desktop-window.cjs names BrowserWindow again");
+  assert.match(source, /buildHostedWindow\("overlay", \{ electron, partition: PARTITION \}\)/, "the overlay no longer builds through presentation");
+  assert.match(source, /buildHostedWindow\("desktop", \{ electron, partition: PARTITION \}\)/, "the app window no longer builds through presentation");
+  // The module keeps the session: the partition it signs in is the one it hands over.
+  assert.match(source, /const PARTITION = "persist:living-desktop";/);
+  assert.match(source, /syncPortalSessionCookie\(\)/, "the vault-token injection left the module");
+});
+
+test("the hosted routes keep the overlay's and the app window's exact options, on their partition", () => {
+  const { HOSTED_WINDOWS, buildHostedWindow, routeWindow } = require("./presentation.cjs");
+  const built = [];
+  class FakeWindow {
+    constructor(options) {
+      this.options = options;
+      this.destroyed = false;
+      this.handlers = {};
+      built.push(this);
+    }
+    isDestroyed() { return this.destroyed; }
+    on(event, fn) { this.handlers[event] = fn; }
+    close() { this.destroyed = true; if (this.handlers.closed) this.handlers.closed(); }
+  }
+  const workArea = { x: 10, y: 20, width: 1900, height: 1040 };
+  const electron = { BrowserWindow: FakeWindow, screen: { getPrimaryDisplay: () => ({ workArea }) } };
+  const partition = "persist:living-desktop";
+  const webPreferences = {
+    partition,
+    preload: path.join(__dirname, "living-desktop-preload.cjs"),
+    contextIsolation: true,
+    nodeIntegration: false,
+    sandbox: true,
+  };
+
+  assert.equal(routeWindow("overlay"), null);
+  const overlay = buildHostedWindow("overlay", { electron, partition });
+  assert.deepEqual(overlay.options, {
+    x: 10,
+    y: 20,
+    width: 1900,
+    height: 1040,
+    frame: false,
+    transparent: true,
+    backgroundColor: "#00000000",
+    hasShadow: false,
+    roundedCorners: false,
+    skipTaskbar: false,
+    title: "AitherOS Aitheros Online",
+    webPreferences,
+  });
+  assert.equal("alwaysOnTop" in overlay.options, false, "the avatars must float ABOVE the overlay");
+  assert.equal(routeWindow("overlay"), overlay);
+
+  const app = buildHostedWindow("desktop", { electron, partition });
+  assert.deepEqual(app.options, {
+    width: 1440,
+    height: 900,
+    minWidth: 960,
+    minHeight: 600,
+    show: false,
+    frame: true,
+    autoHideMenuBar: true,
+    backgroundColor: "#0b0d12",
+    title: "AitherDesktop",
+    webPreferences,
+  });
+  // A small work area shrinks the app window by the same 80 px margin it always had.
+  assert.deepEqual(HOSTED_WINDOWS.desktop.place({ x: 0, y: 0, width: 1280, height: 720 }), { width: 1200, height: 640 });
+  assert.equal(routeWindow("desktop"), app);
+  assert.equal(built.length, 2);
+
+  overlay.close();
+  assert.equal(routeWindow("overlay"), null, "the handle is dropped on 'closed'");
+  assert.equal(routeWindow("desktop"), app, "closing the overlay leaves the app window");
+  app.close();
+  assert.equal(routeWindow("desktop"), null);
+
+  assert.throws(() => buildHostedWindow("overlay", { electron }), /needs its session partition/);
+  assert.throws(() => buildHostedWindow("nope", { electron, partition }), /no hosted window nope/);
+  assert.equal(built.length, 2, "a refused build constructs nothing");
 });
 
 test("cast-window.cjs never builds its own window again (P2: route 'cast')", () => {

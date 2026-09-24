@@ -3,7 +3,9 @@
 /**
  * presentation.cjs -- the desk's window plane: the route registry every console
  * pane detaches through, the deck and chat panels, the standalone file-page
- * windows (ROUTE_WINDOWS: the Command, Fleet, Sessions, Stage, Settings and Cast windows so far), openConsole, and the three
+ * windows (ROUTE_WINDOWS: the Command, Fleet, Sessions, Stage, Settings and Cast windows so far),
+ * the hosted aitherium.com windows (HOSTED_WINDOWS: the living-desktop overlay and
+ * the AitherDesktop app window), openConsole, and the three
  * doors that land on those surfaces: openInbox, openTalkWindow and openModelBrowser.
  *
  * Moved out of main.cjs in slice 3 of docs/UX-REIMPLEMENTATION.md (step 12, plan
@@ -117,10 +119,13 @@ const PANELS = {
  * this -- it is still built in console-window.cjs (P5) and will arrive as a named
  * exception in its spec, not as a flag any route can set.
  */
-function constructWindow(BrowserWindow, options, preload) {
+function constructWindow(BrowserWindow, options, preload, partition = null) {
   return new BrowserWindow({
     ...options,
     webPreferences: {
+      // A hosted page's session identity (HOSTED_WINDOWS) -- which cookie jar the
+      // window reads -- is the only thing a route may add. It relaxes nothing.
+      ...(partition ? { partition } : {}),
       preload: path.join(__dirname, preload),
       contextIsolation: true,
       nodeIntegration: false,
@@ -281,6 +286,84 @@ function openRouteWindow(id, { electron }) {
 function closeRouteWindow(id) {
   const win = routeWindow(id);
   if (win) win.close();
+}
+
+/**
+ * Hosted windows (P4, moved from living-desktop-window.cjs): windows that load
+ * aitherium.com, not a local page, on the session partition the owning module
+ * signs in. `place(workArea)` gives the bounds; `window` the rest of the options.
+ * The module keeps everything that is not construction: its single-instance
+ * semantics (the app window restores from minimized), the aitherium-family
+ * navigation fence, the session cookie sync before load, ghost mode, the shell
+ * choice and its own handles.
+ */
+const HOSTED_WINDOWS = {
+  // The living-desktop OVERLAY: the full primary work area, frameless and
+  // transparent, so the Aitheros Online chrome floats over the real desktop.
+  overlay: {
+    preload: "living-desktop-preload.cjs",
+    place: (workArea) => ({
+      x: workArea.x,
+      y: workArea.y,
+      width: workArea.width,
+      height: workArea.height,
+    }),
+    window: {
+      frame: false,
+      transparent: true,
+      backgroundColor: "#00000000",
+      hasShadow: false,
+      roundedCorners: false,
+      // NOT alwaysOnTop: the avatar windows are alwaysOnTop and must float ABOVE the
+      // Aitheros Online, the way they float above everything else.
+      skipTaskbar: false, // a real surface the owner alt-tabs to and can close from the taskbar
+      title: "AitherOS Aitheros Online",
+    },
+  },
+  // The AitherDesktop APP window: framed, opaque, maximised on ready-to-show by
+  // its module -- the same aitherium.com desktop as a real app window.
+  desktop: {
+    preload: "living-desktop-preload.cjs",
+    place: (workArea) => ({
+      width: Math.min(1440, workArea.width - 80),
+      height: Math.min(900, workArea.height - 80),
+    }),
+    window: {
+      minWidth: 960,
+      minHeight: 600,
+      show: false,
+      frame: true,
+      autoHideMenuBar: true,
+      backgroundColor: "#0b0d12",
+      title: "AitherDesktop",
+    },
+  },
+};
+
+/**
+ * Build a hosted window on `partition` (the module that owns the session names
+ * it; a hosted page without its partition renders signed-out). Always builds --
+ * single-instance is the caller's, because the two hosted windows raise
+ * differently. The handle is readable via routeWindow(id) and dropped on 'closed'.
+ */
+function buildHostedWindow(id, { electron, partition }) {
+  const spec = HOSTED_WINDOWS[id];
+  if (!spec) throw new Error(`no hosted window ${id}`);
+  if (typeof partition !== "string" || !partition) {
+    throw new TypeError(`hosted window ${id} needs its session partition`);
+  }
+  const { workArea } = electron.screen.getPrimaryDisplay();
+  const win = constructWindow(
+    electron.BrowserWindow,
+    { ...spec.place(workArea), ...spec.window },
+    spec.preload,
+    partition,
+  );
+  routeWindows[id] = win;
+  win.on("closed", () => {
+    if (routeWindows[id] === win) routeWindows[id] = null;
+  });
+  return win;
 }
 
 function createPresentation({
@@ -593,7 +676,9 @@ module.exports = {
   createPresentation,
   PANELS,
   ROUTE_WINDOWS,
+  HOSTED_WINDOWS,
   openRouteWindow,
   closeRouteWindow,
+  buildHostedWindow,
   routeWindow,
 };

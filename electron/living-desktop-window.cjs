@@ -3,7 +3,7 @@
 /** The Aitheros Online surface as a REAL desktop overlay — not a browser tab.
  *
  *  History, so nobody rebuilds the failures:
- *  - Attempt 1 loaded the old portal host in a framed BrowserWindow and rendered
+ *  - Attempt 1 loaded the old portal host in a framed Electron window and rendered
  *    BLANK WHITE: portal. is auth-gated, a fresh webContents has no cookies, and the
  *    login redirect renders nothing.
  *  - Attempt 2 punted to shell.openExternal — explicitly rejected by the owner ("I don't
@@ -25,7 +25,13 @@
 const path = require("node:path");
 const os = require("node:os");
 const fs = require("node:fs");
-const { BrowserWindow, ipcMain, screen, session, shell } = require("electron");
+const electron = require("electron");
+// Both windows are BUILT by presentation.cjs (route specs HOSTED_WINDOWS.overlay and
+// .desktop: size, frame, preload, title, placement). This module keeps the rest --
+// session, navigation fence, ghost mode, shell choice, single-instance raise.
+const { buildHostedWindow } = require("./presentation.cjs");
+
+const { ipcMain, screen, session, shell } = electron;
 
 const BASE_URL = process.env.LIVING_DESKTOP_URL || "https://aitherium.com/";
 const LOG_FILE = path.join(os.tmpdir(), "desk-living-desktop.log");
@@ -318,29 +324,9 @@ async function probeRendered(win) {
 }
 
 function createWindow() {
-  const { workArea } = screen.getPrimaryDisplay();
-  const win = new BrowserWindow({
-    x: workArea.x,
-    y: workArea.y,
-    width: workArea.width,
-    height: workArea.height,
-    frame: false,
-    transparent: true,
-    backgroundColor: "#00000000",
-    hasShadow: false,
-    roundedCorners: false,
-    // NOT alwaysOnTop: the avatar windows are alwaysOnTop and must float ABOVE the
-    // Aitheros Online, the way they float above everything else.
-    skipTaskbar: false, // a real surface the owner alt-tabs to and can close from the taskbar
-    title: "AitherOS Aitheros Online",
-    webPreferences: {
-      partition: PARTITION,
-      preload: path.join(__dirname, "living-desktop-preload.cjs"),
-      sandbox: true,
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
-  });
+  // Full work area, frameless, transparent, NOT alwaysOnTop, in the taskbar:
+  // presentation.cjs HOSTED_WINDOWS.overlay.
+  const win = buildHostedWindow("overlay", { electron, partition: PARTITION });
 
   // Keep the overlay inside the aitherium family; anything else goes to the system
   // browser instead of hijacking the overlay surface.
@@ -504,25 +490,9 @@ function showDesktopApp() {
     appWin.focus();
     return appWin;
   }
-  const { workArea } = screen.getPrimaryDisplay();
-  appWin = new BrowserWindow({
-    width: Math.min(1440, workArea.width - 80),
-    height: Math.min(900, workArea.height - 80),
-    minWidth: 960,
-    minHeight: 600,
-    show: false,
-    frame: true,
-    autoHideMenuBar: true,
-    backgroundColor: "#0b0d12",
-    title: "AitherDesktop",
-    webPreferences: {
-      partition: PARTITION,
-      preload: path.join(__dirname, "living-desktop-preload.cjs"),
-      sandbox: true,
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
-  });
+  // Framed, opaque, hidden until ready-to-show maximises it: presentation.cjs
+  // HOSTED_WINDOWS.desktop.
+  appWin = buildHostedWindow("desktop", { electron, partition: PARTITION });
   appWin.webContents.setWindowOpenHandler(({ url }) => {
     if (isAitheriumFamily(url)) return { action: "allow" };
     void shell.openExternal(url);
