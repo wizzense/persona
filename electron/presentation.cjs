@@ -3,7 +3,7 @@
 /**
  * presentation.cjs -- the desk's window plane: the route registry every console
  * pane detaches through, the deck and chat panels, the standalone file-page
- * windows (ROUTE_WINDOWS: the Command, Fleet, Sessions and Stage windows so far), openConsole, and the three
+ * windows (ROUTE_WINDOWS: the Command, Fleet, Sessions, Stage and Settings windows so far), openConsole, and the three
  * doors that land on those surfaces: openInbox, openTalkWindow and openModelBrowser.
  *
  * Moved out of main.cjs in slice 3 of docs/UX-REIMPLEMENTATION.md (step 12, plan
@@ -201,6 +201,23 @@ const ROUTE_WINDOWS = {
       minHeight: 420,
       show: false,
       title: "Aither Stage",
+      backgroundColor: "#0f1218",
+      autoHideMenuBar: true,
+    },
+  },
+  // The Settings window (P2, moved from settings-window.cjs): the Settings pane's
+  // detach target. No IPC of its own -- settings.html talks to main through
+  // settings-preload.cjs's settingsBridge.
+  settings: {
+    file: "settings.html",
+    preload: "settings-preload.cjs",
+    window: {
+      width: 640,
+      height: 560,
+      minWidth: 460,
+      minHeight: 380,
+      show: false,
+      title: "Aither Settings",
       backgroundColor: "#0f1218",
       autoHideMenuBar: true,
     },

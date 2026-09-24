@@ -8,56 +8,31 @@
  * of failing silently the way an unwritten detach target does.
  */
 
-const path = require("node:path");
+// The window itself is presentation.cjs's route "settings" (slice 3, P2): its size,
+// title, preload and single-instance show+focus live in ROUTE_WINDOWS.settings.
+// This module has no IPC to keep; create/close/isOpen are wrappers.
+const { openRouteWindow, closeRouteWindow, routeWindow } = require("./presentation.cjs");
 
+const ROUTE = "settings";
+
+// Same lazy-require rule as the other window modules: loadable under
+// `node --test` without Electron.
 function electron() {
   return require("electron");
 }
 
-let settingsWindow = null;
-
 function createSettingsWindow() {
-  const { BrowserWindow } = electron();
-  if (settingsWindow && !settingsWindow.isDestroyed()) {
-    settingsWindow.show();
-    settingsWindow.focus();
-    return settingsWindow;
-  }
-  settingsWindow = new BrowserWindow({
-    width: 640,
-    height: 560,
-    minWidth: 460,
-    minHeight: 380,
-    show: false,
-    title: "Aither Settings",
-    backgroundColor: "#0f1218",
-    autoHideMenuBar: true,
-    webPreferences: {
-      preload: path.join(__dirname, "settings-preload.cjs"),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-    },
-  });
-  settingsWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-  settingsWindow.webContents.on("will-navigate", (event) => event.preventDefault());
-  settingsWindow.once("ready-to-show", () => {
-    settingsWindow.show();
-    settingsWindow.focus();
-  });
-  settingsWindow.on("closed", () => {
-    settingsWindow = null;
-  });
-  void settingsWindow.loadFile(path.join(__dirname, "settings.html"));
-  return settingsWindow;
+  // Deny-open, no-navigate, show+focus on ready and the dropped handle on
+  // 'closed' are presentation's openRouteWindow -- the same fence every desk window carries.
+  return openRouteWindow(ROUTE, { electron: electron() });
 }
 
 function closeSettingsWindow() {
-  if (settingsWindow && !settingsWindow.isDestroyed()) settingsWindow.close();
+  closeRouteWindow(ROUTE);
 }
 
 function isSettingsWindowOpen() {
-  return Boolean(settingsWindow && !settingsWindow.isDestroyed());
+  return Boolean(routeWindow(ROUTE));
 }
 
 module.exports = { createSettingsWindow, closeSettingsWindow, isSettingsWindowOpen };
