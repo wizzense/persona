@@ -3,7 +3,7 @@
 /**
  * presentation.cjs -- the desk's window plane: the route registry every console
  * pane detaches through, the deck and chat panels, the standalone file-page
- * windows (ROUTE_WINDOWS: the Command window so far), openConsole, and the three
+ * windows (ROUTE_WINDOWS: the Command and Fleet windows so far), openConsole, and the three
  * doors that land on those surfaces: openInbox, openTalkWindow and openModelBrowser.
  *
  * Moved out of main.cjs in slice 3 of docs/UX-REIMPLEMENTATION.md (step 12, plan
@@ -152,6 +152,22 @@ const ROUTE_WINDOWS = {
       minHeight: 560,
       show: false,
       title: "Aither Command",
+      backgroundColor: "#0f1218",
+      autoHideMenuBar: true,
+    },
+  },
+  // The Fleet control window (P2, moved from fleet-window.cjs): framed, in the
+  // taskbar, over the four-verb fleet preload. The module keeps FleetControl + IPC.
+  fleet: {
+    file: "fleet-control.html",
+    preload: "fleet-preload.cjs",
+    window: {
+      width: 640,
+      height: 720,
+      minWidth: 480,
+      minHeight: 560,
+      show: false,
+      title: "Aither Fleet",
       backgroundColor: "#0f1218",
       autoHideMenuBar: true,
     },

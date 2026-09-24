@@ -11,12 +11,17 @@
  * different idea of whether the fleet is up.
  */
 
-const path = require("node:path");
-const { BrowserWindow, ipcMain, shell } = require("electron");
+const electron = require("electron");
+const { ipcMain, shell } = electron;
 const { FleetControl, summarize, classify } = require("./fleet-control.cjs");
 const { OPENABLE } = require("./surfaces.cjs");
+// The window itself is presentation.cjs's route "fleet" (slice 3, P2): its size,
+// title, preload and single-instance show+focus live in ROUTE_WINDOWS.fleet.
+// This module keeps FleetControl and the IPC; its create/close/isOpen are wrappers.
+const { openRouteWindow, closeRouteWindow, routeWindow } = require("./presentation.cjs");
 
-let fleetWindow = null;
+const ROUTE = "fleet";
+
 let control = null;
 let ipcWired = false;
 
@@ -44,9 +49,8 @@ function getControl() {
   if (!control) {
     control = new FleetControl();
     control.on("progress", (payload) => {
-      if (fleetWindow && !fleetWindow.isDestroyed()) {
-        fleetWindow.webContents.send("desk:fleet-progress", payload);
-      }
+      const win = routeWindow(ROUTE);
+      if (win) win.webContents.send("desk:fleet-progress", payload);
     });
   }
   return control;
@@ -60,7 +64,8 @@ function wireIpc() {
   ipcMain.handle("desk:fleet-run", (_event, action) => getControl().run(String(action)));
   ipcMain.handle("desk:fleet-doors", () => require("./surfaces.cjs").probeSurfaces().catch(() => []));
   ipcMain.on("desk:fleet-close", () => {
-    if (fleetWindow && !fleetWindow.isDestroyed()) { fleetWindow.close(); return; }
+    const win = routeWindow(ROUTE);
+    if (win) { win.close(); return; }
     // No standalone window means the sender is the console's Fleet PANE, whose
     // close button (and Escape) would otherwise be dead.
     if (typeof closeFallback === "function") closeFallback();
@@ -74,38 +79,7 @@ function wireIpc() {
 
 function createFleetWindow() {
   wireIpc();
-  if (fleetWindow && !fleetWindow.isDestroyed()) {
-    fleetWindow.show();
-    fleetWindow.focus();
-    return fleetWindow;
-  }
-  fleetWindow = new BrowserWindow({
-    width: 640,
-    height: 720,
-    minWidth: 480,
-    minHeight: 560,
-    show: false,
-    title: "Aither Fleet",
-    backgroundColor: "#0f1218",
-    autoHideMenuBar: true,
-    webPreferences: {
-      preload: path.join(__dirname, "fleet-preload.cjs"),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-    },
-  });
-  fleetWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-  fleetWindow.webContents.on("will-navigate", (event) => event.preventDefault());
-  fleetWindow.once("ready-to-show", () => {
-    fleetWindow.show();
-    fleetWindow.focus();
-  });
-  fleetWindow.on("closed", () => {
-    fleetWindow = null;
-  });
-  void fleetWindow.loadFile(path.join(__dirname, "fleet-control.html"));
-  return fleetWindow;
+  return openRouteWindow(ROUTE, { electron });
 }
 
 /** For the tray tooltip / MCP get_status: cached, never a live probe from a hover. */
@@ -118,11 +92,11 @@ function fleetSummaryCached() {
 
 /** Close the standalone window (the console's "reattach"). No-op when absent. */
 function closeFleetWindow() {
-  if (fleetWindow && !fleetWindow.isDestroyed()) fleetWindow.close();
+  closeRouteWindow(ROUTE);
 }
 
 function isFleetWindowOpen() {
-  return Boolean(fleetWindow && !fleetWindow.isDestroyed());
+  return Boolean(routeWindow(ROUTE));
 }
 
 module.exports = {

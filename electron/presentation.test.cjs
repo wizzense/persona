@@ -16,7 +16,6 @@ const { createPresentation } = require("./presentation.cjs");
  */
 const STILL_OUTSIDE = {
   "cast-window.cjs": 1, // P2
-  "fleet-window.cjs": 1, // P2
   "sessions-window.cjs": 1, // P2
   "settings-window.cjs": 1, // P2
   "stage-window.cjs": 1, // P2
@@ -46,7 +45,78 @@ test("window constructions outside presentation.cjs are exactly the ones left fo
     "a window constructor appeared outside presentation.cjs, or one moved and its STILL_OUTSIDE entry was not deleted",
   );
   const total = Object.values(outside).reduce((a, b) => a + b, 0);
-  assert.equal(total, 10, "the ratchet only goes down: 13 before step 12, 11 after it, 10 once command moved");
+  assert.equal(total, 9, "the ratchet only goes down: 13 before step 12, 11 after it, 10 once command moved, 9 once fleet moved");
+});
+
+test("fleet-window.cjs never builds its own window again (P2: route 'fleet')", () => {
+  const source = fs.readFileSync(path.join(__dirname, "fleet-window.cjs"), "utf8");
+  assert.doesNotMatch(source, /\bBrowserWindow\b/, "fleet-window.cjs names BrowserWindow again");
+  assert.match(source, /openRouteWindow\(ROUTE, \{ electron \}\)/, "createFleetWindow no longer opens through presentation");
+});
+
+test("the fleet route keeps the Fleet window's exact options, single instance, and no navigation", () => {
+  const { ROUTE_WINDOWS, openRouteWindow, closeRouteWindow, routeWindow } = require("./presentation.cjs");
+  const built = [];
+  class FakeWindow {
+    constructor(options) {
+      this.options = options;
+      this.destroyed = false;
+      this.handlers = {};
+      this.shown = 0;
+      this.focused = 0;
+      this.navHandlers = [];
+      this.webContents = {
+        openHandler: null,
+        setWindowOpenHandler: (fn) => { this.webContents.openHandler = fn; },
+        on: (event, fn) => { if (event === "will-navigate") this.navHandlers.push(fn); },
+      };
+      built.push(this);
+    }
+    isDestroyed() { return this.destroyed; }
+    show() { this.shown += 1; }
+    focus() { this.focused += 1; }
+    once(event, fn) { this.handlers[event] = fn; }
+    on(event, fn) { this.handlers[event] = fn; }
+    loadFile(file) { this.file = file; return Promise.resolve(); }
+    close() { this.destroyed = true; if (this.handlers.closed) this.handlers.closed(); }
+  }
+  const electron = { BrowserWindow: FakeWindow };
+  assert.equal(routeWindow("fleet"), null);
+  const win = openRouteWindow("fleet", { electron });
+  assert.deepEqual(win.options, {
+    width: 640,
+    height: 720,
+    minWidth: 480,
+    minHeight: 560,
+    show: false,
+    title: "Aither Fleet",
+    backgroundColor: "#0f1218",
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: path.join(__dirname, "fleet-preload.cjs"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  assert.equal(ROUTE_WINDOWS.fleet.file, "fleet-control.html");
+  assert.equal(win.file, path.join(__dirname, "fleet-control.html"));
+  assert.deepEqual(win.webContents.openHandler(), { action: "deny" });
+  let prevented = false;
+  win.navHandlers[0]({ preventDefault: () => { prevented = true; } }, "https://example.com/");
+  assert.equal(prevented, true, "a file page never navigates");
+  win.handlers["ready-to-show"]();
+  assert.equal(win.shown, 1);
+  assert.equal(win.focused, 1);
+  assert.equal(openRouteWindow("fleet", { electron }), win, "single instance while it lives");
+  assert.equal(built.length, 1);
+  assert.equal(win.shown, 2);
+  assert.equal(win.focused, 2);
+  assert.equal(routeWindow("fleet"), win);
+  assert.equal(routeWindow("command"), null, "the fleet window is not the command route's handle");
+  closeRouteWindow("fleet");
+  assert.equal(routeWindow("fleet"), null, "the handle is dropped on 'closed'");
+  closeRouteWindow("fleet"); // no-op when absent
 });
 
 test("command-window.cjs never builds its own window again (P2: route 'command')", () => {
