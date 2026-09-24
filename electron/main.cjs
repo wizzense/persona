@@ -118,7 +118,6 @@ const {
   getHyprlandWindowPlacement,
 } = require("./hyprland-window.cjs");
 const { isAllowedRendererNavigation } = require("./navigation-policy.cjs");
-const { parseProtocolUrl } = require("./protocol-actions.cjs");
 const {
   ROSTER_DIR,
   enrollNewestDownloadChecked,
@@ -400,40 +399,6 @@ function startRoomStage() {
   roomStageHost.startRoomStage(roomStageDeps());
 }
 
-
-function handleProtocolUrl(rawUrl) {
-  const commands = parseProtocolUrl(rawUrl, protocolScheme);
-  if (!commands) return false;
-  // desk:// is how scripts and other apps reach the desk. While a game is
-  // full-screen nothing they send may open or focus a window; hide and bare
-  // events still pass (neither can cover the game).
-  if (quietMode.isQuiet()) {
-    for (const command of commands) {
-      if (command.type === "hide") void hideOverlay();
-      else if (command.type === "event") handleBridgeEvent(command.event);
-      else if (command.type === "console") holdWhileQuiet();
-    }
-    return true;
-  }
-  for (const command of commands) {
-    if (command.type === "show") showOverlay({ focus: true });
-    else if (command.type === "hide") void hideOverlay();
-    else if (command.type === "toggle") toggleOverlay();
-    else if (command.type === "fleet") createFleetWindow();
-    else if (command.type === "command") createCommandWindow(getFleetControl(), { createFleetWindow });
-    else if (command.type === "console") openConsole();
-    else if (command.type === "overlay") showLivingDesktop();
-    else if (command.type === "desktop") showDesktopApp();
-    else if (command.type === "event") handleBridgeEvent(command.event);
-  }
-  return true;
-}
-
-function handleProtocolArgv(argv) {
-  const protocolUrl = argv.find((value) => value.startsWith(`${protocolScheme}://`));
-  if (protocolUrl) handleProtocolUrl(protocolUrl);
-}
-
 // The roster as the desk shows it: Characters/Agents menus, switching, the adult
 // gate's on-screen enforcement, the rater's capture and the thumbnail IPC.
 const {
@@ -538,6 +503,27 @@ const {
   refreshTrayMenu: () => refreshTrayMenu(),
   sendDeckState: () => sendDeckState(),
   debugLog: (...args) => debugLog(...args),
+});
+
+// desk:// URLs and a second launch's argv (protocol-routing.cjs). Built here,
+// after quietMode and holdWhileQuiet exist; main keeps the lock and app.on(...).
+const { handleProtocolUrl, handleProtocolArgv, handleSecondInstance } = require("./protocol-routing.cjs").createProtocolRouting({
+  protocolScheme,
+  quietMode,
+  holdWhileQuiet,
+  showOverlay: (...args) => showOverlay(...args),
+  hideOverlay: (...args) => hideOverlay(...args),
+  toggleOverlay: (...args) => toggleOverlay(...args),
+  createFleetWindow: (...args) => createFleetWindow(...args),
+  createCommandWindow: (...args) => createCommandWindow(...args),
+  getFleetControl: (...args) => getFleetControl(...args),
+  createDeckWindow: (...args) => createDeckWindow(...args),
+  openConsole: (...args) => openConsole(...args),
+  showLivingDesktop: (...args) => showLivingDesktop(...args),
+  showDesktopApp: (...args) => showDesktopApp(...args),
+  handleBridgeEvent: (...args) => handleBridgeEvent(...args),
+  commandRegistry,
+  runCommand: (...args) => runCommand(...args),
 });
 
 // "Mute all voices" + the right-click Voice picker live in voice-controls.cjs.
@@ -1072,42 +1058,8 @@ function createTray() {
 if (!smokeIsRequested && !app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on("second-instance", (_event, argv) => {
-    const handled = argv.some((value) => value.startsWith(`${protocolScheme}://`));
-    handleProtocolArgv(argv);
-    if (argv.includes("--open-deck")) {
-      createDeckWindow();
-      return;
-    }
-    if (argv.includes("--fleet")) {
-      createFleetWindow();
-      return;
-    }
-    if (argv.includes("--console")) {
-      openConsole();
-      return;
-    }
-    // A Windows jump-list task (right-click the taskbar icon): `--run=<command id>`.
-    const asked = argv.find((part) => part.startsWith("--run="));
-    if (asked) {
-      const id = asked.slice("--run=".length);
-      if (commandRegistry.byId(id)) runCommand(id, undefined, { surface: "jumplist" });
-      return;
-    }
-    if (argv.includes("--command")) {
-      createCommandWindow(getFleetControl(), { createFleetWindow });
-      return;
-    }
-    if (argv.includes("--overlay")) {
-      showLivingDesktop();
-      return;
-    }
-    if (argv.includes("--desktop")) {
-      showDesktopApp();
-      return;
-    }
-    if (!handled && !argv.includes("--background")) showOverlay({ focus: !quietMode.isQuiet() });
-  });
+  // What the argv means lives in protocol-routing.cjs; the lock stays here.
+  app.on("second-instance", (_event, argv) => handleSecondInstance(argv));
 
   app.on("open-url", (event, url) => {
     event.preventDefault();

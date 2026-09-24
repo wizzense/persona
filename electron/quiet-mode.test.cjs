@@ -85,6 +85,8 @@ test("every door that can put something on screen or in the ears asks quietMode 
   const speech = read("speech.cjs");
   // The card announcer and the window router moved to decisions-plane.cjs (slice 3).
   const decisions = read("decisions-plane.cjs");
+  // handleProtocolUrl (desk:// and a second launch's argv) moved to protocol-routing.cjs.
+  const protocol = read("protocol-routing.cjs");
   const bodyOf = (source, marker, span = 1400) => {
     const at = source.indexOf(marker);
     assert.ok(at >= 0, `door not found: ${marker}`);
@@ -93,7 +95,7 @@ test("every door that can put something on screen or in the ears asks quietMode 
   for (const [source, marker] of [
     [main, "function handleBridgeEvent("],
     [doors, "async function handleMcpWindowAction("],
-    [main, "function handleProtocolUrl("],
+    [protocol, "function handleProtocolUrl("],
     [doors, "consoleHandler: (pane) =>"],
     [doors, "desktopHandler: (mode) =>"],
     [decisions, "const announceDecisions = (list, isBacklog) =>"],
@@ -106,4 +108,7 @@ test("every door that can put something on screen or in the ears asks quietMode 
     assert.doesNotMatch(source, /AITHER_DECISIONS_POPUP:\s*"1"/, "the desk must not force popups past the owner's off switch");
   }
   assert.match(main, /require\("\.\/decisions-plane\.cjs"\)\.createDecisionsPlane\(/, "main no longer wires the card plane");
+  // A bare relaunch shows the overlay without focus while quiet.
+  assert.match(bodyOf(protocol, "function handleSecondInstance(", 2400), /focus: !quietMode\.isQuiet\(\)/, "a second launch steals focus while quiet");
+  assert.match(main, /require\("\.\/protocol-routing\.cjs"\)\.createProtocolRouting\(\{\s*protocolScheme,\s*quietMode,/, "main no longer hands desk:// its quiet gate");
 });
