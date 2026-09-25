@@ -4,7 +4,7 @@ import {
 } from 'react';
 
 import { renderVrmThumbnail } from '../thumbnails';
-import { bulkApi } from './decisions/bridge';
+import { bulkApi, deckStateFromPush } from './decisions/bridge';
 import { DecisionsPage } from './decisions/DecisionsPage';
 import { ageBucket, type DecisionCard } from './decisions/model';
 import { SystemAwareness } from './decisions/SystemAwareness';
@@ -22,7 +22,6 @@ import {
   wakeActionMessage,
   wakeAgeLabel,
   wakeBadge,
-  type DeckDecision,
   type DeckState,
   type RelayRow,
   type WakeActionResult,
@@ -783,26 +782,9 @@ export function Deck({ view = 'inbox' }: { view?: 'inbox' | 'characters' } = {})
       if (alive && next) setState({ ...next, wakes: normalizeWakes(next.wakes) });
     });
     const unsubscribe = bridgeSubscribe((event) => {
-      if (event.type === 'deck-state') {
-        setState({
-          decisions: (event.decisions as DeckDecision[]) ?? [],
-          openCount: (event.openCount as number) ?? 0,
-          deskVisible: (event.deskVisible as boolean) ?? false,
-          slots: (event.slots as DeckState['slots']) ?? [],
-          agents: (event.agents as string[]) ?? [],
-          characters: (event.characters as string[]) ?? [],
-          characterModels: (event.characterModels as Record<string, string>) ?? {},
-          activeCharacter: (event.activeCharacter as string) ?? '',
-          agentCharacters: (event.agentCharacters as Record<string, string>) ?? {},
-          relay: (event.relay as DeckState['relay']) ?? [],
-          relayChannel: (event.relayChannel as string) ?? '#agents',
-          room: (event.room as DeckState['room']) ?? [],
-          roomStatus: (event.roomStatus as string) ?? 'not started',
-          // A field missing from THIS copy is dropped on the first push after
-          // the initial pull — the section would render once and then empty.
-          wakes: normalizeWakes(event.wakes),
-        });
-      }
+      // A field missing from the push copy is dropped on the first push after
+      // the initial pull — that copy lives in deckStateFromPush, under test.
+      if (event.type === 'deck-state') setState(deckStateFromPush(event));
     });
     const tick = window.setInterval(() => setNowMs(Date.now()), 30_000);
     return () => {

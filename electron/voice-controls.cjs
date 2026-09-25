@@ -97,6 +97,17 @@ function createVoiceControls({ BrowserWindow, speakAloud, refreshTrayMenu, castP
     }
   }
 
+  /** Through the Cast pane's unsilence -- the SAME write the Voices page's
+   *  Speaks switch makes, so the two surfaces cannot drift apart. */
+  function letSpeak(key) {
+    try {
+      const result = castPane().unsilence({ key });
+      if (result && result.ok === false) throw new Error(result.error || "cast.json write refused");
+    } catch (error) {
+      debugLog("letSpeak failed", key, error && error.message);
+    }
+  }
+
   /** Right-click a body -> Voice: pick who it sounds like, or silence just this one. */
   function buildVoiceMenu(slotId) {
     const found = castRowForSlot(slotId);
@@ -112,19 +123,23 @@ function createVoiceControls({ BrowserWindow, speakAloud, refreshTrayMenu, castP
     if (own && !VOICE_MENU.some(([id]) => id === own)) {
       items.unshift({ label: `Current: ${own}`, type: "radio", checked: true, enabled: false });
     }
-    const silenced = record.speak === false;
+    // Silenced = anything "Let this one speak" would lift: speak:false OR a
+    // presence off/quiet (room-stage-host unsilencePatch, the Voices page's rule
+    // too). Reading speak alone offered "Silence" to a quiet body with no way back.
+    const { unsilencePatch } = require("./room-stage-host.cjs");
+    const silenced = Object.keys(unsilencePatch(record, resolution)).length > 0;
     return [
       { label: own ? "Set a voice for this body" : `Default voice (${resolution.voice || "auto"})`, enabled: false },
       ...items,
       { type: "separator" },
       silenced
-        ? { label: "Let this one speak", click: () => patchActor(key, { speak: undefined }) }
+        ? { label: "Let this one speak", click: () => letSpeak(key) }
         : { label: "Silence this one", click: () => patchActor(key, { speak: false }) },
       { label: "Back to the default voice", enabled: Boolean(own), click: () => patchActor(key, { voice: undefined }) },
     ];
   }
 
-  return { voicesMuted, hushNow, toggleVoiceSilence, buildVoiceMenu, patchActor, castRowForSlot, VOICE_MENU };
+  return { voicesMuted, hushNow, toggleVoiceSilence, buildVoiceMenu, patchActor, letSpeak, castRowForSlot, VOICE_MENU };
 }
 
 module.exports = { createVoiceControls };

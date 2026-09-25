@@ -10,12 +10,17 @@
  * — so no two surfaces can hold a different idea of what was run.
  */
 
-const path = require("node:path");
-const { BrowserWindow, ipcMain } = require("electron");
+const electron = require("electron");
+const { ipcMain } = electron;
 const { CommandAgent } = require("./command-agent.cjs");
 const { installHarnessBackend } = require("./command-harness.cjs");
+// The window itself is presentation.cjs's route "command" (slice 3, P2): its size,
+// title, preload and single-instance show+focus live in ROUTE_WINDOWS.command.
+// This module keeps the agent and the IPC; its create/close/isOpen are wrappers.
+const { openRouteWindow, closeRouteWindow, routeWindow } = require("./presentation.cjs");
 
-let commandWindow = null;
+const ROUTE = "command";
+
 let agent = null;
 let ipcWired = false;
 
@@ -27,9 +32,8 @@ function getAgent(fleetControl) {
     // Opt-in until the parity test is green (daily-driver plan, decision 5).
     if (process.env.AWDESK_COMMAND_BACKEND === "harness") installHarnessBackend(agent);
     agent.on("progress", (payload) => {
-      if (commandWindow && !commandWindow.isDestroyed()) {
-        commandWindow.webContents.send("desk:command-progress", payload);
-      }
+      const win = routeWindow(ROUTE);
+      if (win) win.webContents.send("desk:command-progress", payload);
     });
   }
   return agent;
@@ -67,7 +71,8 @@ function wireIpc() {
   ipcMain.handle("desk:command-send", (_event, text) => getAgent(fleetControlInstance).run(text, { source: "command-window" }));
   ipcMain.handle("desk:command-history", (_event, limit) => getAgent(fleetControlInstance).history(limit ?? 50));
   ipcMain.on("desk:command-close", () => {
-    if (commandWindow && !commandWindow.isDestroyed()) { commandWindow.close(); return; }
+    const win = routeWindow(ROUTE);
+    if (win) { win.close(); return; }
     // No standalone window means the sender is the console's Command PANE, whose
     // close button would otherwise be dead: the handler existed, found nothing to
     // close, and returned -- a button that does nothing and says nothing.
@@ -82,47 +87,16 @@ function createCommandWindow(fleetControl, { createFleetWindow = null } = {}) {
   fleetControlInstance = fleetControl;
   createFleetWindowImpl = createFleetWindow;
   wireIpc();
-  if (commandWindow && !commandWindow.isDestroyed()) {
-    commandWindow.show();
-    commandWindow.focus();
-    return commandWindow;
-  }
-  commandWindow = new BrowserWindow({
-    width: 640,
-    height: 720,
-    minWidth: 480,
-    minHeight: 560,
-    show: false,
-    title: "Aither Command",
-    backgroundColor: "#0f1218",
-    autoHideMenuBar: true,
-    webPreferences: {
-      preload: path.join(__dirname, "command-preload.cjs"),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-    },
-  });
-  commandWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-  commandWindow.webContents.on("will-navigate", (event) => event.preventDefault());
-  commandWindow.once("ready-to-show", () => {
-    commandWindow.show();
-    commandWindow.focus();
-  });
-  commandWindow.on("closed", () => {
-    commandWindow = null;
-  });
-  void commandWindow.loadFile(path.join(__dirname, "command.html"));
-  return commandWindow;
+  return openRouteWindow(ROUTE, { electron });
 }
 
 /** Close the standalone window (the console's "reattach"). No-op when absent. */
 function closeCommandWindow() {
-  if (commandWindow && !commandWindow.isDestroyed()) commandWindow.close();
+  closeRouteWindow(ROUTE);
 }
 
 function isCommandWindowOpen() {
-  return Boolean(commandWindow && !commandWindow.isDestroyed());
+  return Boolean(routeWindow(ROUTE));
 }
 
 module.exports = {

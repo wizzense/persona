@@ -226,7 +226,10 @@ function frameFor(pane) {
   frame.id = "pane-" + pane.id;
   frame.className = "pane";
   frame.setAttribute("title", pane.label);
-  frame.src = pane.src;
+  // A card asked for before the frame existed is spent on this ONE load; a later
+  // rebuild (reattach) starts from the plain pane again.
+  frame.src = pane.focusSrc || pane.src;
+  delete pane.focusSrc;
   stage.appendChild(frame);
   return frame;
 }
@@ -277,8 +280,12 @@ function renderPlaces() {
     const id = node.dataset.place;
     node.setAttribute("aria-selected", String(id === current));
     const badge = node.querySelector(".badge");
-    const count = id === "decisions" && inboxCount > 0;
-    badge.textContent = count ? String(inboxCount) : "";
+    // The pane tabs that say "detached" sit in #subtabs, hidden for a one-pane place
+    // and for every place but the current one -- so the PLACE row must say it, or a
+    // detached Fleet or Decisions leaves no trace in the rail.
+    const out = panes.some((p) => (p.place || p.id) === id && detached.has(p.id));
+    const count = id === "decisions" && inboxCount > 0 && !out;
+    badge.textContent = count ? String(inboxCount) : (out ? "detached" : "");
     badge.classList.toggle("count", count);
   }
   const siblings = panes.filter((p) => (p.place || p.id) === current);
@@ -585,11 +592,14 @@ function applyFocus(payload) {
   const pane = panes.find((p) => p.id === payload.pane);
   if (!pane) return false;
   if (payload.param && pane.src) {
+    // Always built from the UNTOUCHED pane.src. Writing `want` back into pane.src
+    // made the next card "?deck=1&card=A&card=B", and Deck's get('card') reads the
+    // FIRST one -- Open on card B kept opening card A.
     const want = pane.src + (pane.src.includes("?") ? "&" : "?")
       + "card=" + encodeURIComponent(payload.param);
     const frame = document.getElementById("pane-" + pane.id);
     if (frame && frame.tagName === "IFRAME" && frame.src !== want) frame.src = want;
-    else if (!frame) pane.src = want;
+    else if (!frame) pane.focusSrc = want;
   }
   select(pane.id);
   return true;

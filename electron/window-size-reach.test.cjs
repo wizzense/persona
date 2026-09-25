@@ -65,11 +65,13 @@ test("a size shortcut that could not be registered SAYS so", () => {
   // other than "it stopped working".
   assert.ok(registry.shortcuts().some((k) => k.electron === "CommandOrControl+Shift+=" && k.id === "window.size.bigger"),
     "the grow shortcut is gone");
-  // Plan: configurable hotkeys -- main now calls shortcuts(overrides) from
-  // inside applyHotkeys(), not a bare shortcuts() at the top level.
-  const at = MAIN.indexOf("commandRegistry.shortcuts(");
-  assert.ok(at > 0, "main no longer registers the registry's shortcuts");
-  const block = MAIN.slice(Math.max(0, at - 900), at + 900);
+  // Plan: configurable hotkeys -- shortcuts(overrides) is called from inside
+  // applyHotkeys(), which moved to hotkeys-settings.cjs (slice 3); main wires it.
+  assert.match(MAIN, /require\("\.\/hotkeys-settings\.cjs"\)/, "main no longer wires the shortcut module");
+  const HOTKEYS = fs.readFileSync(path.join(__dirname, "hotkeys-settings.cjs"), "utf8");
+  const at = HOTKEYS.indexOf("commandRegistry.shortcuts(");
+  assert.ok(at > 0, "the desk no longer registers the registry's shortcuts");
+  const block = HOTKEYS.slice(Math.max(0, at - 900), at + 900);
   assert.match(block, /if \(!globalShortcut\.register\(/,
     "the registration result must be checked");
   assert.match(block, /console\.warn/, "a lost accelerator must be reported");

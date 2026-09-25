@@ -231,12 +231,14 @@ test("shortcuts are registered FROM the registry, and a dead key is not advertis
   assert.deepEqual(keys.map((k) => k.accel).sort(),
     ["Ctrl+Alt+M", "Ctrl+Shift+,", "Ctrl+Shift+-", "Ctrl+Shift+=", "Ctrl+Shift+A", "Ctrl+Shift+D", "Ctrl+Shift+M", "Ctrl+Shift+Space"]);
   assert.ok(keys.every((k) => k.electron.startsWith("CommandOrControl+")));
+  // The shortcuts moved out of main.cjs into hotkeys-settings.cjs (slice 3 of
+  // docs/UX-REIMPLEMENTATION.md); main wires that module, and the module asks
+  // the REGISTRY, never hand-writes its own key list.
   const main = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
-  // Plan: configurable hotkeys -- main now passes cast.json overrides through,
-  // so the call is no longer bare (); the guarantee this test protects (main
-  // asks the REGISTRY, never hand-writes its own key list) still holds.
-  assert.match(main, /commandRegistry\.shortcuts\(/, "main keeps its own shortcut list again");
-  assert.match(main, /deadAccels\.add\(accel\)/, "a refused shortcut is not recorded");
+  assert.match(main, /require\("\.\/hotkeys-settings\.cjs"\)/, "main no longer wires the shortcut module");
+  const hotkeys = fs.readFileSync(path.join(__dirname, "hotkeys-settings.cjs"), "utf8");
+  assert.match(hotkeys, /commandRegistry\.shortcuts\(/, "the desk keeps its own shortcut list again");
+  assert.match(hotkeys, /deadAccels\.add\(accel\)/, "a refused shortcut is not recorded");
   const live = buildMenu("tray", () => {}, { ctx: {} }).find((r) => r.label && r.label.startsWith("AitherOS Online"));
   assert.match(live.submenu[0].label, /Ctrl\+Shift\+D/);
   const dead = buildMenu("tray", () => {}, { ctx: { deadAccels: ["Ctrl+Shift+D"] } })
@@ -251,8 +253,12 @@ test("the beads are registry rows, and the deck-action door accepts an id", () =
   const beads = fs.readFileSync(path.join(__dirname, "..", "src", "components", "Beads.tsx"), "utf8");
   assert.match(beads, /commands\?\.\('beads'\)/, "the bead rail is a typed list again");
   assert.doesNotMatch(beads, /action\('talk'\)|action\('console'\)/, "a bead is sending a deck verb, not a command id");
+  // The deck-action door moved out of main.cjs into deck-actions.cjs (slice 3 of
+  // docs/UX-REIMPLEMENTATION.md); main wires that module.
   const main = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
-  assert.match(main, /if \(commandRegistry\.byId\(name\)\)/, "deck-action no longer accepts a registry id");
+  assert.match(main, /require\("\.\/deck-actions\.cjs"\)\.createDeckActions\(/, "main no longer wires the deck's doors");
+  const deck = fs.readFileSync(path.join(__dirname, "deck-actions.cjs"), "utf8");
+  assert.match(deck, /if \(commandRegistry\.byId\(name\)\)/, "deck-action no longer accepts a registry id");
   // slot-scoped rows never leak onto a surface with no body in hand
   assert.ok(!conformance().length);
   assert.ok(conformance([{ id: "x", label: "X", group: "x", scope: "slot", surfaces: ["tray", "avatar-menu"] }])
@@ -332,9 +338,13 @@ test("every command either has a handler or a dynamic submenu", () => {
   // The palette hands the argument through: run(id, arg) in main, (id, arg) on
   // the console IPC and the preload, so a `prompt` record is not a dead row.
   assert.match(body, /function runCommand\(id, arg/, "runCommand takes no argument -- prompt rows cannot work");
-  assert.match(main, /run: \(id, arg\) => runCommand\(id, arg/, "the palette runner drops the argument");
+  // openConsole (and so the palette runner) moved to presentation.cjs in slice-3
+  // step 12; main hands it runCommand with every argument.
+  const presentation = fs.readFileSync(path.join(__dirname, "presentation.cjs"), "utf8");
+  assert.match(presentation, /run: \(id, arg\) => runCommand\(id, arg/, "the palette runner drops the argument");
+  assert.match(main, /runCommand: \(\.\.\.args\) => runCommand\(\.\.\.args\)/, "main drops the palette's argument on the way in");
   const consoleWindow = fs.readFileSync(path.join(__dirname, "console-window.cjs"), "utf8");
-  assert.match(consoleWindow, /"desk:console-command-run", async \(_event, id, arg\)/);
+  assert.match(consoleWindow, /"desk:console-command-run", async \(event, id, arg\)/);
   assert.match(consoleWindow, /commandsImpl\.run\(command, arg/);
   const preload = fs.readFileSync(path.join(__dirname, "console-preload.cjs"), "utf8");
   assert.match(preload, /runCommand: \(id, arg\)/);

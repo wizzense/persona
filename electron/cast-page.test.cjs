@@ -62,7 +62,7 @@ class Node {
   walk() { return [this, ...this.children.flatMap((c) => (c.walk ? c.walk() : []))]; }
 }
 
-function boot(describeResult, { previewResult = { ok: true } } = {}) {
+function boot(describeResult, { previewResult = { ok: true }, overrides = {} } = {}) {
   const byId = new Map();
   const body = new Node("body");
   const document = {
@@ -88,8 +88,9 @@ function boot(describeResult, { previewResult = { ok: true } } = {}) {
     setActor: record("setActor"), clearActor: record("clearActor"), setStage: record("setStage"),
     setVoice: record("setVoice"), setDefaults: record("setDefaults"), setSection: record("setSection"),
     setChannel: record("setChannel"), captureStage: record("captureStage"),
-    muteOrigin: record("muteOrigin"), reveal: record("reveal"),
+    muteOrigin: record("muteOrigin"), reveal: record("reveal"), unsilence: record("unsilence"),
     preview: record("preview", previewResult),
+    ...overrides,
   };
   const sandbox = { document, window: { aitherCast }, setInterval: () => 0, console };
   vm.createContext(sandbox);
@@ -263,7 +264,7 @@ test("Who speaks: a CUSTOM voice already in the file is shown as its own option,
   assert.ok(optionsOf(select).some((o) => o.value === "en-US-MichelleNeural" && /custom/.test(o.label)));
 });
 
-test("Who speaks: 'Other…' reveals a text box; only an en-*Neural id is written", async () => {
+test("Who speaks: 'Other…' reveals a text box; only a *Neural id -- any locale -- is written", async () => {
   const page = boot(base({ onStage: [ACTOR] }));
   await page.refresh();
   const row = speakerRow(page, "claude_code:7f3a");
@@ -278,11 +279,20 @@ test("Who speaks: 'Other…' reveals a text box; only an en-*Neural id is writte
   custom.value = "robot-voice";
   custom.fire("change");
   assert.equal(page.writes.length, 0, "a non-neural id must not reach cast.json");
-  assert.match(page.byId("err").textContent, /not an English neural voice id/);
+  assert.match(page.byId("err").textContent, /not a neural voice id/);
 
-  custom.value = "en-US-GuyNeural";
+  // Non-English edge-tts ids were writable by hand before the picker; they still are.
+  for (const id of ["en-US-GuyNeural", "ja-JP-NanamiNeural", "zh-CN-liaoning-XiaobeiNeural"]) {
+    custom.value = id;
+    custom.fire("change");
+  }
+  custom.value = `en-US-${"X".repeat(30)}Neural`;
   custom.fire("change");
-  assert.deepEqual(page.writes, [{ name: "setActor", args: ["claude_code:7f3a", { voice: "en-US-GuyNeural" }] }]);
+  assert.deepEqual(page.writes, [
+    { name: "setActor", args: ["claude_code:7f3a", { voice: "en-US-GuyNeural" }] },
+    { name: "setActor", args: ["claude_code:7f3a", { voice: "ja-JP-NanamiNeural" }] },
+    { name: "setActor", args: ["claude_code:7f3a", { voice: "zh-CN-liaoning-XiaobeiNeural" }] },
+  ], "over 40 chars is refused -- cast.json would drop it");
 });
 
 test("Who speaks: ▶ previews the voice currently chosen, or the resolved one when unset", async () => {
@@ -311,7 +321,7 @@ test("Who speaks: a refused preview SAYS why instead of looking like it played",
   assert.match(page.byId("err").textContent, /voice\.muted/);
 });
 
-test("Who speaks: switching a speaker OFF mutes it (speak:false); ON reveals it", async () => {
+test("Who speaks: switching a speaker OFF mutes it (speak:false); ON unsilences it (never a blanket reveal)", async () => {
   const silenced = { ...ACTOR, resolution: { ...ACTOR.resolution, speak: false, voiced: false } };
   const page = boot(base({ onStage: [RESIDENT, silenced] }));
   await page.refresh();
@@ -326,8 +336,39 @@ test("Who speaks: switching a speaker OFF mutes it (speak:false); ON reveals it"
   off.fire("change");
   assert.deepEqual(page.writes, [
     { name: "muteOrigin", args: ["service:awdesk"] },
-    { name: "reveal", args: ["claude_code:7f3a"] },
+    { name: "unsilence", args: ["claude_code:7f3a"] },
   ]);
+});
+
+test("Who speaks: Off -> On through the REAL cast pane keeps a chatty presence; a quiet one is lifted", async () => {
+  // Wired to room-stage-host's own castPaneImpl over a scratch cast.json: the
+  // switch must land the same rule the right-click menu does, not just call a name.
+  const os = require("node:os");
+  const host = require("./room-stage-host.cjs");
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "desk-cast-page-")), "cast.json");
+  fs.writeFileSync(file, JSON.stringify({
+    version: 1, actors: { "claude_code:7f3a": { presence: "chatty" }, "claude_code:q": { presence: "quiet" } },
+  }));
+  const pane = host.castPaneImpl({ castFile: file, env: {}, listCharacters: () => [] });
+  const live = (fn) => (key) => Promise.resolve(fn({ key }));
+  const overrides = { muteOrigin: live(pane.muteOrigin), unsilence: live(pane.unsilence), reveal: live(pane.reveal) };
+  const quiet = { ...ACTOR, origin: "claude_code:q", actorId: "q", slotId: "slot2",
+    resolution: { ...ACTOR.resolution, presence: "quiet", voiced: false } };
+  const page = boot(base({ onStage: [ACTOR, quiet] }), { overrides });
+  await page.refresh();
+  const chatty = inputOf(speakerRow(page, "claude_code:7f3a"), "checkbox");
+  chatty.checked = false;
+  chatty.fire("change");
+  chatty.checked = true;
+  chatty.fire("change");
+  const q = inputOf(speakerRow(page, "claude_code:q"), "checkbox");
+  assert.equal(q.checked, false, "presence quiet reads Silenced");
+  q.checked = true;
+  q.fire("change");
+  await tick();
+  const actors = JSON.parse(fs.readFileSync(file, "utf8")).actors;
+  assert.deepEqual(actors["claude_code:7f3a"], { presence: "chatty" }, "Off -> On must not clobber chatty");
+  assert.equal(actors["claude_code:q"].presence, "normal", "a quiet silence is lifted");
 });
 
 test("Who speaks: a relay origin nobody configured reads Silenced; presence quiet does too", async () => {

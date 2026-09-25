@@ -355,6 +355,51 @@ test("castPaneImpl.muteOrigin / reveal: mute sets speak:false; reveal clears it 
   assert.equal(onDisk.actors["relay:#ops:nick"].presence, "normal");
 });
 
+test("unsilencePatch: speak:false lifts speak ONLY; presence off/quiet lifts to normal; a lower-tier mute is overridden", () => {
+  assert.deepEqual(host.unsilencePatch({ speak: false, presence: "chatty" }, { speak: false, presence: "chatty" }), { speak: null });
+  assert.deepEqual(host.unsilencePatch({}, { speak: true, presence: "quiet" }), { presence: "normal" });
+  assert.deepEqual(host.unsilencePatch({ presence: "off" }, null), { presence: "normal" }, "no resolution: judge the record");
+  assert.deepEqual(host.unsilencePatch({ speak: false }, { speak: false, presence: "quiet" }), { speak: null, presence: "normal" });
+  assert.deepEqual(host.unsilencePatch({}, { speak: false, presence: "normal" }), { speak: true });
+  assert.deepEqual(host.unsilencePatch({ presence: "chatty" }, { speak: true, presence: "chatty" }), {}, "nothing to lift");
+});
+
+test("castPaneImpl.unsilence: an Off -> On round trip keeps a chatty presence and adds no actor-level presence", () => {
+  const dir = tmpDir();
+  const file = castFileIn(dir);
+  writeCast(file, {
+    version: 1,
+    channels: { "#ops": { voiced: true, presence: "chatty" } },
+    actors: { "claude_code:7f3a": { presence: "chatty" } },
+  });
+  const pane = host.castPaneImpl(baseDeps({ castFile: file }));
+
+  for (const key of ["claude_code:7f3a", "relay:#ops:nick"]) {
+    assert.equal(pane.muteOrigin({ key }).ok, true);
+    assert.equal(pane.unsilence({ key }).ok, true);
+  }
+  const onDisk = JSON.parse(fs.readFileSync(file, "utf8"));
+  assert.deepEqual(onDisk.actors["claude_code:7f3a"], { presence: "chatty" }, "own chatty survives");
+  assert.deepEqual(onDisk.actors["relay:#ops:nick"], {}, "no explicit presence to override the channel's chatty");
+});
+
+test("castPaneImpl.unsilence: a presence quiet -- own or from the relay channel -- is lifted to normal", () => {
+  const dir = tmpDir();
+  const file = castFileIn(dir);
+  writeCast(file, {
+    version: 1,
+    channels: { "#ops": { voiced: true, presence: "quiet" } },
+    actors: { "claude_code:7f3a": { presence: "quiet" } },
+  });
+  const pane = host.castPaneImpl(baseDeps({ castFile: file }));
+  assert.equal(pane.unsilence({ key: "claude_code:7f3a" }).ok, true);
+  assert.equal(pane.unsilence({ key: "relay:#ops:nick" }).ok, true);
+  const onDisk = JSON.parse(fs.readFileSync(file, "utf8"));
+  assert.equal(onDisk.actors["claude_code:7f3a"].presence, "normal");
+  assert.equal(onDisk.actors["relay:#ops:nick"].presence, "normal", "the channel's quiet is found through the key");
+  assert.deepEqual(pane.unsilence({}), { ok: false, snapshot: null, problems: [], error: "unsilence: key is required" });
+});
+
 // ─── evictSlot / status ──────────────────────────────────────────────────────
 
 test("evictSlot: false with no stage running; true and clears bookkeeping once one is", () => {

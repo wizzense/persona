@@ -10,7 +10,7 @@
  */
 
 const assert = require("node:assert/strict");
-const { spawnSync } = require("node:child_process");
+const { spawn, spawnSync } = require("node:child_process");
 const { EventEmitter } = require("node:events");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -155,10 +155,29 @@ test("REAL round trip: desk A's fader reaches desk B through the actual awsettin
   }), "utf8");
   const settings = { sync: { enabled: true, profile } };
 
-  const deskA = createSettingsSync({ castFile: a, settings });
+  // The CLI keeps its own state under Path.home() (a push stamps
+  // ~/.awsettings/last-push-desk), so the real child runs with HOME/USERPROFILE
+  // on the tmp dir -- a test must not stamp the owner's real sync state.
+  const home = path.join(dir, "home");
+  fs.mkdirSync(home, { recursive: true });
+  const envs = [];
+  const sandboxed = (cmd, args, opts) => {
+    const env = { ...opts.env, HOME: home, USERPROFILE: home };
+    envs.push(env);
+    return spawn(cmd, args, { ...opts, env });
+  };
+  const realStamp = path.join(os.homedir(), ".awsettings", "last-push-desk");
+  const stampBefore = fs.existsSync(realStamp) ? fs.statSync(realStamp).mtimeMs : null;
+
+  const deskA = createSettingsSync({ castFile: a, settings, spawnImpl: sandboxed });
   assert.equal((await deskA.pushNow()).ok, true, JSON.stringify(deskA.status()));
-  const deskB = createSettingsSync({ castFile: b, settings });
+  const deskB = createSettingsSync({ castFile: b, settings, spawnImpl: sandboxed });
   assert.equal((await deskB.pullNow()).ok, true, JSON.stringify(deskB.status()));
+
+  assert.ok(envs.length >= 2 && envs.every((e) => e.HOME === home && e.USERPROFILE === home),
+    "the real CLI was spawned with the owner's real home");
+  const stampAfter = fs.existsSync(realStamp) ? fs.statSync(realStamp).mtimeMs : null;
+  assert.equal(stampAfter, stampBefore, `the round trip touched the real ${realStamp}`);
 
   const merged = JSON.parse(fs.readFileSync(b, "utf8"));
   assert.equal(merged.voice.volume, 0.35, "A's fader did not arrive");

@@ -45,6 +45,9 @@ contextBridge.exposeInMainWorld("aitherCast", {
   /** Clear a mute and set presence back to "normal" -- the inverse of muteOrigin
    *  AND of a presence:"off"/"quiet" grant. */
   reveal: (key) => ipcRenderer.invoke("desk:cast-reveal", String(key || "")),
+  /** "Let this one speak": remove a speak:false ONLY, or lift presence off/quiet
+   *  to "normal" -- never overwrite a presence the owner chose. */
+  unsilence: (key) => ipcRenderer.invoke("desk:cast-unsilence", String(key || "")),
   /** Say a fixed sample line in `voice` through the resident, so a voice can be
    *  heard before it is assigned. Only the id crosses; main owns the words. */
   preview: (voice) => ipcRenderer.invoke("desk:cast-preview", String(voice || "")),

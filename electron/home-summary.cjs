@@ -37,7 +37,7 @@ const URGENCY_RANK = { critical: 0, high: 1, normal: 2, low: 3 };
  * @param {Array}  input.cards        open decision cards (decision-cards.cardFromRaw shape)
  * @param {(card) => string} [input.triage]  decision-cards.triageCard; "decision" = actionable
  * @param {object} [input.sessions]   sessions-client.listSessions() result {ok, sessions, note}
- * @param {object} [input.voice]      { voicesMuted, micMuted, talkMode }
+ * @param {object} [input.voice]      { voicesMuted, micMuted, talkMode, doNotDisturb }
  * @param {object} [input.avatars]    { shown, bodies, character }
  * @param {object} [input.gateway]    { ok, note } -- the MCP gateway health probe
  * @param {number} [input.now]
@@ -100,6 +100,7 @@ function buildHomeSummary({ cards = [], triage, sessions, voice = {}, avatars = 
       voicesMuted: Boolean(voice.voicesMuted),
       micMuted: Boolean(voice.micMuted),
       talkMode: voice.talkMode || "toggle",
+      doNotDisturb: Boolean(voice.doNotDisturb),
     },
     avatars: {
       shown: Boolean(avatars.shown),
@@ -111,4 +112,34 @@ function buildHomeSummary({ cards = [], triage, sessions, voice = {}, avatars = 
   };
 }
 
-module.exports = { buildHomeSummary, ageLabel };
+/**
+ * The registry commands Home may run -- its own switches and nothing else. The
+ * handler used to run ANY registry id, so a frame holding the bridge could reach
+ * tray-only `quit` or `layout.reset-all` with no gesture (review #10).
+ */
+const HOME_COMMANDS = Object.freeze(["voice.silence", "voice.mute", "avatar.toggle", "attention.dnd"]);
+
+/** Each Home switch: the live fact it shows -> the toggle that flips it. */
+const HOME_SWITCHES = Object.freeze({
+  voicesMuted: "voice.silence",
+  micMuted: "voice.mute",
+  avatarShown: "avatar.toggle",
+  doNotDisturb: "attention.dnd",
+});
+
+/**
+ * The toggles to run so the LIVE state matches what the owner asked for. Home
+ * sends the switch's desired state, never "toggle": a switch drawn from a 15 s
+ * old snapshot flipped the real state the wrong way (review #3). A key already
+ * in the asked-for state runs nothing.
+ */
+function planHomeSet(desired, live) {
+  const run = [];
+  for (const [key, command] of Object.entries(HOME_SWITCHES)) {
+    if (!desired || typeof desired[key] !== "boolean") continue;
+    if (Boolean(live && live[key]) !== desired[key]) run.push(command);
+  }
+  return run;
+}
+
+module.exports = { buildHomeSummary, ageLabel, HOME_COMMANDS, HOME_SWITCHES, planHomeSet };

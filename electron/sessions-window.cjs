@@ -15,7 +15,12 @@
  * Read-only (COCKPIT-DESIGN slice 1): list + tail, no steering.
  */
 
-const path = require("node:path");
+// The window itself is presentation.cjs's route "sessions" (slice 3, P2): its size,
+// title, preload and single-instance show+focus live in ROUTE_WINDOWS.sessions.
+// This module keeps the IPC; its create/close/isOpen are wrappers.
+const { openRouteWindow, closeRouteWindow, routeWindow } = require("./presentation.cjs");
+
+const ROUTE = "sessions";
 
 // Same lazy-require rule as console-window.cjs: keep this module loadable
 // under `node --test` without Electron.
@@ -23,7 +28,6 @@ function electron() {
   return require("electron");
 }
 
-let sessionsWindow = null;
 let wired = false;
 
 function ensureSessionsIpc() {
@@ -38,48 +42,17 @@ function ensureSessionsIpc() {
 
 function createSessionsWindow() {
   ensureSessionsIpc();
-  const { BrowserWindow } = electron();
-  if (sessionsWindow && !sessionsWindow.isDestroyed()) {
-    sessionsWindow.show();
-    sessionsWindow.focus();
-    return sessionsWindow;
-  }
-  sessionsWindow = new BrowserWindow({
-    width: 980,
-    height: 720,
-    minWidth: 640,
-    minHeight: 460,
-    show: false,
-    title: "Aither Sessions",
-    backgroundColor: "#0f1218",
-    autoHideMenuBar: true,
-    webPreferences: {
-      preload: path.join(__dirname, "sessions-preload.cjs"),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-    },
-  });
-  // The same fence every other desk window carries.
-  sessionsWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-  sessionsWindow.webContents.on("will-navigate", (event) => event.preventDefault());
-  sessionsWindow.once("ready-to-show", () => {
-    sessionsWindow.show();
-    sessionsWindow.focus();
-  });
-  sessionsWindow.on("closed", () => {
-    sessionsWindow = null;
-  });
-  void sessionsWindow.loadFile(path.join(__dirname, "sessions.html"));
-  return sessionsWindow;
+  // Deny-open, no-navigate, show+focus on ready and the dropped handle on
+  // 'closed' are presentation's openRouteWindow -- the same fence every file page carries.
+  return openRouteWindow(ROUTE, { electron: electron() });
 }
 
 function closeSessionsWindow() {
-  if (sessionsWindow && !sessionsWindow.isDestroyed()) sessionsWindow.close();
+  closeRouteWindow(ROUTE);
 }
 
 function isSessionsWindowOpen() {
-  return Boolean(sessionsWindow && !sessionsWindow.isDestroyed());
+  return Boolean(routeWindow(ROUTE));
 }
 
 module.exports = { ensureSessionsIpc, createSessionsWindow, closeSessionsWindow, isSessionsWindowOpen };

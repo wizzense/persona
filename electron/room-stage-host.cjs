@@ -28,7 +28,7 @@
  *      `place-avatar` event, and nothing else moves.
  *   4. the Cast pane's write surface (`castPaneImpl`) -- describe/setActor/
  *      clearActor/setStage/setVoice/setChannel/captureStage/muteOrigin/
- *      reveal, all thin wrappers over cast-config.write with the live
+ *      reveal/unsilence, all thin wrappers over cast-config.write with the live
  *      on-stage rows resolved so the pane can show provenance (`voiceFrom`,
  *      `characterFrom`, ...).
  *
@@ -91,6 +91,30 @@ const DEFAULT_PLACE = Object.freeze({ position: [0, 0, 0], scale: 1, yaw: 0 });
 function resolveCastFile(deps) {
   const raw = typeof deps.castFile === "function" ? deps.castFile() : deps.castFile;
   return raw || cast.CAST_FILE();
+}
+
+/**
+ * unsilencePatch — what "let this one speak" writes into `actors[key]`
+ * (null = remove the field). The ONE rule behind the Voices page's Speaks
+ * switch and the right-click Voice menu, so the two never disagree:
+ *   - speak:false on the record is lifted by removing `speak` ONLY -- a
+ *     presence the owner chose ("chatty", or none so the channel's applies)
+ *     survives the Off -> On round trip;
+ *   - speak:false from a tier BELOW the record is overridden with speak:true
+ *     (removing a field that is not there lifts nothing);
+ *   - presence off/quiet, own or inherited, is lifted by presence "normal"
+ *     (reveal semantics).
+ * An empty patch means nothing this record controls is silencing it.
+ */
+function unsilencePatch(record, resolution) {
+  const rec = record && typeof record === "object" ? record : {};
+  const res = resolution && typeof resolution === "object" ? resolution : {};
+  const patch = {};
+  if (rec.speak === false) patch.speak = null;
+  else if (res.speak === false) patch.speak = true;
+  const presence = typeof res.presence === "string" ? res.presence : rec.presence;
+  if (presence === "off" || presence === "quiet") patch.presence = "normal";
+  return patch;
 }
 
 /** The SAFE roster (content-rating already applied) `resolveActor` hashes a
@@ -714,6 +738,54 @@ function castPaneImpl(deps = {}) {
     });
   }
 
+  /** The live resolution for one origin key: an on-stage body's own row (so
+   *  its author tier counts), else the key alone -- with a relay key's
+   *  channel and nick split back out so the channel tier counts too. */
+  function resolveKey(key) {
+    const rows = activeStage && typeof activeStage.status === "function" ? activeStage.status().onStage : [];
+    for (const row of Array.isArray(rows) ? rows : []) {
+      const origin = cast.originOf({ kind: row.actorKind, id: row.actorId });
+      if (origin.key === key) {
+        return resolve({ author: row.agent, actorId: row.actorId, actorKind: row.actorKind, origin });
+      }
+    }
+    let origin = cast.originOf({ key });
+    // originOf({key}) folds "relay:#ops:nick" into one token; rebuild it from
+    // channel + nick, and keep that only when it round-trips to the same key.
+    const relay = /^relay:(#[^:]+)(?::(.+))?$/.exec(String(key));
+    if (relay) {
+      const split = cast.originOf({ kind: "relay", channel: relay[1], nick: relay[2] });
+      if (split.key === key) origin = split;
+    }
+    return resolve({ actorKind: origin.kind, actorId: origin.id, channel: origin.channel, nick: origin.nick, origin });
+  }
+
+  /** "Let this one speak": lifts exactly the silence that applies (see
+   *  unsilencePatch) instead of reveal()'s blanket presence reset, which lost
+   *  a chatty or channel-inherited presence on every Off -> On. */
+  function unsilence({ key } = {}) {
+    if (!key) return { ok: false, snapshot: null, problems: [], error: "unsilence: key is required" };
+    let resolution = null;
+    try {
+      resolution = resolveKey(key);
+    } catch {
+      // Unresolvable: judge the record alone rather than refuse the click.
+      resolution = null;
+    }
+    return write((draft) => {
+      draft.actors = draft.actors || {};
+      const patch = unsilencePatch(draft.actors[key], resolution);
+      if (!Object.keys(patch).length) return draft;
+      const rec = { ...(draft.actors[key] || {}) };
+      for (const [field, value] of Object.entries(patch)) {
+        if (value === null) delete rec[field];
+        else rec[field] = value;
+      }
+      draft.actors[key] = rec;
+      return draft;
+    });
+  }
+
   /**
    * preview — say a sample line in `voice` so the owner hears a voice BEFORE
    * assigning it. Spoken through the resident (slot0) under the desk's own
@@ -730,7 +802,7 @@ function castPaneImpl(deps = {}) {
     return deps.speakAloud(line, id, undefined, "slot0", "service:awdesk-preview");
   }
 
-  return { describe, setActor, clearActor, setStage, setVoice, setDefaults, setSection, setChannel, captureStage, muteOrigin, reveal, preview };
+  return { describe, setActor, clearActor, setStage, setVoice, setDefaults, setSection, setChannel, captureStage, muteOrigin, reveal, unsilence, preview };
 }
 
 /** What a voice preview says. */
@@ -749,4 +821,5 @@ module.exports = {
   startRoomStage,
   status,
   stopRoomStage,
+  unsilencePatch,
 };

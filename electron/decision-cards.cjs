@@ -261,6 +261,97 @@ function runAwask(args, spawnFn = spawn) {
 }
 
 /**
+ * Run an awask WRITE attached and resolve with its verdict: {ok} on exit 0,
+ * {ok:false, error} otherwise. runAwask's `true` only means "a process started"
+ * -- awask then refuses a non-option, a credential card, an already-answered one,
+ * and a surface that reported those as answered told #agents a lie (bulk review
+ * #9). Never blocks the main thread: the caller awaits the promise.
+ */
+function runAwaskAndWait(args, { spawnFn = spawn, timeoutMs = 30000 } = {}) {
+  return new Promise((resolve) => {
+    let settled = false;
+    let timer = null;
+    let stderr = "";
+    const finish = (ok, error) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolve(ok ? { ok: true } : { ok: false, error: String(error || "awask failed").slice(0, 300) });
+    };
+    let child;
+    try {
+      child = spawnFn(awaskBin(), args, { stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
+    } catch (error) {
+      finish(false, `awask did not start: ${error && error.message}`);
+      return;
+    }
+    // A wedged awask must not hold a card "pending" forever; the kill is the verdict.
+    timer = setTimeout(() => {
+      try { child.kill(); } catch { /* already gone */ }
+      finish(false, `awask gave no verdict in ${timeoutMs} ms`);
+    }, timeoutMs);
+    if (child.stderr) child.stderr.on("data", (chunk) => { if (stderr.length < 2000) stderr += String(chunk); });
+    child.on("error", (error) => finish(false, `awask did not start: ${error && error.message}`));
+    child.on("close", (code) => {
+      const last = stderr.trim().split(/\r?\n/).pop();
+      finish(code === 0, last || `awask exited ${code}`);
+    });
+  });
+}
+
+/** answerCard, but resolved only once awask has ACCEPTED the answer. */
+function answerCardConfirmed(id, choice, note = "", opts = {}) {
+  if (typeof id !== "string" || id.length === 0) return Promise.resolve({ ok: false, error: "no card id" });
+  if (typeof choice !== "string" || choice.length === 0) return Promise.resolve({ ok: false, error: "no choice" });
+  const args = ["answer", id, choice, "--via", "desk"];
+  if (note) args.push("--note", String(note).slice(0, 2000));
+  return runAwaskAndWait(args, opts);
+}
+
+/** cancelCard, but resolved only once awask has withdrawn the card. */
+function cancelCardConfirmed(id, note = "", opts = {}) {
+  if (typeof id !== "string" || id.length === 0) return Promise.resolve({ ok: false, error: "no card id" });
+  return runAwaskAndWait(["cancel", id, "--note", String(note || "").slice(0, 2000)], opts);
+}
+
+/**
+ * Cards a desk surface has answered or dismissed that the 15 s watcher has not
+ * yet seen closed. Without this the next deck-state push re-sent the stale list
+ * and 300 dismissed cards came straight back (bulk review #1). An id leaves the
+ * set when the watcher stops listing it, when its write fails, or after `ttlMs`
+ * -- so an awask that never lands cannot hide a card forever.
+ */
+function createPendingRemovals({ ttlMs = 60000, now = () => Date.now() } = {}) {
+  const pending = new Map(); // id -> expires at
+  const live = (id) => {
+    const until = pending.get(id);
+    if (until === undefined) return false;
+    if (until <= now()) {
+      pending.delete(id);
+      return false;
+    }
+    return true;
+  };
+  return {
+    add(id) { if (typeof id === "string" && id) pending.set(id, now() + ttlMs); },
+    delete(id) { pending.delete(id); },
+    has: live,
+    /** The cards minus every live pending id; the SAME array when nothing is pending. */
+    filter(cards) {
+      const list = Array.isArray(cards) ? cards : [];
+      if (pending.size === 0) return list;
+      return list.filter((card) => !(card && live(card.id)));
+    },
+    /** The watcher's fresh list: an id it no longer lists is confirmed closed. */
+    reconcile(cards) {
+      const open = new Set((Array.isArray(cards) ? cards : []).map((card) => card && card.id));
+      for (const id of [...pending.keys()]) if (!open.has(id)) pending.delete(id);
+    },
+    size: () => pending.size,
+  };
+}
+
+/**
  * Where a card surface should OPEN.
  *
  * Owner, 2026-09-08, on being shown the console: "I WANT TO CONSOLIDATE AND DEDUPE".
@@ -460,6 +551,10 @@ module.exports = {
   openCardWindow,
   answerCard,
   cancelCard,
+  answerCardConfirmed,
+  cancelCardConfirmed,
+  runAwaskAndWait,
+  createPendingRemovals,
   steerCard,
   watch,
 };

@@ -10,10 +10,13 @@ import {
   choiceForDigit,
   deadlineLabel,
   defaultLabel,
+  defaultsSummary,
+  enterTogglesCursor,
   facetCounts,
   filterCards,
   groupCards,
   hasDefault,
+  kindChips,
   kindOf,
   moveCursor,
   orderedChoices,
@@ -161,7 +164,7 @@ export function DecisionsPage({
       } else if (event.key === 'k' || event.key === 'ArrowUp') {
         event.preventDefault();
         moveTo(flatIds[moveCursor(index, -1, flatIds.length)] ?? null);
-      } else if (event.key === 'Enter' && cursorId) {
+      } else if (event.key === 'Enter' && enterTogglesCursor(event.target, cursorId)) {
         event.preventDefault();
         setExpandedId((current) => (current === cursorId ? null : cursorId));
       } else if (event.key === 'Escape') {
@@ -275,7 +278,7 @@ export function DecisionsPage({
             </button>
           ))}
           <span className="dx-sep" aria-hidden="true" />
-          {facets.kinds.slice(0, KIND_CHIP_LIMIT).map(({ kind, count }) => (
+          {kindChips(facets.kinds, filters.kind, KIND_CHIP_LIMIT).map(({ kind, count }) => (
             <button
               key={kind}
               type="button"
@@ -319,7 +322,7 @@ export function DecisionsPage({
               onClick={() => runBulk('answer-default')}
             >
               {confirming === 'answer-default'
-                ? `Confirm — answer ${selectedWithDefault.length}`
+                ? `Confirm — answer ${selectedWithDefault.length}: ${defaultsSummary(selectedWithDefault)}`
                 : `Answer with default (${selectedWithDefault.length})`}
             </button>
             {bulk ? (

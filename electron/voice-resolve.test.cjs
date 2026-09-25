@@ -24,6 +24,20 @@ const { test } = require("node:test");
 const { resolveSpeech } = require("./voice-resolve.cjs");
 const cast = require("./cast-config.cjs");
 
+// Every cast path the gate reads or writes through `cast.*` is recorded; the LAST
+// test fails if any is outside os.tmpdir(). A bare resolveSpeech(undefined) used
+// to read the owner's real %APPDATA%\Desk\cast.json and append a row to the real
+// cast-seen.json on every run -- and went red on an owner with presence=off.
+const touchedCastPaths = [];
+for (const name of ["load", "noteSeen"]) {
+  const real = cast[name];
+  cast[name] = function recorded(...args) {
+    const opts = args.find((a) => a && typeof a === "object" && "file" in a);
+    touchedCastPaths.push(path.resolve(opts && opts.file ? opts.file : cast.CAST_FILE()));
+    return real.apply(this, args);
+  };
+}
+
 function tmpDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "desk-voice-resolve-"));
 }
@@ -290,9 +304,9 @@ test("resolveSpeech: presence=off refuses the sound AND the caption", () => {
   assert.equal(gate.caption, false);
 });
 
-test("resolveSpeech: the fail-open verdict shows the words", () => {
+test("resolveSpeech: the fail-open verdict shows the words", () => withEmptyCast(() => {
   assert.equal(resolveSpeech(undefined).caption, true);
-});
+}));
 
 // ─── effectiveVoice: authored beats caller, hash does not ────────────────────
 
@@ -336,4 +350,16 @@ test("effectiveVoice: end to end -- an unconfigured origin no longer re-voices a
   writeCast(file, { version: 1, actors: { "bridge:/speak": { voice: "en-US-AnaNeural" } } });
   const gate2 = resolveSpeech({ origin: "bridge:/speak", slotId: "slot0", text: "hi", file });
   assert.equal(effectiveVoice("en-US-JennyNeural", gate2), "en-US-AnaNeural");
+});
+
+// LAST on purpose: node:test runs a file's top-level tests in order, so this sees
+// every path the tests above sent through the gate.
+test("isolation: no test in this file read or wrote a cast file outside the tmp dir", () => {
+  const tmpRoot = path.resolve(os.tmpdir());
+  assert.ok(touchedCastPaths.length > 0, "the recorder saw nothing -- the spy is not wired");
+  const leaked = touchedCastPaths.filter((p) => {
+    const rel = path.relative(tmpRoot, p);
+    return rel.startsWith("..") || path.isAbsolute(rel);
+  });
+  assert.deepEqual([...new Set(leaked)], [], "a test reached the owner's real cast files");
 });

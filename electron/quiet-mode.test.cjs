@@ -71,3 +71,44 @@ test("off Windows the probe never starts and the desk is simply not quiet", () =
   assert.equal(spawned, false);
   assert.equal(quiet.isQuiet(), false);
 });
+
+test("every door that can put something on screen or in the ears asks quietMode first", () => {
+  // The sweep of 2026-09-23 found these doors in main.cjs; a door that loses its
+  // check is a popup over a game again. Source-level on purpose: main.cjs cannot be
+  // loaded in a unit test (it takes the running desk's single-instance lock).
+  const read = (file) => require("node:fs").readFileSync(require("node:path").join(__dirname, file), "utf8");
+  const main = read("main.cjs");
+  // The MCP window action and the bridge's console/desktop doors moved to
+  // integration-doors.cjs (slice 3); they are read THERE, not dropped.
+  const doors = read("integration-doors.cjs");
+  // speakAloud moved to speech.cjs (slice 3), quietMode arriving through a getter.
+  const speech = read("speech.cjs");
+  // The card announcer and the window router moved to decisions-plane.cjs (slice 3).
+  const decisions = read("decisions-plane.cjs");
+  // handleProtocolUrl (desk:// and a second launch's argv) moved to protocol-routing.cjs.
+  const protocol = read("protocol-routing.cjs");
+  const bodyOf = (source, marker, span = 1400) => {
+    const at = source.indexOf(marker);
+    assert.ok(at >= 0, `door not found: ${marker}`);
+    return source.slice(at, at + span);
+  };
+  for (const [source, marker] of [
+    [main, "function handleBridgeEvent("],
+    [doors, "async function handleMcpWindowAction("],
+    [protocol, "function handleProtocolUrl("],
+    [doors, "consoleHandler: (pane) =>"],
+    [doors, "desktopHandler: (mode) =>"],
+    [decisions, "const announceDecisions = (list, isBacklog) =>"],
+    [decisions, "decisionCards.setWindowRouter("],
+    [speech, "async function speakAloud("],
+  ]) {
+    assert.match(bodyOf(source, marker), /quietMode\.isQuiet\(\)/, `${marker} does not ask quietMode`);
+  }
+  for (const source of [main, decisions]) {
+    assert.doesNotMatch(source, /AITHER_DECISIONS_POPUP:\s*"1"/, "the desk must not force popups past the owner's off switch");
+  }
+  assert.match(main, /require\("\.\/decisions-plane\.cjs"\)\.createDecisionsPlane\(/, "main no longer wires the card plane");
+  // A bare relaunch shows the overlay without focus while quiet.
+  assert.match(bodyOf(protocol, "function handleSecondInstance(", 2400), /focus: !quietMode\.isQuiet\(\)/, "a second launch steals focus while quiet");
+  assert.match(main, /require\("\.\/protocol-routing\.cjs"\)\.createProtocolRouting\(\{\s*protocolScheme,\s*quietMode,/, "main no longer hands desk:// its quiet gate");
+});

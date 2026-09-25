@@ -7,6 +7,8 @@
  * that does nothing.
  */
 
+import { normalizeWakes, type DeckDecision, type DeckState } from '../../deck/deck-types';
+
 export type BulkVerb = 'answer-default' | 'cancel';
 
 export interface BulkResult {
@@ -55,6 +57,30 @@ export function steerApi(): ((id: string, text: string) => Promise<boolean>) | n
   const deck = deckBridge();
   if (!deck || typeof deck.steer !== 'function') return null;
   return deck.steer.bind(deck);
+}
+
+/** main's deck-state push -> DeckState. The pull spreads main's object, the
+ *  push rebuilds it here — so a field this copy omits is there once and gone
+ *  after the first push (totalCount was: the inbox's "N FYI" vanished). */
+export function deckStateFromPush(event: Record<string, unknown>): DeckState {
+  return {
+    decisions: (event.decisions as DeckDecision[]) ?? [],
+    openCount: (event.openCount as number) ?? 0,
+    // Optional: an older main does not send it, and the header then omits FYI.
+    totalCount: typeof event.totalCount === 'number' ? event.totalCount : undefined,
+    deskVisible: (event.deskVisible as boolean) ?? false,
+    slots: (event.slots as DeckState['slots']) ?? [],
+    agents: (event.agents as string[]) ?? [],
+    characters: (event.characters as string[]) ?? [],
+    characterModels: (event.characterModels as Record<string, string>) ?? {},
+    activeCharacter: (event.activeCharacter as string) ?? '',
+    agentCharacters: (event.agentCharacters as Record<string, string>) ?? {},
+    relay: (event.relay as DeckState['relay']) ?? [],
+    relayChannel: (event.relayChannel as string) ?? '#agents',
+    room: (event.room as DeckState['room']) ?? [],
+    roomStatus: (event.roomStatus as string) ?? 'not started',
+    wakes: normalizeWakes(event.wakes),
+  };
 }
 
 /** One sentence for the bulk bar after a run. */

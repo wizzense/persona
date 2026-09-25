@@ -214,22 +214,75 @@ test("the shell DESTROYS a reattached pane's placeholder, not just its class", (
   assert.match(html, /if \(!isDetached && stale\) stale\.remove\(\);/);
 });
 
-test("EVERY pane is reachable from main, both directions", () => {
+/** presentation.cjs (openConsole's home since slice-3 step 12) built on recording
+ *  stubs: `calls` is every dep invoked, in order; `shown` is showConsole's argument. */
+function stubPresentation() {
+  const calls = [];
+  let shown = null;
+  const rec = (name, ret) => (...args) => {
+    calls.push(name);
+    return typeof ret === "function" ? ret(...args) : ret;
+  };
+  const windowModule = (x) => ({
+    [`create${x}Window`]: rec(`create${x}Window`, null),
+    [`close${x}Window`]: rec(`close${x}Window`),
+    [`is${x}WindowOpen`]: rec(`is${x}WindowOpen`, false),
+    [`ensure${x}Ipc`]: rec(`ensure${x}Ipc`),
+  });
+  const presentation = require("./presentation.cjs").createPresentation({
+    electron: {},
+    rendererUrl: () => "http://127.0.0.1:5173/",
+    isAllowedRendererNavigation: () => true,
+    showConsole: (opts) => { calls.push("showConsole"); shown = opts; return "console"; },
+    focusPane: rec("focusPane", true),
+    closeConsole: rec("closeConsole"),
+    fleetWindow: { ...windowModule("Fleet"), setCloseFallback: rec("setFleetCloseFallback"), getControl: rec("getFleetControl", {}) },
+    commandWindow: { ...windowModule("Command"), setCloseFallback: rec("setCommandCloseFallback") },
+    sessionsWindow: windowModule("Sessions"),
+    stageWindow: windowModule("Stage"),
+    settingsWindow: windowModule("Settings"),
+    castWindow: windowModule("Cast"),
+    desktop: {
+      showDesktopApp: rec("showDesktopApp"),
+      closeDesktopApp: rec("closeDesktopApp"),
+      isAppOpen: rec("isAppOpen", false),
+      desktopAppUrl: "https://example.invalid/",
+      ensureDesktopSession: rec("ensureDesktopSession"),
+      portalLoginUrl: "https://example.invalid/login",
+    },
+    ensureHomeIpc: rec("ensureHomeIpc"),
+    stagePaneImpl: rec("stagePaneImpl", {}),
+    castPaneImpl: rec("castPaneImpl", {}),
+    commandRegistry: { paletteRows: () => [] },
+    commandContext: () => ({}),
+    runCommand: rec("runCommand"),
+  });
+  return { presentation, calls, shown: () => shown };
+}
+
+test("EVERY pane is reachable from the route registry, both directions", () => {
   // The rail is only honest if main really injected open/close/isOpen for each
   // pane id. A pane with no close is a detach button with no way back -- the exact
-  // failure the console exists to remove.
-  const main = read("main.cjs");
-  const block = main.slice(main.indexOf("function openConsole()"));
+  // failure the console exists to remove. openConsole moved to presentation.cjs,
+  // which DERIVES the map from its route registry; asserted on the map the console
+  // actually receives, not on source text.
+  const { presentation, shown } = stubPresentation();
+  presentation.openConsole();
+  const windows = shown().windows;
   for (const pane of PANES) {
-    const entry = block.slice(block.indexOf(`${pane.id}: {`));
-    assert.ok(block.includes(`${pane.id}: {`), `openConsole names no window for ${pane.id}`);
-    for (const verb of ["open:", "close:", "isOpen:"]) {
-      assert.ok(
-        entry.slice(0, 500).includes(verb),
+    assert.ok(windows[pane.id], `openConsole names no window for ${pane.id}`);
+    for (const verb of ["open", "close", "isOpen"]) {
+      assert.equal(
+        typeof windows[pane.id][verb], "function",
         `openConsole's ${pane.id} entry is missing ${verb}`,
       );
     }
   }
+  assert.deepEqual(Object.keys(windows), presentation.routes());
+  // And the source cannot drift back to a hand-written literal beside the registry.
+  const source = read("presentation.cjs");
+  const block = source.slice(source.indexOf("function openConsole()"));
+  assert.match(block.slice(0, block.indexOf("\n  }\n")), /windows: windowsMap\(\),/);
 });
 
 test("the console preload COMPOSES the pane preloads, never copies them", () => {
@@ -270,9 +323,10 @@ test("openConsole wires the pane handlers BEFORE it shows the window", () => {
   // console first gave a Fleet pane of em-dashes (identical to a fleet that is
   // genuinely down) and a Command pane that threw "No handler registered". Both
   // surfaces look finished and answer nothing, which is why this is asserted on
-  // ORDER and not merely on presence.
-  const main = read("main.cjs");
-  const block = main.slice(main.indexOf("function openConsole()"));
+  // ORDER and not merely on presence. openConsole lives in presentation.cjs since
+  // slice-3 step 12; asserted there on source AND on the calls it really makes.
+  const source = read("presentation.cjs");
+  const block = source.slice(source.indexOf("function openConsole()"));
   const show = block.indexOf("showConsole({");
   for (const call of ["ensureFleetIpc()", "ensureCommandIpc("]) {
     const at = block.indexOf(call);
@@ -283,6 +337,16 @@ test("openConsole wires the pane handlers BEFORE it shows the window", () => {
   // fallback it is a dead control that reports nothing.
   assert.ok(block.indexOf("setFleetCloseFallback(closeConsole)") < show);
   assert.ok(block.indexOf("setCommandCloseFallback(closeConsole)") < show);
+  // The same order, observed: every wiring call lands before showConsole runs.
+  const { presentation, calls } = stubPresentation();
+  presentation.openConsole();
+  const shownAt = calls.indexOf("showConsole");
+  assert.ok(shownAt !== -1, "openConsole never showed the console");
+  for (const call of ["ensureFleetIpc", "ensureCommandIpc", "ensureSessionsIpc", "ensureHomeIpc",
+    "ensureStageIpc", "setFleetCloseFallback", "setCommandCloseFallback"]) {
+    const at = calls.indexOf(call);
+    assert.ok(at !== -1 && at < shownAt, `${call} must run before showConsole`);
+  }
 });
 
 test("a hosted pane is hidden by a rect of NULL, not by being left painted", () => {
@@ -308,4 +372,99 @@ test("a pane asked for while the console is cold-opening is HELD, not replaced b
   assert.match(start, /started = true;[\s\S]*?if \(!applyFocus\(pendingFocus\) && panes\.length\) select\(panes\[0\]\.id\);/,
     "start() must honour the held request before falling back to the first pane");
   assert.doesNotMatch(start, /\n {2}if \(panes\.length\) select\(panes\[0\]\.id\);/, "start() selects the first pane unconditionally again");
+});
+
+/** Lift named top-level functions out of console.html so they RUN here, not just
+ *  match a regex. Brace-counted; the shell's functions keep braces out of strings. */
+function shellFunctions(names, sandbox) {
+  const html = read("console.html");
+  const bodies = names.map((name) => {
+    const at = html.indexOf(`\nfunction ${name}(`);
+    assert.ok(at !== -1, `console.html has no function ${name}`);
+    let depth = 0;
+    for (let i = html.indexOf("{", at); i < html.length; i += 1) {
+      if (html[i] === "{") depth += 1;
+      else if (html[i] === "}" && (depth -= 1) === 0) return html.slice(at, i + 1);
+    }
+    throw new Error(`unbalanced ${name}`);
+  });
+  const vm = require("node:vm");
+  vm.createContext(sandbox);
+  vm.runInContext(bodies.join("\n"), sandbox);
+  return sandbox;
+}
+
+/** Just enough DOM for frameFor/applyFocus: elements are found by id once appended. */
+function fakeDom() {
+  const byId = new Map();
+  const element = (tag) => ({
+    tagName: tag.toUpperCase(), id: "", src: "", className: "",
+    setAttribute() {}, append() {}, appendChild() {},
+    remove() { byId.delete(this.id); },
+  });
+  return {
+    byId,
+    document: { getElementById: (id) => byId.get(id) || null, createElement: element },
+    stage: { appendChild: (node) => byId.set(node.id, node) },
+  };
+}
+
+test("Open on card B opens card B -- card= is never stacked onto the pane's src", () => {
+  // Owner-facing: Home is panes[0], so the Decisions frame usually did not exist yet.
+  // Focusing card A rewrote pane.src to "...&card=A" for good; card B then loaded
+  // "...&card=A&card=B" and Deck's get('card') read A. Same again after a reattach.
+  const dom = fakeDom();
+  const base = "file:///desk/dist/index.html?deck=1";
+  const panes = [{ id: "home", src: "home.html" }, { id: "cards", label: "Decisions", src: base }];
+  const shell = shellFunctions(["frameFor", "applyFocus"], {
+    panes, document: dom.document, stage: dom.stage,
+    select(id) { shell.frameFor(panes.find((p) => p.id === id)); },
+  });
+  const cardsFrame = () => dom.byId.get("pane-cards");
+  const cardsIn = (src) => new URL(src).searchParams.getAll("card");
+
+  shell.applyFocus({ pane: "cards", param: "A" });   // no frame yet
+  assert.deepEqual(cardsIn(cardsFrame().src), ["A"]);
+  shell.applyFocus({ pane: "cards", param: "B" });
+  assert.deepEqual(cardsIn(cardsFrame().src), ["B"], cardsFrame().src);
+  assert.equal(panes[1].src, base, "pane.src is the base every card link is built from");
+
+  // Detach destroys the frame; the next card must build on the base, not on B.
+  cardsFrame().remove();
+  shell.applyFocus({ pane: "cards", param: "C" });
+  assert.deepEqual(cardsIn(cardsFrame().src), ["C"], cardsFrame().src);
+  // ...and a plain rebuild (reattach, no card asked for) is the plain pane.
+  cardsFrame().remove();
+  shell.frameFor(panes[1]);
+  assert.equal(cardsFrame().src, base);
+});
+
+test("a detached pane is marked on its PLACE row, and a detached inbox shows no count", () => {
+  // The per-pane "detached" badge sits in #subtabs, which is hidden for one-pane
+  // places (Decisions, Fleet, Settings, Online) and for every place but the current
+  // one -- so detaching Fleet left no trace in the rail.
+  const panes = PANES.map((p) => ({ id: p.id, place: p.place }));
+  const rows = [...new Set(panes.map((p) => p.place || p.id))].map((place) => {
+    const badge = { textContent: "", classes: new Set(),
+      classList: { toggle(name, on) { if (on) badge.classes.add(name); else badge.classes.delete(name); } } };
+    return { dataset: { place }, badge, setAttribute() {}, querySelector: () => badge };
+  });
+  const shell = shellFunctions(["placeOf", "renderPlaces"], {
+    panes, selected: "home", detached: new Set(["fleet", "cards"]), inboxCount: 3,
+    subtabs: { hidden: false, querySelectorAll: () => [] },
+    document: { querySelectorAll: () => rows },
+  });
+  shell.renderPlaces();
+  const badgeOf = (place) => rows.find((r) => r.dataset.place === place).badge;
+  assert.equal(badgeOf("fleet").textContent, "detached");
+  assert.equal(badgeOf("decisions").textContent, "detached", "a detached inbox still showed its count");
+  assert.equal(badgeOf("decisions").classes.has("count"), false);
+  assert.equal(badgeOf("home").textContent, "");
+
+  // Back in the console: the count returns, the marker goes.
+  shell.detached = new Set();
+  shell.renderPlaces();
+  assert.equal(badgeOf("decisions").textContent, "3");
+  assert.equal(badgeOf("decisions").classes.has("count"), true);
+  assert.equal(badgeOf("fleet").textContent, "");
 });

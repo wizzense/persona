@@ -44,13 +44,16 @@ const DOCUMENTED_CHANNELS = [
   // Added deliberately 2026-09-23: hear a voice before assigning it (the Voices
   // page's ▶). Async like the adult gate -- it waits on the voice service.
   "desk:cast-preview",
+  // Added deliberately 2026-09-23: the Speaks switch's ON. reveal() also reset
+  // presence to "normal", so a chatty actor lost it on every Off -> On.
+  "desk:cast-unsilence",
 ];
 
 function handlersFor(impl) {
   return castHandlers(() => impl);
 }
 
-test("the desk:cast-* channel set is EXACTLY the documented thirteen -- nothing dropped, nothing extra", () => {
+test("the desk:cast-* channel set is EXACTLY the documented fourteen -- nothing dropped, nothing extra", () => {
   const handlers = handlersFor({});
   assert.deepEqual(Object.keys(handlers).sort(), [...DOCUMENTED_CHANNELS].sort());
   for (const channel of DOCUMENTED_CHANNELS) {
@@ -117,6 +120,7 @@ for (const [channel, verb] of [
   ["desk:cast-clear-actor", "clearActor"],
   ["desk:cast-mute-origin", "muteOrigin"],
   ["desk:cast-reveal", "reveal"],
+  ["desk:cast-unsilence", "unsilence"],
 ]) {
   test(`${channel} requires a non-empty string key and forwards {key} on success`, () => {
     let seen = null;
@@ -191,10 +195,12 @@ test("cast-window.cjs never requires main.cjs -- it must be requirable from a se
   assert.doesNotMatch(source, /require\(["']\.\/main\.cjs["']\)/);
 });
 
-test("cast.html and cast-preload.cjs exist and are what cast-window.cjs loads", () => {
-  const source = fs.readFileSync(path.join(HERE, "cast-window.cjs"), "utf8");
-  assert.match(source, /cast-preload\.cjs/);
-  assert.match(source, /cast\.html/);
+test("cast.html and cast-preload.cjs exist and are what the cast route loads", () => {
+  // The window moved behind presentation.cjs's route "cast" (slice 3, P2): the
+  // page and preload are its ROUTE_WINDOWS spec now, not cast-window.cjs's source.
+  const { ROUTE_WINDOWS } = require("./presentation.cjs");
+  assert.equal(ROUTE_WINDOWS.cast.preload, "cast-preload.cjs");
+  assert.equal(ROUTE_WINDOWS.cast.file, "cast.html");
   assert.ok(fs.existsSync(path.join(HERE, "cast.html")), "cast.html is missing");
   assert.ok(fs.existsSync(path.join(HERE, "cast-preload.cjs")), "cast-preload.cjs is missing");
 });

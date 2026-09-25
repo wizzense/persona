@@ -329,3 +329,62 @@ test("listOpen carries what an answer will DO — consequence, recipe, deadline"
   const long = listOpen(dir).find((c) => c.id === "d-long");
   assert.equal(long.options[0].consequence.length, 200);
 });
+
+// A fake attached awask: exits with `code` (and says `stderr`) on the next tick.
+function fakeAwask(code, stderr = "", seen = []) {
+  const { EventEmitter } = require("node:events");
+  return (bin, args, opts) => {
+    seen.push({ args, opts });
+    const child = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = () => { child.killed = true; };
+    if (code !== null) {
+      setImmediate(() => {
+        if (stderr) child.stderr.emit("data", Buffer.from(stderr));
+        child.emit("close", code);
+      });
+    }
+    return child;
+  };
+}
+
+test("answerCardConfirmed resolves ok only when awask EXITS 0, with awask's own refusal", async () => {
+  const seen = [];
+  const good = await cards.answerCardConfirmed("d-1", "yes", "n", { spawnFn: fakeAwask(0, "", seen) });
+  assert.deepEqual(good, { ok: true });
+  assert.deepEqual(seen[0].args, ["answer", "d-1", "yes", "--via", "desk", "--note", "n"]);
+  assert.notEqual(seen[0].opts.detached, true, "a verdict needs an attached child");
+  const refused = await cards.answerCardConfirmed("d-1", "nope", "", {
+    spawnFn: fakeAwask(1, "d-1 is not open\n") });
+  assert.deepEqual(refused, { ok: false, error: "d-1 is not open" });
+  const blank = await cards.answerCardConfirmed("", "yes");
+  assert.equal(blank.ok, false);
+});
+
+test("cancelCardConfirmed reports a spawn that throws, and a wedged awask times out", async () => {
+  const threw = await cards.cancelCardConfirmed("d-1", "", { spawnFn: () => { throw new Error("ENOENT"); } });
+  assert.equal(threw.ok, false);
+  assert.match(threw.error, /did not start/);
+  const seen = [];
+  const hung = await cards.cancelCardConfirmed("d-1", "x", { spawnFn: fakeAwask(null, "", seen), timeoutMs: 5 });
+  assert.equal(hung.ok, false);
+  assert.match(hung.error, /no verdict/);
+  assert.deepEqual(seen[0].args, ["cancel", "d-1", "--note", "x"]);
+});
+
+test("pending removals hide a written card until the watcher drops it, a failure, or the TTL", () => {
+  let clock = 1000;
+  const pending = cards.createPendingRemovals({ ttlMs: 50, now: () => clock });
+  const open = [{ id: "a" }, { id: "b" }, { id: "c" }];
+  assert.equal(pending.filter(open), open, "nothing pending: the same list, untouched");
+  pending.add("a");
+  pending.add("b");
+  assert.deepEqual(pending.filter(open).map((c) => c.id), ["c"], "a stale push must not bring them back");
+  pending.delete("b"); // its awask write failed: the card is still open, show it
+  assert.deepEqual(pending.filter(open).map((c) => c.id), ["b", "c"]);
+  pending.reconcile([{ id: "b" }, { id: "c" }]); // the watcher saw "a" close
+  assert.equal(pending.size(), 0);
+  pending.add("c");
+  clock += 51; // an awask that never landed must not hide a card forever
+  assert.deepEqual(pending.filter(open).map((c) => c.id), ["a", "b", "c"]);
+});
